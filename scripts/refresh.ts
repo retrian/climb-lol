@@ -1,12 +1,36 @@
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = process.env.SUPABASE_URL!
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const RIOT_API_KEY = process.env.RIOT_API_KEY!
+function env(name: string): string {
+  const raw = process.env[name]
+  if (!raw) return ''
+  // Trim whitespace and remove accidental surrounding quotes ("..." or '...')
+  const v = raw.trim().replace(/^["']|["']$/g, '')
+  return v
+}
+
+const SUPABASE_URL = env('SUPABASE_URL')
+const SUPABASE_SERVICE_ROLE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
+const RIOT_API_KEY = env('RIOT_API_KEY')
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !RIOT_API_KEY) {
-  throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / RIOT_API_KEY')
+  throw new Error(
+    `Missing env vars:
+SUPABASE_URL present? ${Boolean(SUPABASE_URL)}
+SUPABASE_SERVICE_ROLE_KEY present? ${Boolean(SUPABASE_SERVICE_ROLE_KEY)}
+RIOT_API_KEY present? ${Boolean(RIOT_API_KEY)}`
+  )
 }
+
+// Common mistake you showed in your screenshot:
+if (SUPABASE_SERVICE_ROLE_KEY.startsWith('sb_publishable_')) {
+  throw new Error(
+    `SUPABASE_SERVICE_ROLE_KEY is set to a *publishable* key.
+You must set SUPABASE_SERVICE_ROLE_KEY to the Supabase *secret/service_role* key (starts with "sb_secret_" or "service_role").`
+  )
+}
+
+// Helpful, safe fingerprint: proves which key the cron is using without leaking it
+console.log('[env] RIOT_API_KEY prefix=', RIOT_API_KEY.slice(0, 6), 'len=', RIOT_API_KEY.length)
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -20,28 +44,35 @@ function sleep(ms: number) {
 }
 
 async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
-  const res = await fetch(url, { headers: { 'X-Riot-Token': RIOT_API_KEY } })
+  const res = await fetch(url, {
+    headers: {
+      'X-Riot-Token': RIOT_API_KEY,
+      // optional but helps some infra/proxies
+      'User-Agent': 'climb.lol-refresh/1.0',
+    },
+  })
 
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After') ?? '1')
-    const backoff = Math.min(10_000, (retryAfter * 1000) * (attempt + 1))
+    const backoff = Math.min(15_000, retryAfter * 1000 * (attempt + 1))
+    console.log('[riot] 429 rate limited, retrying in', backoff, 'ms')
     await sleep(backoff)
     return riotFetch<T>(url, attempt + 1)
   }
 
   if (!res.ok) {
-    const t = await res.text().catch(() => '')
-    throw new Error(`Riot ${res.status}: ${t || res.statusText}`.slice(0, 200))
+    const body = await res.text().catch(() => '')
+    console.error('[riotFetch] FAIL', res.status, url, body.slice(0, 200))
+    throw new Error(`Riot ${res.status}: ${body}`.slice(0, 200))
   }
 
   return (await res.json()) as T
 }
 
-async function upsertRiotState(puuid: string, patch: Partial<any>) {
-  const { error } = await supabase.from('player_riot_state').upsert(
-    { puuid, ...patch, updated_at: new Date().toISOString() },
-    { onConflict: 'puuid' }
-  )
+async function upsertRiotState(puuid: string, patch: Record<string, any>) {
+  const { error } = await supabase
+    .from('player_riot_state')
+    .upsert({ puuid, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'puuid' })
   if (error) throw error
 }
 
@@ -49,12 +80,14 @@ async function syncSummoner(puuid: string) {
   const data = await riotFetch<{ id: string; profileIconId: number }>(
     `${NA1}/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
   )
+
   await upsertRiotState(puuid, {
     summoner_id: data.id,
     profile_icon_id: data.profileIconId,
     last_account_sync_at: new Date().toISOString(),
     last_error: null,
   })
+
   return data.id
 }
 
@@ -95,22 +128,16 @@ async function syncRank(puuid: string, summonerId: string) {
 }
 
 async function syncMatchesRankedOnly(puuid: string) {
-  // ranked solo only (queue=420). Add 440 if you want flex too.
   const ids = await riotFetch<string[]>(
     `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?queue=420&count=10`
   )
 
-  // If no matches found, just update timestamp and return
-  if (!ids || ids.length === 0) {
-    await upsertRiotState(puuid, { last_matches_sync_at: new Date().toISOString(), last_error: null })
-    return
-  }
-
-  // Which matches do we already have?
-  const { data: existing } = await supabase
+  const { data: existing, error: exErr } = await supabase
     .from('matches')
     .select('match_id')
     .in('match_id', ids)
+
+  if (exErr) throw exErr
 
   const existingSet = new Set((existing ?? []).map((r) => r.match_id))
   const newIds = ids.filter((id) => !existingSet.has(id))
@@ -121,11 +148,10 @@ async function syncMatchesRankedOnly(puuid: string) {
     const info = match.info
     const meta = match.metadata
 
-    const gameEnd = Number(info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000))
+    const gameEnd = Number(info.gameEndTimestamp ?? info.gameStartTimestamp + info.gameDuration * 1000)
     const queueId = Number(info.queueId ?? 0)
     const durationS = Number(info.gameDuration ?? 0)
 
-    // insert match
     {
       const { error } = await supabase.from('matches').insert({
         match_id: meta.matchId,
@@ -133,10 +159,9 @@ async function syncMatchesRankedOnly(puuid: string) {
         game_end_ts: gameEnd,
         game_duration_s: durationS,
       })
-      if (error && !error.message?.includes('duplicate')) throw error
+      if (error) throw error
     }
 
-    // insert participant for THIS puuid only (enough for leaderboard feed)
     const p = (info.participants as any[]).find((x) => x.puuid === puuid)
     if (p) {
       const cs = Number((p.totalMinionsKilled ?? 0) + (p.neutralMinionsKilled ?? 0))
@@ -151,10 +176,9 @@ async function syncMatchesRankedOnly(puuid: string) {
         cs,
         win: Boolean(p.win),
       })
-      if (error && !error.message?.includes('duplicate')) throw error
+      if (error) throw error
     }
 
-    // small delay to be polite
     await sleep(150)
   }
 
@@ -162,13 +186,14 @@ async function syncMatchesRankedOnly(puuid: string) {
 }
 
 async function computeTopChamps(puuid: string) {
-  // last 50 ranked matches in DB
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('match_participants')
     .select('champion_id, win, matches!inner(game_end_ts)')
     .eq('puuid', puuid)
     .order('matches.game_end_ts', { ascending: false })
     .limit(50)
+
+  if (error) throw error
 
   const rows = (data ?? []) as any[]
   const agg = new Map<number, { games: number; wins: number; last: number }>()
@@ -189,7 +214,6 @@ async function computeTopChamps(puuid: string) {
     .sort((a, b) => b.games - a.games || b.last - a.last)
     .slice(0, 5)
 
-  // replace existing top champs for this puuid
   await supabase.from('player_top_champions').delete().eq('puuid', puuid)
 
   if (top5.length) {
@@ -214,63 +238,44 @@ function isStale(ts?: string | null) {
 }
 
 async function main() {
-  // get all puuids currently on any leaderboard
-  const { data: lbs, error: lbErr } = await supabase
-    .from('leaderboard_players')
-    .select('puuid')
-
+  const { data: lbs, error: lbErr } = await supabase.from('leaderboard_players').select('puuid')
   if (lbErr) throw lbErr
 
-  const puuids = [...new Set((lbs ?? []).map((r) => r.puuid))]
+  const puuids = [...new Set((lbs ?? []).map((r) => r.puuid).filter(Boolean))]
   if (!puuids.length) {
     console.log('No players to refresh.')
     return
   }
 
-  // load state for staleness check
-  const { data: states } = await supabase
+  const { data: states, error: stErr } = await supabase
     .from('player_riot_state')
     .select('puuid, summoner_id, last_rank_sync_at, last_matches_sync_at')
     .in('puuid', puuids)
 
-  const stateMap = new Map((states ?? []).map((s) => [s.puuid, s]))
+  if (stErr) throw stErr
 
-  // refresh stale only, sequential to respect limits
+  const stateMap = new Map((states ?? []).map((s: any) => [s.puuid, s]))
+
   for (const puuid of puuids) {
     const st = stateMap.get(puuid) as any | undefined
     const staleRank = isStale(st?.last_rank_sync_at)
     const staleMatches = isStale(st?.last_matches_sync_at)
 
     if (!staleRank && !staleMatches) continue
-    
+
     console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches })
 
     try {
       const summonerId = st?.summoner_id ? st.summoner_id : await syncSummoner(puuid)
       if (staleRank) await syncRank(puuid, summonerId)
-      if (staleMatches) {
-        try {
-          await syncMatchesRankedOnly(puuid)
-        } catch (e: any) {
-          // If 403/404 on match fetch, the PUUID might be invalid or from wrong region
-          if (e.message?.includes('403') || e.message?.includes('404')) {
-            console.warn(`PUUID ${puuid.slice(0, 12)} returned ${e.message} - might be wrong region or invalid`)
-            await upsertRiotState(puuid, { 
-              last_error: 'PUUID not found in AMERICAS region - check if player is from NA',
-              last_matches_sync_at: new Date().toISOString() 
-            })
-          } else {
-            throw e
-          }
-        }
-      }
+      if (staleMatches) await syncMatchesRankedOnly(puuid)
       await computeTopChamps(puuid)
+      await upsertRiotState(puuid, { last_error: null })
     } catch (e: any) {
       console.error('Error for', puuid.slice(0, 12), e?.message ?? e)
       await upsertRiotState(puuid, { last_error: String(e?.message ?? e) })
     }
 
-    // global pacing
     await sleep(250)
   }
 
