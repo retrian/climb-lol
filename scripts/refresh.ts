@@ -92,6 +92,7 @@ async function syncSummoner(puuid: string) {
 }
 
 async function syncRank(puuid: string, summonerId: string) {
+  if (!summonerId) throw new Error('Missing summonerId (cannot sync rank)')
   const entries = await riotFetch<
     Array<{
       queueType: string
@@ -266,7 +267,14 @@ async function main() {
     console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches })
 
     try {
-      const summonerId = st?.summoner_id ? st.summoner_id : await syncSummoner(puuid)
+      let summonerId = st?.summoner_id ?? null
+
+      // If we need rank OR we don't have summonerId, force summoner sync first
+      if (!summonerId || staleRank) {
+        summonerId = await syncSummoner(puuid)
+      }
+
+      // Now summonerId is guaranteed
       if (staleRank) await syncRank(puuid, summonerId)
       if (staleMatches) await syncMatchesRankedOnly(puuid)
       await computeTopChamps(puuid)
