@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "cron:refresh": "tsx scripts/refresh.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
-    "next": "16.1.1",
-    "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.89.0",
+    "next": "^16.1.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -21,9 +24,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
-  },
-  "scripts": {
-    "cron:refresh": "tsx scripts/refresh.ts"
   }
 }
