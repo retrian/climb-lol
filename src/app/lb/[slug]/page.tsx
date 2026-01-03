@@ -114,32 +114,6 @@ export default async function LeaderboardDetail({
           </div>
         )}
       </section>
-
-      {/* Latest Games Section */}
-      <section>
-        <h2 className="mb-4 text-xl font-semibold text-gray-900">Latest Games</h2>
-        <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
-            <svg
-              className="h-6 w-6 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <p className="text-sm font-medium text-gray-900">Coming Soon</p>
-          <p className="mt-1 text-xs text-gray-500">
-            Game history and statistics will be available here
-          </p>
-        </div>
-      </section>
     </main>
   )
 }
