@@ -31,7 +31,7 @@ async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
 
   if (!res.ok) {
     const t = await res.text().catch(() => '')
-    throw new Error(`Riot ${res.status}: ${t}`.slice(0, 200))
+    throw new Error(`Riot ${res.status}: ${t || res.statusText}`.slice(0, 200))
   }
 
   return (await res.json()) as T
@@ -100,6 +100,12 @@ async function syncMatchesRankedOnly(puuid: string) {
     `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?queue=420&count=10`
   )
 
+  // If no matches found, just update timestamp and return
+  if (!ids || ids.length === 0) {
+    await upsertRiotState(puuid, { last_matches_sync_at: new Date().toISOString(), last_error: null })
+    return
+  }
+
   // Which matches do we already have?
   const { data: existing } = await supabase
     .from('matches')
@@ -127,7 +133,7 @@ async function syncMatchesRankedOnly(puuid: string) {
         game_end_ts: gameEnd,
         game_duration_s: durationS,
       })
-      if (error) throw error
+      if (error && !error.message?.includes('duplicate')) throw error
     }
 
     // insert participant for THIS puuid only (enough for leaderboard feed)
@@ -145,7 +151,7 @@ async function syncMatchesRankedOnly(puuid: string) {
         cs,
         win: Boolean(p.win),
       })
-      if (error) throw error
+      if (error && !error.message?.includes('duplicate')) throw error
     }
 
     // small delay to be polite
@@ -236,13 +242,28 @@ async function main() {
     const staleMatches = isStale(st?.last_matches_sync_at)
 
     if (!staleRank && !staleMatches) continue
-
+    
     console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches })
 
     try {
       const summonerId = st?.summoner_id ? st.summoner_id : await syncSummoner(puuid)
       if (staleRank) await syncRank(puuid, summonerId)
-      if (staleMatches) await syncMatchesRankedOnly(puuid)
+      if (staleMatches) {
+        try {
+          await syncMatchesRankedOnly(puuid)
+        } catch (e: any) {
+          // If 403/404 on match fetch, the PUUID might be invalid or from wrong region
+          if (e.message?.includes('403') || e.message?.includes('404')) {
+            console.warn(`PUUID ${puuid.slice(0, 12)} returned ${e.message} - might be wrong region or invalid`)
+            await upsertRiotState(puuid, { 
+              last_error: 'PUUID not found in AMERICAS region - check if player is from NA',
+              last_matches_sync_at: new Date().toISOString() 
+            })
+          } else {
+            throw e
+          }
+        }
+      }
       await computeTopChamps(puuid)
     } catch (e: any) {
       console.error('Error for', puuid.slice(0, 12), e?.message ?? e)
