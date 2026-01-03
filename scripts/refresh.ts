@@ -1,36 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
 
-function env(name: string): string {
-  const raw = process.env[name]
-  if (!raw) return ''
-  // Trim whitespace and remove accidental surrounding quotes ("..." or '...')
-  const v = raw.trim().replace(/^["']|["']$/g, '')
-  return v
-}
-
-const SUPABASE_URL = env('SUPABASE_URL')
-const SUPABASE_SERVICE_ROLE_KEY = env('SUPABASE_SERVICE_ROLE_KEY')
-const RIOT_API_KEY = env('RIOT_API_KEY')
+const SUPABASE_URL = process.env.SUPABASE_URL!
+const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
+const RIOT_API_KEY = process.env.RIOT_API_KEY!
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !RIOT_API_KEY) {
-  throw new Error(
-    `Missing env vars:
-SUPABASE_URL present? ${Boolean(SUPABASE_URL)}
-SUPABASE_SERVICE_ROLE_KEY present? ${Boolean(SUPABASE_SERVICE_ROLE_KEY)}
-RIOT_API_KEY present? ${Boolean(RIOT_API_KEY)}`
-  )
+  throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / RIOT_API_KEY')
 }
 
-// Common mistake you showed in your screenshot:
-if (SUPABASE_SERVICE_ROLE_KEY.startsWith('sb_publishable_')) {
-  throw new Error(
-    `SUPABASE_SERVICE_ROLE_KEY is set to a *publishable* key.
-You must set SUPABASE_SERVICE_ROLE_KEY to the Supabase *secret/service_role* key (starts with "sb_secret_" or "service_role").`
-  )
-}
-
-// Helpful, safe fingerprint: proves which key the cron is using without leaking it
-console.log('[env] RIOT_API_KEY prefix=', RIOT_API_KEY.slice(0, 6), 'len=', RIOT_API_KEY.length)
+console.log('[env] RIOT_API_KEY prefix=', RIOT_API_KEY.slice(0, 5), 'len=', RIOT_API_KEY.length)
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
@@ -44,39 +22,34 @@ function sleep(ms: number) {
 }
 
 async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
-  const res = await fetch(url, {
-    headers: {
-      'X-Riot-Token': RIOT_API_KEY,
-      // optional but helps some infra/proxies
-      'User-Agent': 'climb.lol-refresh/1.0',
-    },
-  })
+  const res = await fetch(url, { headers: { 'X-Riot-Token': RIOT_API_KEY } })
 
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After') ?? '1')
-    const backoff = Math.min(15_000, retryAfter * 1000 * (attempt + 1))
-    console.log('[riot] 429 rate limited, retrying in', backoff, 'ms')
+    const backoff = Math.min(10_000, retryAfter * 1000 * (attempt + 1))
     await sleep(backoff)
     return riotFetch<T>(url, attempt + 1)
   }
 
   if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    console.error('[riotFetch] FAIL', res.status, url, body.slice(0, 200))
-    throw new Error(`Riot ${res.status}: ${body}`.slice(0, 200))
+    const t = await res.text().catch(() => '')
+    console.error('[riotFetch] FAIL', res.status, url, t.slice(0, 200))
+    throw new Error(`Riot ${res.status}: ${t}`.slice(0, 240))
   }
 
   return (await res.json()) as T
 }
 
 async function upsertRiotState(puuid: string, patch: Record<string, any>) {
-  const { error } = await supabase
-    .from('player_riot_state')
-    .upsert({ puuid, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'puuid' })
+  const { error } = await supabase.from('player_riot_state').upsert(
+    { puuid, ...patch, updated_at: new Date().toISOString() },
+    { onConflict: 'puuid' }
+  )
   if (error) throw error
 }
 
-async function syncSummoner(puuid: string) {
+async function syncSummonerBasics(puuid: string) {
+  // gets encryptedSummonerId + profile icon
   const data = await riotFetch<{ id: string; profileIconId: number }>(
     `${NA1}/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
   )
@@ -91,8 +64,8 @@ async function syncSummoner(puuid: string) {
   return data.id
 }
 
-async function syncRank(puuid: string, summonerId: string) {
-  if (!summonerId) throw new Error('Missing summonerId (cannot sync rank)')
+async function syncRankByPuuid(puuid: string) {
+  // ✅ This is the correct endpoint for rank by PUUID
   const entries = await riotFetch<
     Array<{
       queueType: string
@@ -102,10 +75,11 @@ async function syncRank(puuid: string, summonerId: string) {
       wins: number
       losses: number
     }>
-  >(`${NA1}/lol/league/v4/entries/by-summoner/${encodeURIComponent(summonerId)}`)
+  >(`${NA1}/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`)
 
   const now = new Date().toISOString()
 
+  // If unranked, entries can be [] — still mark as synced so we don’t spam refresh
   for (const e of entries) {
     if (e.queueType !== 'RANKED_SOLO_5x5' && e.queueType !== 'RANKED_FLEX_SR') continue
 
@@ -133,23 +107,26 @@ async function syncMatchesRankedOnly(puuid: string) {
     `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?queue=420&count=10`
   )
 
-  const { data: existing, error: exErr } = await supabase
-    .from('matches')
-    .select('match_id')
-    .in('match_id', ids)
+  const now = new Date().toISOString()
 
-  if (exErr) throw exErr
+  if (!ids.length) {
+    await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
+    return
+  }
 
+  const { data: existing } = await supabase.from('matches').select('match_id').in('match_id', ids)
   const existingSet = new Set((existing ?? []).map((r) => r.match_id))
   const newIds = ids.filter((id) => !existingSet.has(id))
 
   for (const matchId of newIds) {
-    const match = await riotFetch<any>(`${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`)
+    const match = await riotFetch<any>(
+      `${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`
+    )
 
     const info = match.info
     const meta = match.metadata
 
-    const gameEnd = Number(info.gameEndTimestamp ?? info.gameStartTimestamp + info.gameDuration * 1000)
+    const gameEnd = Number(info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000))
     const queueId = Number(info.queueId ?? 0)
     const durationS = Number(info.gameDuration ?? 0)
 
@@ -183,18 +160,16 @@ async function syncMatchesRankedOnly(puuid: string) {
     await sleep(150)
   }
 
-  await upsertRiotState(puuid, { last_matches_sync_at: new Date().toISOString(), last_error: null })
+  await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
 }
 
 async function computeTopChamps(puuid: string) {
-  const { data, error } = await supabase
+  const { data } = await supabase
     .from('match_participants')
     .select('champion_id, win, matches!inner(game_end_ts)')
     .eq('puuid', puuid)
     .order('matches.game_end_ts', { ascending: false })
     .limit(50)
-
-  if (error) throw error
 
   const rows = (data ?? []) as any[]
   const agg = new Map<number, { games: number; wins: number; last: number }>()
@@ -234,26 +209,23 @@ async function computeTopChamps(puuid: string) {
 
 function isStale(ts?: string | null) {
   if (!ts) return true
-  const ageMs = Date.now() - new Date(ts).getTime()
-  return ageMs > 30 * 60 * 1000
+  return Date.now() - new Date(ts).getTime() > 30 * 60 * 1000
 }
 
 async function main() {
   const { data: lbs, error: lbErr } = await supabase.from('leaderboard_players').select('puuid')
   if (lbErr) throw lbErr
 
-  const puuids = [...new Set((lbs ?? []).map((r) => r.puuid).filter(Boolean))]
+  const puuids = [...new Set((lbs ?? []).map((r) => r.puuid))]
   if (!puuids.length) {
     console.log('No players to refresh.')
     return
   }
 
-  const { data: states, error: stErr } = await supabase
+  const { data: states } = await supabase
     .from('player_riot_state')
     .select('puuid, summoner_id, last_rank_sync_at, last_matches_sync_at')
     .in('puuid', puuids)
-
-  if (stErr) throw stErr
 
   const stateMap = new Map((states ?? []).map((s: any) => [s.puuid, s]))
 
@@ -267,18 +239,13 @@ async function main() {
     console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches })
 
     try {
-      let summonerId = st?.summoner_id ?? null
+      // keep summoner basics fresh (icon + summoner_id), but rank does NOT depend on summoner_id anymore
+      await syncSummonerBasics(puuid)
 
-      // If we need rank OR we don't have summonerId, force summoner sync first
-      if (!summonerId || staleRank) {
-        summonerId = await syncSummoner(puuid)
-      }
-
-      // Now summonerId is guaranteed
-      if (staleRank) await syncRank(puuid, summonerId)
+      if (staleRank) await syncRankByPuuid(puuid)
       if (staleMatches) await syncMatchesRankedOnly(puuid)
+
       await computeTopChamps(puuid)
-      await upsertRiotState(puuid, { last_error: null })
     } catch (e: any) {
       console.error('Error for', puuid.slice(0, 12), e?.message ?? e)
       await upsertRiotState(puuid, { last_error: String(e?.message ?? e) })
