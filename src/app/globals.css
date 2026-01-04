@@ -1,26 +1,180 @@
-@import "tailwindcss";
+/* globals.css */
 
+/* -----------------------------
+   Theme tokens (Light default)
+------------------------------ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+
+  --bg: #f8fafc;            /* slate-50 */
+  --bg-2: #ffffff;          /* white */
+  --text: #0f172a;          /* slate-900 */
+  --muted: #475569;         /* slate-600 */
+  --muted-2: #94a3b8;       /* slate-400 */
+  --border: #e2e8f0;        /* slate-200 */
+  --card: #ffffff;
+
+  --link: #2563eb;          /* blue-600 */
+  --link-hover: #1d4ed8;    /* blue-700 */
+
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+
+  /* navbar glass */
+  --nav-bg: rgba(255, 255, 255, 0.72);
+  --nav-border: rgba(226, 232, 240, 0.9);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
+/* -----------------------------
+   System Dark Mode (Option A)
+------------------------------ */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    color-scheme: dark;
+
+    --bg: #070a12;          /* very dark */
+    --bg-2: #0b1220;        /* dark slate */
+    --text: #e5e7eb;        /* gray-200 */
+    --muted: #a1a1aa;       /* zinc-400-ish */
+    --muted-2: #64748b;     /* slate-500 */
+    --border: #1f2a44;      /* deep border */
+    --card: #0b1220;
+
+    --link: #60a5fa;        /* blue-400 */
+    --link-hover: #93c5fd;  /* blue-300 */
+
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+
+    --nav-bg: rgba(11, 18, 32, 0.65);
+    --nav-border: rgba(31, 42, 68, 0.9);
   }
 }
 
+/* -----------------------------
+   Base reset-ish
+------------------------------ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  background: radial-gradient(1200px 600px at 50% -10%, var(--bg-2) 0%, var(--bg) 55%, var(--bg) 100%);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  line-height: 1.45;
+}
+
+/* Links */
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: none;
+}
+
+/* -----------------------------
+   Navbar (consistent + sticky + glass)
+   Works with your existing layout markup
+------------------------------ */
+header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--nav-bg);
+  border-bottom: 1px solid var(--nav-border);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+nav {
+  max-width: 72rem; /* ~ max-w-6xl */
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Make nav items not jump around (consistent spacing) */
+nav > div {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+/* Generic text link style in nav */
+nav a {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--muted);
+  transition: color 150ms ease, opacity 150ms ease;
+}
+
+nav a:hover {
+  color: var(--text);
+}
+
+/* Brand */
+nav > a:first-child {
+  font-size: 16px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+/* -----------------------------
+   Common UI defaults (inputs/buttons/cards)
+   Helps your pages look decent even without Tailwind
+------------------------------ */
+main {
+  width: 100%;
+}
+
+button {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  outline: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted-2);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: color-mix(in srgb, var(--link) 65%, var(--border));
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--link) 18%, transparent);
+}
+
+/* simple card helper if you use <section> or <article> */
+section, article, .card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+}
+
+/* Optional: smoother scrolling */
+html {
+  scroll-behavior: smooth;
 }

@@ -1,62 +1,98 @@
 import Link from 'next/link'
 
+type FeatureIconName = 'users' | 'share' | 'bolt'
+
+function FeatureIcon({ name }: { name: FeatureIconName }) {
+  switch (name) {
+    case 'users':
+      return (
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M17 20h5v-1a4 4 0 00-4-4h-1M9 20H2v-1a6 6 0 0112 0v1m3-12a4 4 0 10-8 0 4 4 0 008 0z"
+          />
+        </svg>
+      )
+    case 'share':
+      return (
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M15 8a3 3 0 10-2.83-4H12a3 3 0 003 4zM6 14a3 3 0 10-2.83-4H3a3 3 0 003 4zm15 0a3 3 0 10-2.83-4H18a3 3 0 003 4zM8.6 12l6.8-3M8.6 12l6.8 3"
+          />
+        </svg>
+      )
+    case 'bolt':
+      return (
+        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      )
+  }
+}
+
 export default function HomePage() {
+  const features: Array<{ title: string; desc: string; icon: FeatureIconName }> = [
+    {
+      title: 'Track Players',
+      desc: 'Monitor up to 15 players with ranked-only stats and progress snapshots.',
+      icon: 'users',
+    },
+    {
+      title: 'Share Easily',
+      desc: 'Public, unlisted, or private visibility options for every board.',
+      icon: 'share',
+    },
+    {
+      title: 'Real-time Updates',
+      desc: 'Latest games + rank snapshots refreshed on a schedule.',
+      icon: 'bolt',
+    },
+  ]
+
   return (
-    <main className="mx-auto max-w-6xl px-4 py-20">
-      <div className="max-w-3xl">
-        <h1 className="text-5xl font-bold tracking-tight text-gray-900">
-          Track NA ranked climbs.
-        </h1>
-        <p className="mt-4 text-lg text-gray-600">
-          Create a leaderboard for up to 15 players. Share it publicly, unlisted, or keep it private.
-        </p>
-
-        <div className="mt-8 flex flex-wrap gap-3">
-          <Link 
-            href="/leaderboards" 
-            className="rounded-lg bg-gray-900 px-6 py-3 font-medium text-white transition hover:bg-gray-800"
-          >
-            View leaderboards
-          </Link>
-          <Link 
-            href="/sign-in" 
-            className="rounded-lg border border-gray-300 bg-white px-6 py-3 font-medium text-gray-700 transition hover:bg-gray-50"
-          >
-            Sign in
-          </Link>
-        </div>
-      </div>
-
-      {/* Optional: Feature highlights */}
-      <div className="mt-20 grid gap-8 sm:grid-cols-3">
-        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100">
-            <svg className="h-5 w-5 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+      <div className="mx-auto max-w-4xl px-4 py-10 lg:py-16">
+        {/* Hero */}
+        <div className="mb-10">
+          <div className="flex items-center gap-3 mb-4">
+            <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600">
+              Track NA Ranked Climbs
+            </h1>
           </div>
-          <h3 className="font-semibold text-gray-900">Track Players</h3>
-          <p className="mt-2 text-sm text-gray-600">Monitor up to 15 players in real-time ranked progress</p>
+          <p className="text-base text-slate-600 font-medium">
+            Create a leaderboard, start climbing with friends
+          </p>
         </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100">
-            <svg className="h-5 w-5 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-            </svg>
-          </div>
-          <h3 className="font-semibold text-gray-900">Share Easily</h3>
-          <p className="mt-2 text-sm text-gray-600">Public, unlisted, or private visibility options</p>
-        </div>
+        {/* Features */}
+        <div className="space-y-3">
+          {features.map((f) => (
+            <div
+              key={f.title}
+              className="group rounded-2xl border-2 border-slate-200 bg-white p-5 lg:p-6 shadow-sm transition-all duration-200 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5"
+            >
+              <div className="flex items-start gap-4">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-slate-200 bg-slate-50 text-slate-600">
+                  <FeatureIcon name={f.icon} />
+                </div>
 
-        <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100">
-            <svg className="h-5 w-5 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </div>
-          <h3 className="font-semibold text-gray-900">Real-time Updates</h3>
-          <p className="mt-2 text-sm text-gray-600">See live rank changes and game statistics</p>
+                <div className="min-w-0">
+                  <h3 className="text-base lg:text-lg font-bold text-slate-900 group-hover:text-slate-700 transition-colors">
+                    {f.title}
+                  </h3>
+                  <p className="mt-1.5 text-sm text-slate-600">{f.desc}</p>
+                </div>
+
+                <div className="ml-auto flex-shrink-0 text-slate-300 group-hover:text-slate-500 group-hover:translate-x-1 transition-all duration-200">
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </main>

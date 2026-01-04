@@ -2,10 +2,51 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
-import { formatRank } from '@/lib/rankFormat'
 import { compareRanks } from '@/lib/rankSort'
 
+// --- Types ---
+
 type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
+
+interface Player {
+  id: string
+  puuid: string
+  game_name: string | null
+  tag_line: string | null
+  role: string | null
+  twitch_url: string | null
+  twitter_url: string | null
+  sort_order: number
+}
+
+interface RankData {
+  tier: string | null
+  rank: string | null
+  league_points: number | null
+  wins: number | null
+  losses: number | null
+}
+
+interface Game {
+  matchId: string
+  puuid: string
+  championId: number
+  win: boolean
+  k: number
+  d: number
+  a: number
+  cs: number
+  endTs?: number
+  durationS?: number
+  queueId?: number
+}
+
+// --- Helpers ---
+
+function getRankIconSrc(tier?: string | null) {
+  if (!tier) return '/images/UNRANKED_SMALL.jpg'
+  return `/images/${tier.toUpperCase()}_SMALL.jpg`
+}
 
 function syncTimeAgo(iso?: string | null) {
   if (!iso) return 'never'
@@ -18,31 +59,481 @@ function profileIconUrl(profileIconId?: number | null) {
   return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
 }
 
-function queueLabel(queueId?: number | null) {
-  if (queueId === 420) return 'Solo/Duo'
-  if (queueId === 440) return 'Flex'
-  return queueId ? `Queue ${queueId}` : 'Game'
-}
-
-function formatDuration(durationS?: number | null) {
-  if (!durationS) return ''
-  const m = Math.floor(durationS / 60)
-  return `${m}m`
-}
-
 function formatWinrate(wins?: number | null, losses?: number | null) {
   const w = wins ?? 0
   const l = losses ?? 0
   const total = w + l
-  if (total === 0) return { wins: 0, losses: 0, percentage: 0, label: '0W - 0L 0%' }
+  if (total === 0) return { label: '0W - 0L', pct: 0, total: 0 }
   const pct = Math.round((w / total) * 100)
   return {
-    wins: w,
-    losses: l,
-    percentage: Math.min(100, Math.max(0, pct)),
-    label: `${w}W - ${l}L ${pct}%`,
+    label: `${w}W - ${l}L`,
+    pct: Math.min(100, Math.max(0, pct)),
+    total,
   }
 }
+
+function displayRiotId(p: Player) {
+  const gn = (p.game_name ?? '').trim()
+  const tl = (p.tag_line ?? '').trim()
+  if (gn && tl) return `${gn}#${tl}`
+  return p.puuid
+}
+
+function formatDuration(durationS?: number) {
+  if (!durationS) return ''
+  const m = Math.floor(durationS / 60)
+  const s = durationS % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function getKdaColor(kda: number) {
+  if (kda >= 5) return 'text-amber-600 font-bold'
+  if (kda >= 4) return 'text-blue-600 font-bold'
+  if (kda >= 3) return 'text-emerald-600 font-bold'
+  return 'text-slate-600 font-semibold'
+}
+
+// --- Components ---
+
+function TeamHeaderCard({
+  name,
+  description,
+  visibility,
+  lastUpdated,
+  cutoffs,
+  bannerUrl,
+}: {
+  name: string
+  description?: string | null
+  visibility: string
+  lastUpdated: string | null
+  cutoffs: Array<{ label: string; lp: number; icon: string }>
+  bannerUrl: string | null
+}) {
+  return (
+    <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg">
+      {/* Background pattern */}
+      <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50" />
+      <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none" />
+
+      {/* UPDATED: Banner Image Area (inside the card now) */}
+      {bannerUrl && (
+        <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={bannerUrl}
+            alt="Leaderboard Banner"
+            className="h-full w-full object-cover"
+          />
+        </div>
+      )}
+
+      {/* Content Area */}
+      <div className="relative flex flex-col lg:flex-row">
+        {/* Left: Info */}
+        <div className="flex-1 p-8 lg:p-10">
+          <div className="flex flex-wrap gap-2.5 mb-6">
+            <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm">
+              {visibility}
+            </span>
+          </div>
+
+          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2">
+              {name}
+          </h1>
+          {description && (
+            <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium">
+              {description}
+            </p>
+          )}
+        </div>
+
+        {/* Right: Cutoffs Widget */}
+        {cutoffs.length > 0 && (
+          <div className="bg-gradient-to-br from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-6 lg:p-8 lg:w-80 flex flex-col justify-center gap-5">
+            <div className="flex items-center gap-2">
+              <div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" />
+              <div className="text-xs font-black uppercase tracking-widest text-slate-500">Rank Cutoffs</div>
+            </div>
+            {cutoffs.map((c) => (
+              <div
+                key={c.label}
+                className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200"
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" />
+                <div className="flex-1">
+                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wide">{c.label}</div>
+                  <div className="text-lg font-black text-slate-900">{c.lp} LP</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PodiumCard({
+  rank,
+  player,
+  icon,
+  rankData,
+  winrate,
+  topChamps,
+  champMap,
+  ddVersion,
+}: {
+  rank: number
+  player: Player
+  icon: string | null
+  rankData: RankData | null
+  winrate: ReturnType<typeof formatWinrate>
+  topChamps: any[]
+  champMap: any
+  ddVersion: string
+}) {
+  const isFirst = rank === 1
+  const rankIcon = getRankIconSrc(rankData?.tier)
+
+  let borderClass = 'border-slate-200'
+  let ringClass = ''
+  let badgeColor = 'bg-gradient-to-br from-slate-600 to-slate-700'
+  let glowClass = ''
+  let scaleClass = 'scale-100'
+
+  if (rank === 1) {
+    borderClass = 'border-amber-300'
+    ringClass = 'ring-4 ring-amber-400/30'
+    badgeColor = 'bg-gradient-to-br from-amber-400 via-amber-500 to-amber-600'
+    glowClass = 'shadow-amber-200/50'
+    scaleClass = 'scale-105 lg:scale-110'
+  } else if (rank === 2) {
+    borderClass = 'border-slate-300'
+    badgeColor = 'bg-gradient-to-br from-slate-400 to-slate-500'
+    glowClass = 'shadow-slate-200/50'
+  } else if (rank === 3) {
+    borderClass = 'border-orange-300'
+    badgeColor = 'bg-gradient-to-br from-orange-400 to-orange-500'
+    glowClass = 'shadow-orange-200/50'
+  }
+
+  return (
+    <div
+      className={`relative flex flex-col items-center rounded-3xl bg-white border-2 p-6 lg:p-7 shadow-xl ${glowClass} transition-all duration-300 hover:shadow-2xl ${borderClass} ${ringClass} ${scaleClass} ${
+        isFirst ? 'z-10' : 'z-0'
+      }`}
+    >
+      <div
+        className={`absolute -top-5 flex h-10 w-10 items-center justify-center rounded-full ${badgeColor} text-sm font-black text-white shadow-lg`}
+      >
+        #{rank}
+      </div>
+
+      <div className={`mt-4 h-24 w-24 overflow-hidden rounded-3xl border-3 ${borderClass} shadow-lg`}>
+        {icon ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={icon} alt="" className="h-full w-full object-cover" />
+        ) : (
+          <div className="h-full w-full bg-gradient-to-br from-slate-100 to-slate-200" />
+        )}
+      </div>
+
+      <div className="mt-5 text-center w-full px-2">
+        <div className="truncate text-base lg:text-lg font-black text-slate-900">{displayRiotId(player)}</div>
+        {player.role && (
+          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mt-1">{player.role}</div>
+        )}
+      </div>
+
+      <div className="mt-5 flex flex-col items-center justify-center rounded-2xl bg-gradient-to-br from-slate-50 to-white w-full py-4 border border-slate-100 shadow-inner">
+        {rankIcon && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={rankIcon} alt={rankData?.tier || ''} className="h-12 w-12 object-contain mb-2 drop-shadow-sm" />
+        )}
+        <div className="text-lg font-black text-slate-900">{rankData?.league_points ?? 0} LP</div>
+        <div className={`text-xs font-black mt-2 ${winrate.pct >= 50 ? 'text-emerald-600' : 'text-rose-600'}`}>
+          {winrate.pct}%
+        </div>
+        <div className="text-[10px] font-medium text-slate-400 mt-0.5">{winrate.label}</div>
+      </div>
+
+      <div className="mt-5 flex justify-center gap-2 h-10">
+        {topChamps.slice(0, 3).map((c) => {
+          const champ = champMap[c.champion_id]
+          if (!champ) return null
+          return (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={c.champion_id}
+              src={championIconUrl(ddVersion, champ.id)}
+              alt=""
+              className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm hover:scale-110 transition-transform duration-200"
+            />
+          )
+        })}
+      </div>
+
+      {/* Socials on Podium */}
+      {(player.twitch_url || player.twitter_url) && (
+        <div className="mt-5 flex gap-3">
+          {player.twitch_url && (
+            <a
+              href={player.twitch_url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center h-9 w-9 rounded-xl bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200 shadow-sm"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
+              </svg>
+            </a>
+          )}
+          {player.twitter_url && (
+            <a
+              href={player.twitter_url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center h-9 w-9 rounded-xl bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200 shadow-sm"
+            >
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
+              </svg>
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PlayerListRow({
+  player,
+  index,
+  rankData,
+  stateData,
+  topChamps,
+  winrate,
+  champMap,
+  ddVersion,
+}: {
+  player: Player
+  index: number
+  rankData: any
+  stateData: any
+  topChamps: any[]
+  winrate: any
+  champMap: any
+  ddVersion: string
+}) {
+  const icon = profileIconUrl(stateData?.profile_icon_id)
+  const rankIcon = getRankIconSrc(rankData?.tier)
+
+  return (
+    <div className="group flex items-center gap-3 lg:gap-4 rounded-2xl border border-slate-200 bg-white px-4 lg:px-6 py-4 transition-all hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 duration-200">
+      {/* 1. Rank # */}
+      <div className="w-8 shrink-0 flex justify-center">
+        <span className="text-sm font-black text-slate-400 group-hover:text-slate-600 transition-colors">{index}</span>
+      </div>
+
+      {/* 2. Player Profile */}
+      <div className="flex items-center gap-3 w-40 lg:w-52 shrink-0">
+        <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm">
+          {icon && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={icon} alt="" className="h-full w-full object-cover" />
+          )}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-bold text-slate-900 group-hover:text-slate-700 transition-colors">
+            {displayRiotId(player)}
+          </div>
+          {player.role && <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5">{player.role}</div>}
+        </div>
+      </div>
+
+      {/* 3. Rank & Stats Grid - Flexible Center */}
+      <div className="flex-1 flex items-center gap-4 lg:gap-6 min-w-0">
+        {/* Rank Section */}
+        <div className="flex items-center gap-2 lg:gap-3 shrink-0">
+          {rankIcon && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={rankIcon} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />
+          )}
+          <div className="flex flex-col">
+            <span className="text-sm font-black text-slate-900 whitespace-nowrap">{rankData?.league_points ?? 0} LP</span>
+            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">
+              {rankData?.tier || 'Unranked'}
+            </span>
+          </div>
+        </div>
+
+        {/* Stats Section */}
+        <div className="hidden sm:flex items-center gap-4 lg:gap-6 ml-auto">
+          <div className="flex flex-col items-center">
+            <span className={`text-sm font-black whitespace-nowrap ${winrate.pct >= 50 ? 'text-emerald-600' : 'text-slate-500'}`}>
+              {winrate.pct}%
+            </span>
+            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">Win</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <span className="text-sm font-black text-slate-900 whitespace-nowrap">{winrate.total}</span>
+            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide">Games</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Socials & Champs - Right Aligned */}
+      <div className="flex items-center gap-2 lg:gap-3 shrink-0">
+        {/* Social Icons */}
+        {(player.twitch_url || player.twitter_url) && (
+          <div className="flex gap-1.5">
+            {player.twitch_url && (
+              <a
+                href={player.twitch_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
+                </svg>
+              </a>
+            )}
+            {player.twitter_url && (
+              <a
+                href={player.twitter_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
+                </svg>
+              </a>
+            )}
+          </div>
+        )}
+
+        {/* Champs */}
+        <div className="hidden lg:flex gap-1">
+          {topChamps.slice(0, 3).map((c) => {
+            const champ = champMap[c.champion_id]
+            if (!champ) return null
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={c.champion_id}
+                src={championIconUrl(ddVersion, champ.id)}
+                className="h-8 w-8 rounded-lg border-2 border-slate-200 shadow-sm hover:scale-110 hover:border-slate-300 transition-all duration-200"
+                alt=""
+                title={champ.name}
+              />
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function LatestGamesFeed({
+  games,
+  playersByPuuid,
+  champMap,
+  ddVersion,
+}: {
+  games: Game[]
+  playersByPuuid: Map<string, Player>
+  champMap: any
+  ddVersion: string
+}) {
+  if (games.length === 0) {
+    return (
+      <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+        <svg className="w-12 h-12 mx-auto text-slate-300 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+          />
+        </svg>
+        <p className="text-sm font-semibold text-slate-500">No recent matches</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2.5">
+      {games.map((g) => {
+        const p = playersByPuuid.get(g.puuid)
+        const name = p ? p.game_name || p.puuid : 'Unknown'
+        const when = g.endTs ? timeAgo(g.endTs) : ''
+        const champ = champMap[g.championId]
+        const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
+        const kdaValue = g.d > 0 ? (g.k + g.a) / g.d : 99
+        const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
+        const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
+        const duration = formatDuration(g.durationS)
+
+        return (
+          <div
+            key={`${g.matchId}-${g.puuid}`}
+            className={`group flex flex-col gap-2 rounded-xl border-l-4 bg-white p-3 shadow-sm hover:shadow-md transition-all duration-200 ${
+              g.win
+                ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200'
+                : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200'
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <div className="h-11 w-11 shrink-0">
+                {champSrc && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={champSrc}
+                    alt=""
+                    className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm"
+                  />
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-xs font-bold text-slate-900">{name}</span>
+                  <span className="text-[10px] text-slate-400 font-medium">{when}</span>
+                </div>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-[11px] text-slate-600 font-medium">{champ?.name || 'Unknown'}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Stats Row */}
+            <div className="flex items-center gap-2 text-[10px] border-t border-slate-100 pt-2 -mb-1">
+              {duration && (
+                <>
+                  <span className="font-semibold text-slate-600 tabular-nums">{duration}</span>
+                  <span className="text-slate-300">•</span>
+                </>
+              )}
+              <span className="font-bold text-slate-700 tabular-nums">
+                {g.k}/{g.d}/{g.a}
+              </span>
+              <span className="text-slate-300">•</span>
+              <span className={`tabular-nums ${kdaColor}`}>{kda} KDA</span>
+              <span className="text-slate-300">•</span>
+              <span className="font-semibold text-slate-600 tabular-nums">{g.cs} CS</span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// --- Page ---
 
 export default async function LeaderboardDetail({
   params,
@@ -55,9 +546,10 @@ export default async function LeaderboardDetail({
   const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.1.1'
   const champMap = await getChampionMap(ddVersion)
 
+  // UPDATED: Fetches banner_url directly from DB
   const { data: lb } = await supabase
     .from('leaderboards')
-    .select('id, user_id, name, description, visibility')
+    .select('id, user_id, name, description, visibility, banner_url, updated_at')
     .eq('slug', slug)
     .maybeSingle()
 
@@ -74,70 +566,27 @@ export default async function LeaderboardDetail({
     .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
     .eq('leaderboard_id', lb.id)
     .order('sort_order', { ascending: true })
-    .limit(15)
+    .limit(50)
 
-  const players = playersRaw ?? []
+  const players: Player[] = playersRaw ?? []
   const puuids = players.map((p) => p.puuid).filter(Boolean)
 
-  function displayRiotId(p: any) {
-    const gn = (p.game_name ?? '').trim()
-    const tl = (p.tag_line ?? '').trim()
-    if (gn && tl) return `${gn}#${tl}`
-    return p.puuid
-  }
-
-  if (players.length === 0) {
-    return (
-      <main className="mx-auto max-w-4xl px-4 py-12">
-        <div className="mb-10">
-          <h1 className="text-3xl font-bold text-gray-900">{lb.name}</h1>
-          {lb.description && <p className="mt-2 text-gray-600">{lb.description}</p>}
-        </div>
-
-        <section className="mb-12">
-          <h2 className="mb-4 text-xl font-semibold text-gray-900">Players</h2>
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-            <p className="text-sm font-medium text-gray-900">No players yet</p>
-            <p className="mt-1 text-xs text-gray-500">Players will appear here once they're added.</p>
-          </div>
-        </section>
-
-        <section>
-          <h2 className="mb-4 text-xl font-semibold text-gray-900">Latest Games</h2>
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-            <p className="text-sm font-medium text-gray-900">No games yet</p>
-            <p className="mt-1 text-xs text-gray-500">Once matches are ingested, they’ll appear here.</p>
-          </div>
-        </section>
-      </main>
-    )
-  }
-
+  // Fetch Details
   const [{ data: statesRaw }, { data: ranksRaw }, { data: champsRaw }] = await Promise.all([
-    supabase
-      .from('player_riot_state')
-      .select('puuid, profile_icon_id, last_rank_sync_at, last_matches_sync_at, last_error')
-      .in('puuid', puuids),
-    supabase
-      .from('player_rank_snapshot')
-      .select('puuid, queue_type, tier, rank, league_points, wins, losses, fetched_at')
-      .in('puuid', puuids),
-    supabase
-      .from('player_top_champions')
-      .select('puuid, champion_id, games, wins, last_played_ts, computed_at')
-      .in('puuid', puuids),
+    supabase.from('player_riot_state').select('*').in('puuid', puuids),
+    supabase.from('player_rank_snapshot').select('*').in('puuid', puuids),
+    supabase.from('player_top_champions').select('*').in('puuid', puuids),
   ])
 
   const stateBy = new Map((statesRaw ?? []).map((s) => [s.puuid, s]))
-  const ranks = ranksRaw ?? []
-  const champs = champsRaw ?? []
+  const rankBy = new Map()
+  const ranksList = ranksRaw ?? []
 
-  const rankBy = new Map<string, any>()
-  for (const puuid of puuids) {
-    const solo = ranks.find((r) => r.puuid === puuid && r.queue_type === 'RANKED_SOLO_5x5')
-    const flex = ranks.find((r) => r.puuid === puuid && r.queue_type === 'RANKED_FLEX_SR')
-    rankBy.set(puuid, solo ?? flex ?? null)
-  }
+  puuids.forEach((pid) => {
+    const solo = ranksList.find((r) => r.puuid === pid && r.queue_type === 'RANKED_SOLO_5x5')
+    const flex = ranksList.find((r) => r.puuid === pid && r.queue_type === 'RANKED_FLEX_SR')
+    rankBy.set(pid, solo ?? flex ?? null)
+  })
 
   const playersSorted = [...players].sort((a, b) => {
     const rankA = rankBy.get(a.puuid)
@@ -146,317 +595,164 @@ export default async function LeaderboardDetail({
   })
 
   const champsBy = new Map<string, any[]>()
-  for (const row of champs) {
-    const arr = champsBy.get(row.puuid) ?? []
-    arr.push(row)
-    champsBy.set(row.puuid, arr)
-  }
-  for (const [puuid, arr] of champsBy.entries()) {
-    arr.sort((a, b) => (b.games ?? 0) - (a.games ?? 0) || (b.last_played_ts ?? 0) - (a.last_played_ts ?? 0))
-    champsBy.set(puuid, arr.slice(0, 5))
+  ;(champsRaw ?? []).forEach((c) => {
+    const arr = champsBy.get(c.puuid) || []
+    arr.push(c)
+    champsBy.set(c.puuid, arr)
+  })
+  for (const [pid, arr] of champsBy.entries()) {
+    arr.sort((a, b) => b.games - a.games)
   }
 
+  // Cutoffs
   const { data: cutsRaw } = await supabase
     .from('rank_cutoffs')
     .select('queue_type, tier, cutoff_lp')
     .in('tier', ['GRANDMASTER', 'CHALLENGER'])
-    .order('queue_type', { ascending: true })
-    .order('tier', { ascending: false })
 
-  const cutoffsByQueueTier = new Map(
-    (cutsRaw ?? []).map((c) => [`${c.queue_type}::${c.tier}`, c.cutoff_lp as number])
-  )
+  const cutoffsMap = new Map((cutsRaw ?? []).map((c) => [`${c.queue_type}::${c.tier}`, c.cutoff_lp]))
+  const cutoffs = [
+    { key: 'RANKED_SOLO_5x5::CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
+    { key: 'RANKED_SOLO_5x5::GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
+  ]
+    .map((i) => ({
+      label: i.label,
+      lp: cutoffsMap.get(i.key) as number,
+      icon: i.icon,
+    }))
+    .filter((x) => x.lp !== undefined)
 
-  const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', {
-    lb_id: lb.id,
-    lim: 10,
-  })
-
-  const latestGames = (latestRaw ?? []).map((row: any) => ({
-    matchId: row.match_id as string,
-    puuid: row.puuid as string,
-    championId: row.champion_id as number,
-    k: row.kills as number,
-    d: row.deaths as number,
-    a: row.assists as number,
-    cs: row.cs as number,
-    win: row.win as boolean,
-    endTs: row.game_end_ts as number | undefined,
-    durationS: row.game_duration_s as number | undefined,
-    queueId: row.queue_id as number | undefined,
+  // Latest Games
+  const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 })
+  const latestGames: Game[] = (latestRaw ?? []).map((row: any) => ({
+    matchId: row.match_id,
+    puuid: row.puuid,
+    championId: row.champion_id,
+    win: row.win,
+    k: row.kills ?? 0,
+    d: row.deaths ?? 0,
+    a: row.assists ?? 0,
+    cs: row.cs ?? 0,
+    endTs: row.game_end_ts,
+    durationS: row.game_duration_s,
+    queueId: row.queue_id,
   }))
 
-  const lastUpdatedIso = puuids
-    .map((p) => stateBy.get(p)?.last_rank_sync_at ?? null)
-    .filter(Boolean)
-    .sort()
-    .at(-1) as string | null
-
+  const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null
   const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
 
+  const top3 = playersSorted.slice(0, 3)
+  const rest = playersSorted.slice(3)
+
+  const finalPodium = top3.filter(Boolean)
+
   return (
-    <main className="mx-auto max-w-4xl px-4 py-10 sm:py-12">
-      {/* Header */}
-      <div className="mb-8 sm:mb-10">
-        <h1 className="text-3xl font-bold text-gray-900">{lb.name}</h1>
-        {lb.description && <p className="mt-2 text-gray-600">{lb.description}</p>}
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+      <div className="mx-auto max-w-7xl px-4 py-8 lg:py-12 space-y-10 lg:space-y-12">
+        {/* UPDATED: Banner logic removed from here, now inside TeamHeaderCard */}
 
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-          <span className="rounded-full border border-gray-200 bg-white px-2 py-1">{lb.visibility}</span>
-          <span className="rounded-full border border-gray-200 bg-white px-2 py-1">
-            Last updated: {syncTimeAgo(lastUpdatedIso)}
-          </span>
-        </div>
+        {/* 1. Header & Cutoffs */}
+        <TeamHeaderCard
+          name={lb.name}
+          description={lb.description}
+          visibility={lb.visibility}
+          lastUpdated={lastUpdatedIso}
+          cutoffs={cutoffs}
+          bannerUrl={lb.banner_url}
+        />
 
-        {/* Rank Cutoffs (Solo/Duo only) */}
-        {cutoffsByQueueTier.size > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {Array.from(
-              new Map([
-                ['RANKED_SOLO_5x5::CHALLENGER', 'Challenger'],
-                ['RANKED_SOLO_5x5::GRANDMASTER', 'Grandmaster'],
-              ])
-            ).map(([key, label]) => {
-              const lp = cutoffsByQueueTier.get(key)
-              if (lp === undefined) return null
-              return (
-                <span
-                  key={key}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900"
-                >
-                  <span className="text-amber-600">★</span>
-                  {label}: {lp} LP
-                </span>
-              )
-            })}
-          </div>
-        )}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
+          {/* Left Sidebar: Activity */}
+          <aside className="lg:col-span-3 lg:sticky lg:top-6 order-2 lg:order-1">
+            <div className="flex items-center gap-2 mb-5">
+              <div className="h-1 w-6 bg-gradient-to-r from-blue-400 to-blue-600 rounded-full" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500">Latest Activity</h3>
+            </div>
+            <LatestGamesFeed games={latestGames} playersByPuuid={playersByPuuid} champMap={champMap} ddVersion={ddVersion} />
+          </aside>
+
+          {/* Right Content */}
+          <div className="lg:col-span-9 order-1 lg:order-2 space-y-10 lg:space-y-12">
+            {/* 2. Podium */}
+            {finalPodium.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-6">
+                  <div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" />
+                  <h2 className="text-xs font-black uppercase tracking-widest text-slate-500">Top Players</h2>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-end">
+  {finalPodium.map((p, idx) => {
+    const actualRank = idx + 1 // This is 1, 2, or 3
+    const r = rankBy.get(p.puuid)
+    
+    // CSS Grid ordering for desktop: 2nd left, 1st center, 3rd right
+    let orderClass = ''
+    if (actualRank === 1) orderClass = 'sm:order-2' // 1st place in center on desktop
+    if (actualRank === 2) orderClass = 'sm:order-1' // 2nd place on left on desktop
+    if (actualRank === 3) orderClass = 'sm:order-3' // 3rd place on right on desktop
+    
+    return (
+      <div key={p.id} className={orderClass}>
+        <PodiumCard
+          rank={actualRank}
+          player={p}
+          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id)}
+          rankData={r}
+          winrate={formatWinrate(r?.wins, r?.losses)}
+          topChamps={champsBy.get(p.puuid) ?? []}
+          champMap={champMap}
+          ddVersion={ddVersion}
+        />
       </div>
-
-      {/* Players */}
-      <section className="mb-10 sm:mb-12">
-        <div className="mb-3 sm:mb-4 flex items-center justify-between">
-          <h2 className="text-xl font-semibold text-gray-900">Players</h2>
-          <span className="text-sm text-gray-500">
-            {players.length} {players.length === 1 ? 'player' : 'players'}
-          </span>
-        </div>
-
-        <div className="space-y-3">
-          {playersSorted.map((p, index) => {
-            const st = stateBy.get(p.puuid)
-            const r = rankBy.get(p.puuid)
-            const icon = profileIconUrl(st?.profile_icon_id)
-            const wr = formatWinrate(r?.wins, r?.losses)
-            const top5 = champsBy.get(p.puuid) ?? []
-
-            return (
-              <div
-                key={p.id}
-                className="rounded-xl border border-gray-200 bg-white/60 p-3 sm:p-4 shadow-sm transition hover:shadow-md hover:border-gray-300"
-              >
-                {/* Top row */}
-                <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-gray-100 text-xs font-bold text-gray-700">
-                    #{index + 1}
-                  </div>
-
-                  <div className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
-                    {icon ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={icon} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-gray-500">
-                        NA
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-gray-900">{displayRiotId(p)}</div>
-
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
-                      {p.role && (
-                        <span className="rounded-md border border-gray-200 bg-white px-2 py-0.5">{p.role}</span>
-                      )}
-                      <span className="rounded-md border border-gray-200 bg-white px-2 py-0.5">
-                        {formatRank(r?.tier, r?.rank, r?.league_points)}
-                      </span>
-                      <span className="text-gray-500">
-                        Updated {syncTimeAgo(st?.last_rank_sync_at ?? st?.last_matches_sync_at)}
-                      </span>
-                    </div>
-
-                    {/* Mobile socials (compact) */}
-                    <div className="mt-2 flex gap-2 sm:hidden">
-                      {p.twitch_url && (
-                        <a
-                          href={p.twitch_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700"
-                        >
-                          Twitch
-                        </a>
-                      )}
-                      {p.twitter_url && (
-                        <a
-                          href={p.twitter_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs font-medium text-gray-700"
-                        >
-                          Twitter
-                        </a>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Desktop socials */}
-                  <div className="hidden gap-2 sm:flex flex-shrink-0">
-                    {p.twitch_url && (
-                      <a
-                        href={p.twitch_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Twitch"
-                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-                      >
-                        Twitch
-                      </a>
-                    )}
-                    {p.twitter_url && (
-                      <a
-                        href={p.twitter_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        title="Twitter"
-                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-                      >
-                        Twitter
-                      </a>
-                    )}
-                  </div>
-                </div>
-
-                {/* Winrate */}
-                {wr.wins + wr.losses > 0 ? (
-                  <div className="mt-3">
-                    <div className="flex items-center justify-between text-xs text-gray-600">
-                      <span>{wr.label}</span>
-                    </div>
-                    <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                      <div className="h-full bg-gray-900" style={{ width: `${wr.percentage}%` }} />
-                    </div>
-                  </div>
-                ) : null}
-
-                {/* Top Champions */}
-                {top5.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {top5.map((c) => {
-                      const champ = champMap[c.champion_id]
-                      if (!champ) return null
-                      return (
-                        <img
-                          key={c.champion_id}
-                          src={championIconUrl(ddVersion, champ.id)}
-                          alt={champ.name}
-                          title={`${champ.name} • ${c.wins}W/${c.games}G`}
-                          className="h-7 w-7 rounded-md"
-                          loading="lazy"
-                        />
-                      )
-                    })}
-                  </div>
-                )}
-
-                {st?.last_error && (
-                  <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
-                    Sync error (kept last snapshot)
-                  </div>
-                )}
+    )
+  })}
+</div>
               </div>
-            )
-          })}
-        </div>
-      </section>
+            )}
 
-      {/* Latest Games */}
-      <section>
-        <h2 className="mb-4 text-xl font-semibold text-gray-900">Latest Games</h2>
-
-        {latestGames.length ? (
-          <div className="space-y-2 sm:space-y-3">
-            {latestGames.map((g: any) => {
-              const p = playersByPuuid.get(g.puuid)
-              const name = p ? displayRiotId(p) : g.puuid
-              const when = g.endTs ? timeAgo(g.endTs) : ''
-              const dur = formatDuration(g.durationS)
-
-              const champ = champMap[g.championId]
-              const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
-
-              return (
-                <div
-                  key={`${g.matchId}-${g.puuid}`}
-                  className="rounded-lg border border-gray-200 bg-white p-3 sm:p-4 shadow-sm"
-                >
-                  {/* Mobile-compact header */}
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 truncate text-sm font-medium text-gray-900">{name}</div>
-                    <div className="text-[11px] sm:text-xs text-gray-500 whitespace-nowrap">
-                      {queueLabel(g.queueId)} {dur ? `· ${dur}` : ''} {when ? `· ${when}` : ''}
-                    </div>
-                  </div>
-
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    {/* Left side */}
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span
-                        className={`inline-flex h-6 items-center rounded-full px-2 text-xs font-medium ${
-                          g.win ? 'bg-green-50 text-green-700' : 'bg-rose-50 text-rose-700'
-                        }`}
-                      >
-                        {g.win ? 'W' : 'L'}
-                      </span>
-
-                      {champSrc ? (
-                        <img
-                          src={champSrc}
-                          alt={champ?.name ?? 'Champion'}
-                          title={champ?.name ?? ''}
-                          className="h-6 w-6 rounded"
-                          loading="lazy"
-                        />
-                      ) : null}
-
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-gray-900 tabular-nums">
-                          {g.k}/{g.d}/{g.a}
-                        </div>
-                        <div className="text-xs text-gray-500">CS {g.cs}</div>
-                      </div>
-                    </div>
-
-                    {/* Right side (kept minimal on mobile) */}
-                    <div className="text-xs text-gray-500 tabular-nums">
-                      {champ?.name ? <span className="hidden sm:inline">{champ.name}</span> : null}
-                    </div>
-                  </div>
+            {/* 3. Detailed List */}
+            {rest.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 mb-4">
+                  <div className="h-1 w-6 bg-gradient-to-r from-slate-400 to-slate-600 rounded-full" />
+                  <h2 className="text-xs font-black uppercase tracking-widest text-slate-500">Runnerups</h2>
                 </div>
-              )
-            })}
+                {rest.map((p, idx) => {
+                  const r = rankBy.get(p.puuid)
+                  return (
+                    <PlayerListRow
+                      key={p.id}
+                      index={idx + 4}
+                      player={p}
+                      rankData={r}
+                      stateData={stateBy.get(p.puuid)}
+                      winrate={formatWinrate(r?.wins, r?.losses)}
+                      topChamps={champsBy.get(p.puuid) ?? []}
+                      champMap={champMap}
+                      ddVersion={ddVersion}
+                    />
+                  )
+                })}
+              </div>
+            )}
+
+            {rest.length === 0 && top3.length === 0 && (
+              <div className="text-center py-16 bg-gradient-to-br from-slate-50 to-white rounded-3xl border-2 border-dashed border-slate-200">
+                <svg className="w-16 h-16 mx-auto text-slate-300 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+                  />
+                </svg>
+                <p className="text-base font-bold text-slate-500">No players found</p>
+                <p className="text-sm text-slate-400 mt-1">Add players to get started</p>
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
-            <p className="text-sm font-medium text-gray-900">No games yet</p>
-            <p className="mt-1 text-xs text-gray-500">
-              Once the cron job ingests matches into the database, they’ll show here.
-            </p>
-          </div>
-        )}
-      </section>
+        </div>
+      </div>
     </main>
   )
 }
