@@ -168,11 +168,14 @@ async function syncMatchesRankedOnly(puuid: string) {
 async function computeTopChamps(puuid: string) {
   const SAMPLE_SIZE = 200
 
-  const { data, error } = await supabase
+  // Fix applied: Split the chain and cast to 'any' to allow sorting by foreign table
+  const q = supabase
     .from('match_participants')
     .select('champion_id, win, matches!inner(game_end_ts)')
-    .eq('puuid', puuid)
-    .order('matches.game_end_ts', { ascending: false })
+    .eq('puuid', puuid) as any
+
+  const { data, error } = await q
+    .order('game_end_ts', { foreignTable: 'matches', ascending: false })
     .limit(SAMPLE_SIZE)
 
   if (error) throw error
