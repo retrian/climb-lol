@@ -212,7 +212,52 @@ function isStale(ts?: string | null) {
   return Date.now() - new Date(ts).getTime() > 30 * 60 * 1000
 }
 
+async function fetchAndUpsertRankCutoffs() {
+  // Fetch Grandmaster + Challenger LP cutoffs from Riot API
+  const queues = ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR']
+  const cutoffs: Array<{ queue_type: string; tier: string; cutoff_lp: number }> = []
+
+  for (const queue of queues) {
+    try {
+      // Challenger
+      const chall = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
+        `${NA1}/lol/league/v4/challengerleagues/by-queue/${queue}`
+      )
+      if (chall.entries.length > 0) {
+        const minLp = Math.min(...chall.entries.map((e) => e.leaguePoints))
+        cutoffs.push({ queue_type: queue, tier: 'CHALLENGER', cutoff_lp: minLp })
+      }
+
+      // Grandmaster
+      const gm = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
+        `${NA1}/lol/league/v4/grandmasterleagues/by-queue/${queue}`
+      )
+      if (gm.entries.length > 0) {
+        const minLp = Math.min(...gm.entries.map((e) => e.leaguePoints))
+        cutoffs.push({ queue_type: queue, tier: 'GRANDMASTER', cutoff_lp: minLp })
+      }
+    } catch (e: any) {
+      console.error('[cutoffs] Error fetching for', queue, e?.message ?? e)
+    }
+  }
+
+  if (cutoffs.length > 0) {
+    const { error } = await supabase.from('rank_cutoffs').upsert(
+      cutoffs.map((c) => ({
+        ...c,
+        fetched_at: new Date().toISOString(),
+      })),
+      { onConflict: 'queue_type,tier' }
+    )
+    if (error) throw error
+    console.log('[cutoffs] Upserted', cutoffs.length, 'cutoff rows')
+  }
+}
+
 async function main() {
+  // Fetch rank cutoffs once per run
+  await fetchAndUpsertRankCutoffs()
+
   const { data: lbs, error: lbErr } = await supabase.from('leaderboard_players').select('puuid')
   if (lbErr) throw lbErr
 

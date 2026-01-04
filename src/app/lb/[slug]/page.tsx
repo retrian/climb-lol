@@ -1,33 +1,50 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
+import { timeAgo } from '@/lib/timeAgo'
+import { getChampionMap, championIconUrl } from '@/lib/champions'
+import { formatRank } from '@/lib/rankFormat'
+import { compareRanks } from '@/lib/rankSort'
 
 type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
 
-function timeAgo(iso?: string | null) {
+// Helper to format sync timestamps (ISO string to relative time)
+function syncTimeAgo(iso?: string | null) {
   if (!iso) return 'never'
-  const ms = Date.now() - new Date(iso).getTime()
-  const m = Math.floor(ms / 60000)
-  if (m < 1) return 'just now'
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  return `${d}d ago`
+  return timeAgo(new Date(iso).getTime())
 }
 
 // Optional: set NEXT_PUBLIC_DDRAGON_VERSION in env for stable URLs.
 // If missing, we fall back to a reasonable default.
 function profileIconUrl(profileIconId?: number | null) {
   if (!profileIconId && profileIconId !== 0) return null
-  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '14.1.1'
+  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.1.1'
   return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
 }
 
 function queueLabel(queueId?: number | null) {
-  // If you only ingest ranked solo (420), this is enough.
-  if (queueId === 420) return 'Ranked Solo'
-  if (queueId === 440) return 'Ranked Flex'
+  if (queueId === 420) return 'Solo/Duo'
+  if (queueId === 440) return 'Flex'
   return queueId ? `Queue ${queueId}` : 'Game'
+}
+
+function formatDuration(durationS?: number | null) {
+  if (!durationS) return ''
+  const m = Math.floor(durationS / 60)
+  return `${m}m`
+}
+
+function formatWinrate(wins?: number | null, losses?: number | null) {
+  const w = wins ?? 0
+  const l = losses ?? 0
+  const total = w + l
+  if (total === 0) return { wins: 0, losses: 0, percentage: 0, label: '0W - 0L · 0%' }
+  const pct = Math.round((w / total) * 100)
+  return {
+    wins: w,
+    losses: l,
+    percentage: Math.min(100, Math.max(0, pct)),
+    label: `${w}W - ${l}L · ${pct}%`,
+  }
 }
 
 export default async function LeaderboardDetail({
@@ -37,6 +54,9 @@ export default async function LeaderboardDetail({
 }) {
   const { slug } = await params
   const supabase = await createClient()
+  
+  const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.1.1'
+  const champMap = await getChampionMap(ddVersion)
 
   // Load leaderboard (+ owner for PRIVATE enforcement)
   const { data: lb } = await supabase
@@ -125,6 +145,13 @@ export default async function LeaderboardDetail({
     rankBy.set(puuid, solo ?? flex ?? null)
   }
 
+  // Sort players by rank (tier > division > LP)
+  const playersSorted = [...players].sort((a, b) => {
+    const rankA = rankBy.get(a.puuid)
+    const rankB = rankBy.get(b.puuid)
+    return compareRanks(rankA, rankB)
+  })
+
   // Top champs grouped per player, top 5
   const champsBy = new Map<string, any[]>()
   for (const row of champs) {
@@ -137,14 +164,23 @@ export default async function LeaderboardDetail({
     champsBy.set(puuid, arr.slice(0, 5))
   }
 
-  // Latest 10 games across the leaderboard (combined feed)
-  // Requires match_participants.match_id FK -> matches.match_id
-  const { data: latestRaw } = await supabase
-    .from('match_participants')
-    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, matches!inner(game_end_ts, game_duration_s, queue_id)')
-    .in('puuid', puuids)
-    .order('game_end_ts', { foreignTable: 'matches', ascending: false })
-    .limit(10)
+  // Rank cutoffs (GM & Challenger thresholds)
+  const { data: cutsRaw } = await supabase
+    .from('rank_cutoffs')
+    .select('queue_type, tier, cutoff_lp')
+    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+    .order('queue_type', { ascending: true })
+    .order('tier', { ascending: false })
+
+  const cutoffsByQueueTier = new Map(
+    (cutsRaw ?? []).map((c) => [`${c.queue_type}::${c.tier}`, c.cutoff_lp as number])
+  )
+
+  // Latest 10 games across the leaderboard (using SQL function)
+  const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', {
+    lb_id: lb.id,
+    lim: 10,
+  })
 
   const latestGames = (latestRaw ?? []).map((row: any) => ({
     matchId: row.match_id as string,
@@ -155,9 +191,9 @@ export default async function LeaderboardDetail({
     a: row.assists as number,
     cs: row.cs as number,
     win: row.win as boolean,
-    endTs: row.matches?.game_end_ts as number | undefined,
-    durationS: row.matches?.game_duration_s as number | undefined,
-    queueId: row.matches?.queue_id as number | undefined,
+    endTs: row.game_end_ts as number | undefined,
+    durationS: row.game_duration_s as number | undefined,
+    queueId: row.queue_id as number | undefined,
   }))
 
   // Compute “last updated” (best-effort) from states
@@ -187,9 +223,35 @@ export default async function LeaderboardDetail({
             {lb.visibility}
           </span>
           <span className="rounded-full border border-gray-200 bg-white px-2 py-1">
-            Last updated: {timeAgo(lastUpdatedIso)}
+            Last updated: {syncTimeAgo(lastUpdatedIso)}
           </span>
         </div>
+
+        {/* Rank Cutoffs */}
+        {cutoffsByQueueTier.size > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {Array.from(
+              new Map([
+                ['RANKED_SOLO_5x5::CHALLENGER', 'Solo Challenger'],
+                ['RANKED_SOLO_5x5::GRANDMASTER', 'Solo GM'],
+                ['RANKED_FLEX_SR::CHALLENGER', 'Flex Challenger'],
+                ['RANKED_FLEX_SR::GRANDMASTER', 'Flex GM'],
+              ])
+            ).map(([key, label]) => {
+              const lp = cutoffsByQueueTier.get(key)
+              if (lp === undefined) return null
+              return (
+                <span
+                  key={key}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-900"
+                >
+                  <span className="text-amber-600">★</span>
+                  {label}: {lp} LP
+                </span>
+              )
+            })}
+          </div>
+        )}
       </div>
 
       {/* Players Section */}
@@ -202,34 +264,30 @@ export default async function LeaderboardDetail({
         </div>
 
         <div className="space-y-3">
-          {players.map((p, index) => {
+          {playersSorted.map((p, index) => {
             const st = stateBy.get(p.puuid)
             const r = rankBy.get(p.puuid)
             const icon = profileIconUrl(st?.profile_icon_id)
-            const wins = r?.wins ?? null
-            const losses = r?.losses ?? null
-            const total = wins != null && losses != null ? wins + losses : null
-            const wr = total ? Math.round((wins / total) * 100) : null
-
-            const tier = r?.tier ? String(r.tier).toUpperCase() : null
-            const div = r?.rank ? String(r.rank).toUpperCase() : null
-            const lp = typeof r?.league_points === 'number' ? r.league_points : null
+            
+            // Use new formatWinrate utility
+            const wr = formatWinrate(r?.wins, r?.losses)
 
             const top5 = champsBy.get(p.puuid) ?? []
 
             return (
               <div
                 key={p.id}
-                className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition hover:shadow-md"
+                className="rounded-xl border border-gray-200 bg-white/60 p-4 shadow-sm transition hover:shadow-md hover:border-gray-300"
               >
-                <div className="flex items-center gap-4">
+                {/* Header: icon, rank #, name, rank badge */}
+                <div className="flex items-center gap-3">
                   {/* Rank Number */}
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-sm font-bold text-gray-700">
+                  <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-gray-100 text-xs font-bold text-gray-700">
                     #{index + 1}
                   </div>
 
                   {/* Icon */}
-                  <div className="h-11 w-11 overflow-hidden rounded-full border border-gray-200 bg-gray-50">
+                  <div className="h-10 w-10 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-gray-50">
                     {icon ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={icon} alt="" className="h-full w-full object-cover" />
@@ -241,92 +299,86 @@ export default async function LeaderboardDetail({
                   </div>
 
                   {/* Player Info */}
-                  <div className="flex-1">
-                    <div className="font-medium text-gray-900">{displayRiotId(p)}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-gray-900">{displayRiotId(p)}</div>
 
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                      {p.role && <span className="rounded-full bg-gray-100 px-2 py-0.5">{p.role}</span>}
-
-                      {tier && div ? (
-                        <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5">
-                          {tier} {div}{lp != null ? ` · ${lp} LP` : ''}
-                        </span>
-                      ) : (
-                        <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5">
-                          Unranked / No snapshot yet
-                        </span>
-                      )}
-
-                      {st?.last_error ? (
-                        <span className="rounded-full bg-rose-50 px-2 py-0.5 text-rose-700">
-                          Sync error (kept last snapshot)
-                        </span>
-                      ) : null}
-
-                      <span className="rounded-full bg-gray-50 px-2 py-0.5">
-                        Updated: {timeAgo(st?.last_rank_sync_at ?? st?.last_matches_sync_at)}
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                      {p.role && <span className="rounded-md border border-gray-200 bg-white px-2 py-0.5">{p.role}</span>}
+                      <span className="rounded-md border border-gray-200 bg-white px-2 py-0.5">
+                        {formatRank(r?.tier, r?.rank, r?.league_points)}
                       </span>
-                    </div>
-
-                    {/* Winrate */}
-                    {wins != null && losses != null ? (
-                      <div className="mt-3">
-                        <div className="flex items-center justify-between text-xs text-gray-600">
-                          <span>
-                            {wins}W - {losses}L{wr != null ? ` · ${wr}%` : ''}
-                          </span>
-                        </div>
-                        <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-gray-100">
-                          <div
-                            className="h-full bg-gray-900"
-                            style={{ width: `${wr ?? 0}%` }}
-                          />
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {/* Top 5 champs (DB snapshot, no live fetch) */}
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      {top5.length ? (
-                        top5.map((c) => (
-                          <span
-                            key={`${p.puuid}-${c.champion_id}`}
-                            className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-gray-700"
-                            title={`Champion ID ${c.champion_id} · ${c.games} games · ${c.wins}W`}
-                          >
-                            Champ {c.champion_id}
-                          </span>
-                        ))
-                      ) : null}
+                      <span className="text-gray-500">Updated {syncTimeAgo(st?.last_rank_sync_at ?? st?.last_matches_sync_at)}</span>
                     </div>
                   </div>
 
-                  {/* Social Links */}
-                  {(p.twitch_url || p.twitter_url) && (
-                    <div className="flex gap-2">
-                      {p.twitch_url && (
-                        <a
-                          href={p.twitch_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-                        >
-                          Twitch
-                        </a>
-                      )}
-                      {p.twitter_url && (
-                        <a
-                          href={p.twitter_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-                        >
-                          Twitter
-                        </a>
-                      )}
-                    </div>
-                  )}
+                  {/* Social Links (desktop only) */}
+                  <div className="hidden gap-2 sm:flex flex-shrink-0">
+                    {p.twitch_url && (
+                      <a
+                        href={p.twitch_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Twitch"
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+                      >
+                        Twitch
+                      </a>
+                    )}
+                    {p.twitter_url && (
+                      <a
+                        href={p.twitter_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Twitter"
+                        className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+                      >
+                        Twitter
+                      </a>
+                    )}
+                  </div>
                 </div>
+
+                {/* Winrate Section */}
+                {wr.wins + wr.losses > 0 ? (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-xs text-gray-600">
+                      <span>{wr.label}</span>
+                    </div>
+                    <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                      <div
+                        className="h-full bg-gray-900"
+                        style={{ width: `${wr.percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Top Champions */}
+                {top5.length > 0 && (
+                  <div className="mt-3 flex gap-1.5">
+                    {top5.map((c) => {
+                      const champ = champMap[c.champion_id]
+                      if (!champ) return null
+                      return (
+                        <img
+                          key={c.champion_id}
+                          src={championIconUrl(ddVersion, champ.id)}
+                          alt={champ.name}
+                          title={`${champ.name} • ${c.wins}W/${c.games}G`}
+                          className="h-6 w-6 rounded"
+                          loading="lazy"
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Error Banner */}
+                {st?.last_error && (
+                  <div className="mt-2 rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs text-rose-700">
+                    Sync error (kept last snapshot)
+                  </div>
+                )}
               </div>
             )
           })}
@@ -339,11 +391,11 @@ export default async function LeaderboardDetail({
 
         {latestGames.length ? (
           <div className="space-y-3">
-            {latestGames.map((g) => {
+            {latestGames.map((g: (typeof latestGames)[number]) => {
               const p = players.find((x) => x.puuid === g.puuid)
               const name = p ? displayRiotId(p) : g.puuid
-              const when = g.endTs ? `${Math.max(1, Math.floor((Date.now() - g.endTs) / 60000))}m ago` : ''
-              const dur = g.durationS ? `${Math.floor(g.durationS / 60)}m` : ''
+              const when = g.endTs ? timeAgo(g.endTs) : ''
+              const dur = formatDuration(g.durationS)
 
               return (
                 <div key={`${g.matchId}-${g.puuid}`} className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
@@ -355,12 +407,24 @@ export default async function LeaderboardDetail({
                   </div>
 
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-gray-700">
-                    <span className={`rounded-full px-2 py-0.5 text-xs ${g.win ? 'bg-green-50 text-green-700' : 'bg-rose-50 text-rose-700'}`}>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${g.win ? 'bg-green-50 text-green-700' : 'bg-rose-50 text-rose-700'}`}>
                       {g.win ? 'W' : 'L'}
                     </span>
-                    <span className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs">
-                      Champ {g.championId}
-                    </span>
+                    {(() => {
+                      const champ = champMap[g.championId]
+                      if (!champ) return <span className="text-xs text-gray-500">Unknown champ</span>
+                      return (
+                        <span className="flex items-center gap-1.5 rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs">
+                          <img
+                            src={championIconUrl(ddVersion, champ.id)}
+                            alt={champ.name}
+                            className="h-4 w-4 rounded"
+                            loading="lazy"
+                          />
+                          <span>{champ.name}</span>
+                        </span>
+                      )
+                    })()}
                     <span className="text-sm font-semibold text-gray-900">
                       {g.k}/{g.d}/{g.a}
                     </span>
