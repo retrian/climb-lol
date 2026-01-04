@@ -197,132 +197,162 @@ function PodiumCard({
   const isFirst = rank === 1
   const rankIcon = getRankIconSrc(rankData?.tier)
 
-  let borderClass = 'border-slate-200'
-  let ringClass = ''
-  let badgeColor = 'bg-gradient-to-br from-slate-600 to-slate-700'
-  let glowClass = ''
-  let scaleClass = 'scale-100'
+  // Gold, Silver, Bronze colors with sizing
+  let cardBg = 'bg-white'
+  let accentColor = 'from-slate-400 to-slate-600'
+  let rankBg = 'bg-slate-600'
+  let rankText = 'text-slate-100'
+  let hoverEffect = 'hover:shadow-xl hover:-translate-y-1'
+  let sizeClass = 'scale-90'
+  let glowEffect = ''
 
   if (rank === 1) {
-    borderClass = 'border-amber-300'
-    ringClass = 'ring-4 ring-amber-400/30'
-    badgeColor = 'bg-gradient-to-br from-amber-400 via-amber-500 to-amber-600'
-    glowClass = 'shadow-amber-200/50'
-    scaleClass = 'scale-105 lg:scale-110'
+    // Gold
+    cardBg = 'bg-white'
+    accentColor = 'from-yellow-400 via-yellow-500 to-amber-600'
+    rankBg = 'bg-gradient-to-r from-yellow-400 via-yellow-500 to-amber-600'
+    rankText = 'text-white'
+    hoverEffect = 'hover:shadow-2xl hover:-translate-y-2'
+    sizeClass = 'scale-110'
+    glowEffect = 'shadow-2xl shadow-yellow-500/25 ring-2 ring-yellow-400/30'
   } else if (rank === 2) {
-    borderClass = 'border-slate-300'
-    badgeColor = 'bg-gradient-to-br from-slate-400 to-slate-500'
-    glowClass = 'shadow-slate-200/50'
+    // Silver
+    accentColor = 'from-slate-300 via-slate-400 to-slate-500'
+    rankBg = 'bg-gradient-to-r from-slate-300 via-slate-400 to-slate-500'
+    rankText = 'text-white'
+    sizeClass = 'scale-100'
   } else if (rank === 3) {
-    borderClass = 'border-orange-300'
-    badgeColor = 'bg-gradient-to-br from-orange-400 to-orange-500'
-    glowClass = 'shadow-orange-200/50'
+    // Bronze
+    accentColor = 'from-orange-400 via-amber-600 to-orange-700'
+    rankBg = 'bg-gradient-to-r from-orange-400 via-amber-600 to-orange-700'
+    rankText = 'text-white'
+    sizeClass = 'scale-90'
   }
 
-  // UPDATED: Logic to prepare the tier and division string for display.
   const tier = rankData?.tier
   const division = rankData?.rank
   const isApex = tier && ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
   let tierDisplay = null
 
-  // Only show division if it's a non-apex tier (Iron - Diamond)
   if (tier && !isApex) {
     tierDisplay = `${tier} ${division || ''}`.trim()
   }
 
   return (
     <div
-      className={`relative flex flex-col items-center rounded-3xl bg-white border-2 p-6 lg:p-7 shadow-xl ${glowClass} transition-all duration-300 hover:shadow-2xl ${borderClass} ${ringClass} ${scaleClass} ${
-        isFirst ? 'z-10' : 'z-0'
-      }`}
+      className={`group relative flex flex-col ${cardBg} rounded-2xl shadow-lg ${hoverEffect} ${sizeClass} ${glowEffect} transition-all duration-300 overflow-hidden border border-slate-200`}
     >
-      <div
-        className={`absolute -top-5 flex h-10 w-10 items-center justify-center rounded-full ${badgeColor} text-sm font-black text-white shadow-lg`}
-      >
-        #{rank}
-      </div>
+      {/* Accent bar at top */}
+      <div className={`h-1.5 w-full bg-gradient-to-r ${accentColor}`} />
 
-      <div className={`mt-4 h-24 w-24 overflow-hidden rounded-3xl border-3 ${borderClass} shadow-lg`}>
-        {icon ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={icon} alt="" className="h-full w-full object-cover" />
-        ) : (
-          <div className="h-full w-full bg-gradient-to-br from-slate-100 to-slate-200" />
-        )}
-      </div>
-
-      <div className="mt-5 text-center w-full px-2">
-        <div className="truncate text-base lg:text-lg font-black text-slate-900">{displayRiotId(player)}</div>
-        {player.role && (
-          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mt-1">{player.role}</div>
-        )}
-      </div>
-
-      <div className="mt-5 flex flex-col items-center justify-center rounded-2xl bg-gradient-to-br from-slate-50 to-white w-full py-4 border border-slate-100 shadow-inner">
-        {rankIcon && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={rankIcon} alt={rankData?.tier || ''} className="h-12 w-12 object-contain mb-2 drop-shadow-sm" />
-        )}
-        <div className="text-lg font-black text-slate-900">{rankData?.league_points ?? 0} LP</div>
-        
-        {/* UPDATED: Display the tier and division if applicable */}
-        {tierDisplay && (
-          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5">
-            {tierDisplay}
-          </div>
-        )}
-
-        <div className={`text-xs font-black mt-2 ${winrate.pct >= 50 ? 'text-emerald-600' : 'text-rose-600'}`}>
-          {winrate.pct}%
+      {/* Rank badge - corner ribbon style */}
+      <div className="absolute top-3 right-3 z-10">
+        <div className={`${rankBg} px-3 py-1.5 rounded-lg shadow-md ${rankText} text-xs font-bold tracking-wide`}>
+          #{rank}
         </div>
-        <div className="text-[10px] font-medium text-slate-400 mt-0.5">{winrate.label}</div>
       </div>
 
-      <div className="mt-5 flex justify-center gap-2 h-10">
-        {topChamps.slice(0, 3).map((c) => {
-          const champ = champMap[c.champion_id]
-          if (!champ) return null
-          return (
+      {/* Card Content */}
+      <div className="p-6 flex flex-col items-center">
+        {/* Profile Icon */}
+        <div className="relative h-24 w-24 rounded-2xl overflow-hidden border-2 border-slate-200 shadow-md bg-slate-100 group-hover:scale-105 transition-transform duration-300">
+          {icon ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={c.champion_id}
-              src={championIconUrl(ddVersion, champ.id)}
-              alt=""
-              className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm hover:scale-110 transition-transform duration-200"
-            />
-          )
-        })}
-      </div>
-
-      {/* Socials on Podium */}
-      {(player.twitch_url || player.twitter_url) && (
-        <div className="mt-5 flex gap-3">
-          {player.twitch_url && (
-            <a
-              href={player.twitch_url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center h-9 w-9 rounded-xl bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200 shadow-sm"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
-              </svg>
-            </a>
-          )}
-          {player.twitter_url && (
-            <a
-              href={player.twitter_url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center h-9 w-9 rounded-xl bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200 shadow-sm"
-            >
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
-              </svg>
-            </a>
+            <img src={icon} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300" />
           )}
         </div>
-      )}
+
+        {/* Player Name & Role */}
+        <div className="mt-4 text-center w-full px-2">
+          <div className="truncate text-lg font-bold text-slate-900">{displayRiotId(player)}</div>
+          {player.role && (
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1">
+              {player.role}
+            </div>
+          )}
+        </div>
+
+        {/* Rank Info */}
+        <div className="mt-5 flex flex-col items-center gap-3 w-full">
+          {/* LP Display */}
+          <div className="flex items-center gap-3 bg-slate-50 px-5 py-3 rounded-xl border border-slate-200 w-full justify-center group-hover:bg-slate-100 transition-colors duration-200">
+            {rankIcon && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={rankIcon} alt={rankData?.tier || ''} className="h-11 w-11 object-contain" />
+            )}
+            <div className="flex flex-col items-start">
+              <div className="text-2xl font-black text-slate-900 tabular-nums">
+                {rankData?.league_points ?? 0}
+                <span className="text-sm font-bold text-slate-500 ml-1">LP</span>
+              </div>
+              {tierDisplay && (
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                  {tierDisplay}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Winrate */}
+          <div className="flex items-center gap-2 text-sm">
+            <div className={`font-black tabular-nums ${winrate.pct >= 50 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {winrate.pct}%
+            </div>
+            <div className="text-slate-400 font-medium">{winrate.label}</div>
+          </div>
+        </div>
+
+        {/* Champion Pool */}
+        <div className="mt-5 flex gap-2">
+          {topChamps.slice(0, 3).map((c) => {
+            const champ = champMap[c.champion_id]
+            if (!champ) return null
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={c.champion_id}
+                src={championIconUrl(ddVersion, champ.id)}
+                alt={champ.name}
+                className="h-10 w-10 rounded-lg border-2 border-slate-200 shadow-sm hover:scale-125 hover:border-slate-300 transition-all duration-200 hover:z-10"
+              />
+            )
+          })}
+        </div>
+
+        {/* Social Links - Always reserve space */}
+        <div className="mt-5 pt-5 border-t border-slate-100 w-full min-h-[52px] flex items-center justify-center">
+          <div className="flex gap-2">
+            {player.twitch_url && (
+              <a
+                href={player.twitch_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center h-9 w-9 rounded-lg bg-slate-100 text-slate-400 hover:bg-purple-500 hover:text-white hover:scale-110 transition-all duration-200 shadow-sm"
+                title="Twitch"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
+                </svg>
+              </a>
+            )}
+            {player.twitter_url && (
+              <a
+                href={player.twitter_url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center h-9 w-9 rounded-lg bg-slate-100 text-slate-400 hover:bg-blue-500 hover:text-white hover:scale-110 transition-all duration-200 shadow-sm"
+                title="Twitter"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
+                </svg>
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
