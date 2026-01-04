@@ -214,29 +214,49 @@ function isStale(ts?: string | null) {
 
 async function fetchAndUpsertRankCutoffs() {
   // Fetch Solo/Duo Grandmaster + Challenger LP cutoffs from Riot API
+  // Uses ONLY active entries to match ladder site accuracy
   const SOLO_QUEUE = 'RANKED_SOLO_5x5'
+
+  type LeagueEntryDTO = { leaguePoints: number; inactive?: boolean }
+
+  function cutoffLp(entries: LeagueEntryDTO[], slots: number): number | null {
+    // Filter to active players only
+    const active = entries.filter((e) => !e.inactive)
+    const sorted = active
+      .map((e) => Number(e.leaguePoints ?? 0))
+      .sort((a, b) => b - a) // descending
+
+    if (sorted.length < slots) return null
+    return sorted[slots - 1] // return the Nth active player's LP
+  }
 
   const cutoffs: Array<{ queue_type: string; tier: string; cutoff_lp: number }> = []
 
   try {
-    // Challenger
-    const chall = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
+    // Challenger - top 300 active
+    const chall = await riotFetch<{ entries: LeagueEntryDTO[] }>(
       `${NA1}/lol/league/v4/challengerleagues/by-queue/${SOLO_QUEUE}`
     )
     if (chall.entries && chall.entries.length > 0) {
-      const minLp = Math.min(...chall.entries.map((e) => e.leaguePoints ?? 0))
-      cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'CHALLENGER', cutoff_lp: minLp })
-      console.log('[cutoffs] Challenger entries:', chall.entries.length, 'cutoff LP:', minLp)
+      const challCutoff = cutoffLp(chall.entries, 300)
+      if (challCutoff !== null) {
+        cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'CHALLENGER', cutoff_lp: challCutoff })
+        const inactiveCount = chall.entries.filter((e) => e.inactive).length
+        console.log('[cutoffs] Challenger:', chall.entries.length, 'total,', inactiveCount, 'inactive, cutoff LP:', challCutoff)
+      }
     }
 
-    // Grandmaster
-    const gm = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
+    // Grandmaster - top 700 active
+    const gm = await riotFetch<{ entries: LeagueEntryDTO[] }>(
       `${NA1}/lol/league/v4/grandmasterleagues/by-queue/${SOLO_QUEUE}`
     )
     if (gm.entries && gm.entries.length > 0) {
-      const minLp = Math.min(...gm.entries.map((e) => e.leaguePoints ?? 0))
-      cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'GRANDMASTER', cutoff_lp: minLp })
-      console.log('[cutoffs] Grandmaster entries:', gm.entries.length, 'cutoff LP:', minLp)
+      const gmCutoff = cutoffLp(gm.entries, 700)
+      if (gmCutoff !== null) {
+        cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'GRANDMASTER', cutoff_lp: gmCutoff })
+        const inactiveCount = gm.entries.filter((e) => e.inactive).length
+        console.log('[cutoffs] Grandmaster:', gm.entries.length, 'total,', inactiveCount, 'inactive, cutoff LP:', gmCutoff)
+      }
     }
   } catch (e: any) {
     console.error('[cutoffs] Error fetching Solo/Duo cutoffs:', e?.message ?? e)
