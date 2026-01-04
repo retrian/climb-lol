@@ -49,7 +49,6 @@ async function upsertRiotState(puuid: string, patch: Record<string, any>) {
 }
 
 async function syncSummonerBasics(puuid: string) {
-  // gets encryptedSummonerId + profile icon
   const data = await riotFetch<{ id: string; profileIconId: number }>(
     `${NA1}/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
   )
@@ -65,7 +64,6 @@ async function syncSummonerBasics(puuid: string) {
 }
 
 async function syncRankByPuuid(puuid: string) {
-  // ✅ This is the correct endpoint for rank by PUUID
   const entries = await riotFetch<
     Array<{
       queueType: string
@@ -79,7 +77,6 @@ async function syncRankByPuuid(puuid: string) {
 
   const now = new Date().toISOString()
 
-  // If unranked, entries can be [] — still mark as synced so we don’t spam refresh
   for (const e of entries) {
     if (e.queueType !== 'RANKED_SOLO_5x5' && e.queueType !== 'RANKED_FLEX_SR') continue
 
@@ -119,14 +116,14 @@ async function syncMatchesRankedOnly(puuid: string) {
   const newIds = ids.filter((id) => !existingSet.has(id))
 
   for (const matchId of newIds) {
-    const match = await riotFetch<any>(
-      `${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`
-    )
+    const match = await riotFetch<any>(`${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`)
 
     const info = match.info
     const meta = match.metadata
 
-    const gameEnd = Number(info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000))
+    const gameEnd = Number(
+      info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000)
+    )
     const queueId = Number(info.queueId ?? 0)
     const durationS = Number(info.gameDuration ?? 0)
 
@@ -163,21 +160,34 @@ async function syncMatchesRankedOnly(puuid: string) {
   await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
 }
 
-async function computeTopChamps(puuid: string) {
-  const { data } = await supabase
+/**
+ * Top 5 champions (ranked-only, Solo queue only)
+ * We compute from *your DB* (matches + match_participants), not Riot.
+ * Uses last N matches so it stays stable but still reflects "recent" meta.
+ */
+async function computeTopChampsRankedOnly(puuid: string) {
+  const SAMPLE_SIZE = 200 // more stable than 50
+  const QUEUE_ID = 420 // Solo/Duo
+
+  const { data, error } = await supabase
     .from('match_participants')
-    .select('champion_id, win, matches!inner(game_end_ts)')
+    .select('champion_id, win, matches!inner(game_end_ts, queue_id)')
     .eq('puuid', puuid)
+    .eq('matches.queue_id', QUEUE_ID)
     .order('matches.game_end_ts', { ascending: false })
-    .limit(50)
+    .limit(SAMPLE_SIZE)
+
+  if (error) throw error
 
   const rows = (data ?? []) as any[]
-  const agg = new Map<number, { games: number; wins: number; last: number }>()
 
+  const agg = new Map<number, { games: number; wins: number; last: number }>()
   for (const r of rows) {
     const champ = Number(r.champion_id)
+    if (!champ) continue
     const win = Boolean(r.win)
     const ts = Number(r.matches?.game_end_ts ?? 0)
+
     const cur = agg.get(champ) ?? { games: 0, wins: 0, last: 0 }
     cur.games += 1
     cur.wins += win ? 1 : 0
@@ -187,13 +197,14 @@ async function computeTopChamps(puuid: string) {
 
   const top5 = [...agg.entries()]
     .map(([champion_id, v]) => ({ champion_id, ...v }))
-    .sort((a, b) => b.games - a.games || b.last - a.last)
+    .sort((a, b) => b.games - a.games || b.wins - a.wins || b.last - a.last)
     .slice(0, 5)
 
+  // Replace existing rows (simple + safe)
   await supabase.from('player_top_champions').delete().eq('puuid', puuid)
 
   if (top5.length) {
-    const { error } = await supabase.from('player_top_champions').insert(
+    const { error: insErr } = await supabase.from('player_top_champions').insert(
       top5.map((t) => ({
         puuid,
         champion_id: t.champion_id,
@@ -203,13 +214,11 @@ async function computeTopChamps(puuid: string) {
         computed_at: new Date().toISOString(),
       }))
     )
-    if (error) throw error
+    if (insErr) throw insErr
   }
 }
 
 async function fetchAndUpsertRankCutoffs() {
-  // Fetch Solo/Duo Grandmaster + Challenger + Master LP cutoffs from Riot API
-  // Merges all three tiers and computes promotion-line cutoffs
   const QUEUE = 'RANKED_SOLO_5x5'
 
   type Entry = { leaguePoints: number; inactive?: boolean }
@@ -217,7 +226,7 @@ async function fetchAndUpsertRankCutoffs() {
 
   function cutoff(entries: Entry[], slots: number, floorLp: number): number {
     const eligible = entries
-      .filter((e) => !e.inactive) // filter inactive
+      .filter((e) => !e.inactive)
       .filter((e) => (e.leaguePoints ?? 0) >= floorLp)
       .sort((a, b) => (b.leaguePoints ?? 0) - (a.leaguePoints ?? 0))
 
@@ -265,7 +274,6 @@ function isStale(ts?: string | null) {
 }
 
 async function main() {
-  // Fetch rank cutoffs once per run
   await fetchAndUpsertRankCutoffs()
 
   const { data: lbs, error: lbErr } = await supabase.from('leaderboard_players').select('puuid')
@@ -294,13 +302,12 @@ async function main() {
     console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches })
 
     try {
-      // keep summoner basics fresh (icon + summoner_id), but rank does NOT depend on summoner_id anymore
       await syncSummonerBasics(puuid)
-
       if (staleRank) await syncRankByPuuid(puuid)
       if (staleMatches) await syncMatchesRankedOnly(puuid)
 
-      await computeTopChamps(puuid)
+      // Always compute after match sync so it reflects newest data
+      await computeTopChampsRankedOnly(puuid)
     } catch (e: any) {
       console.error('Error for', puuid.slice(0, 12), e?.message ?? e)
       await upsertRiotState(puuid, { last_error: String(e?.message ?? e) })

@@ -10,5 +10,5 @@ export function formatRank(tier?: string | null, division?: string | null, lp?: 
   const niceDiv = division ?? ''
   const niceLp = lp ?? 0
 
-  return `${niceTier}${showDivision ? ` ${niceDiv}` : ''} • ${niceLp} LP`
+  return `${niceTier}${showDivision ? ` ${niceDiv}` : ''}   ${niceLp} LP`
 }
