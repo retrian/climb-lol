@@ -55,7 +55,7 @@ function syncTimeAgo(iso?: string | null) {
 
 function profileIconUrl(profileIconId?: number | null) {
   if (!profileIconId && profileIconId !== 0) return null
-  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.1.1'
+  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
 }
 
@@ -603,7 +603,7 @@ export default async function LeaderboardDetail({
   const { slug } = await params
   const supabase = await createClient()
 
-  const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.1.1'
+  const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   const champMap = await getChampionMap(ddVersion)
 
   // Fetches banner_url directly from DB
