@@ -213,32 +213,33 @@ function isStale(ts?: string | null) {
 }
 
 async function fetchAndUpsertRankCutoffs() {
-  // Fetch Grandmaster + Challenger LP cutoffs from Riot API
-  const queues = ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR']
+  // Fetch Solo/Duo Grandmaster + Challenger LP cutoffs from Riot API
+  const SOLO_QUEUE = 'RANKED_SOLO_5x5'
+
   const cutoffs: Array<{ queue_type: string; tier: string; cutoff_lp: number }> = []
 
-  for (const queue of queues) {
-    try {
-      // Challenger
-      const chall = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
-        `${NA1}/lol/league/v4/challengerleagues/by-queue/${queue}`
-      )
-      if (chall.entries.length > 0) {
-        const minLp = Math.min(...chall.entries.map((e) => e.leaguePoints))
-        cutoffs.push({ queue_type: queue, tier: 'CHALLENGER', cutoff_lp: minLp })
-      }
-
-      // Grandmaster
-      const gm = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
-        `${NA1}/lol/league/v4/grandmasterleagues/by-queue/${queue}`
-      )
-      if (gm.entries.length > 0) {
-        const minLp = Math.min(...gm.entries.map((e) => e.leaguePoints))
-        cutoffs.push({ queue_type: queue, tier: 'GRANDMASTER', cutoff_lp: minLp })
-      }
-    } catch (e: any) {
-      console.error('[cutoffs] Error fetching for', queue, e?.message ?? e)
+  try {
+    // Challenger
+    const chall = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
+      `${NA1}/lol/league/v4/challengerleagues/by-queue/${SOLO_QUEUE}`
+    )
+    if (chall.entries && chall.entries.length > 0) {
+      const minLp = Math.min(...chall.entries.map((e) => e.leaguePoints ?? 0))
+      cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'CHALLENGER', cutoff_lp: minLp })
+      console.log('[cutoffs] Challenger entries:', chall.entries.length, 'cutoff LP:', minLp)
     }
+
+    // Grandmaster
+    const gm = await riotFetch<{ entries: Array<{ leaguePoints: number }> }>(
+      `${NA1}/lol/league/v4/grandmasterleagues/by-queue/${SOLO_QUEUE}`
+    )
+    if (gm.entries && gm.entries.length > 0) {
+      const minLp = Math.min(...gm.entries.map((e) => e.leaguePoints ?? 0))
+      cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'GRANDMASTER', cutoff_lp: minLp })
+      console.log('[cutoffs] Grandmaster entries:', gm.entries.length, 'cutoff LP:', minLp)
+    }
+  } catch (e: any) {
+    console.error('[cutoffs] Error fetching Solo/Duo cutoffs:', e?.message ?? e)
   }
 
   if (cutoffs.length > 0) {

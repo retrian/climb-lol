@@ -227,15 +227,13 @@ export default async function LeaderboardDetail({
           </span>
         </div>
 
-        {/* Rank Cutoffs */}
+        {/* Rank Cutoffs (Solo/Duo only) */}
         {cutoffsByQueueTier.size > 0 && (
           <div className="mt-4 flex flex-wrap gap-2">
             {Array.from(
               new Map([
-                ['RANKED_SOLO_5x5::CHALLENGER', 'Solo Challenger'],
-                ['RANKED_SOLO_5x5::GRANDMASTER', 'Solo GM'],
-                ['RANKED_FLEX_SR::CHALLENGER', 'Flex Challenger'],
-                ['RANKED_FLEX_SR::GRANDMASTER', 'Flex GM'],
+                ['RANKED_SOLO_5x5::CHALLENGER', 'Challenger'],
+                ['RANKED_SOLO_5x5::GRANDMASTER', 'Grandmaster'],
               ])
             ).map(([key, label]) => {
               const lp = cutoffsByQueueTier.get(key)
