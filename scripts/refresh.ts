@@ -49,6 +49,7 @@ async function upsertRiotState(puuid: string, patch: Record<string, any>) {
 }
 
 async function syncSummonerBasics(puuid: string) {
+  // gets encryptedSummonerId + profile icon
   const data = await riotFetch<{ id: string; profileIconId: number }>(
     `${NA1}/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
   )
@@ -161,33 +162,29 @@ async function syncMatchesRankedOnly(puuid: string) {
 }
 
 /**
- * Top 5 champions (ranked-only, Solo queue only)
- * We compute from *your DB* (matches + match_participants), not Riot.
- * Uses last N matches so it stays stable but still reflects "recent" meta.
+ * Top 5 champs (ranked-only in practice because you only ingest queue=420)
+ * Uses last N games for stability.
  */
-async function computeTopChampsRankedOnly(puuid: string) {
-  const SAMPLE_SIZE = 200 // more stable than 50
-  const QUEUE_ID = 420 // Solo/Duo
+async function computeTopChamps(puuid: string) {
+  const SAMPLE_SIZE = 200
 
   const { data, error } = await supabase
     .from('match_participants')
-    .select('champion_id, win, matches!inner(game_end_ts, queue_id)')
+    .select('champion_id, win, matches!inner(game_end_ts)')
     .eq('puuid', puuid)
-    .eq('matches.queue_id', QUEUE_ID)
     .order('matches.game_end_ts', { ascending: false })
     .limit(SAMPLE_SIZE)
 
   if (error) throw error
 
   const rows = (data ?? []) as any[]
-
   const agg = new Map<number, { games: number; wins: number; last: number }>()
+
   for (const r of rows) {
     const champ = Number(r.champion_id)
     if (!champ) continue
     const win = Boolean(r.win)
     const ts = Number(r.matches?.game_end_ts ?? 0)
-
     const cur = agg.get(champ) ?? { games: 0, wins: 0, last: 0 }
     cur.games += 1
     cur.wins += win ? 1 : 0
@@ -200,7 +197,8 @@ async function computeTopChampsRankedOnly(puuid: string) {
     .sort((a, b) => b.games - a.games || b.wins - a.wins || b.last - a.last)
     .slice(0, 5)
 
-  // Replace existing rows (simple + safe)
+  console.log('[topchamps]', puuid.slice(0, 12), 'rows=', rows.length, 'top5=', top5.map(t => `${t.champion_id}:${t.games}`))
+
   await supabase.from('player_top_champions').delete().eq('puuid', puuid)
 
   if (top5.length) {
@@ -273,6 +271,16 @@ function isStale(ts?: string | null) {
   return Date.now() - new Date(ts).getTime() > 30 * 60 * 1000
 }
 
+async function hasTopChamps(puuid: string) {
+  const { count, error } = await supabase
+    .from('player_top_champions')
+    .select('puuid', { count: 'exact', head: true })
+    .eq('puuid', puuid)
+
+  if (error) throw error
+  return (count ?? 0) > 0
+}
+
 async function main() {
   await fetchAndUpsertRankCutoffs()
 
@@ -297,17 +305,33 @@ async function main() {
     const staleRank = isStale(st?.last_rank_sync_at)
     const staleMatches = isStale(st?.last_matches_sync_at)
 
-    if (!staleRank && !staleMatches) continue
+    // ✅ NEW: compute top champs even if not stale, when missing
+    let missingTop = false
+    try {
+      const has = await hasTopChamps(puuid)
+      missingTop = !has
+    } catch {
+      // if count fails, don’t block refresh
+      missingTop = true
+    }
 
-    console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches })
+    // ✅ NEW: only skip if everything is fresh AND top champs exist
+    if (!staleRank && !staleMatches && !missingTop) continue
+
+    console.log('Refreshing', puuid.slice(0, 12), { staleRank, staleMatches, missingTop })
 
     try {
       await syncSummonerBasics(puuid)
+
       if (staleRank) await syncRankByPuuid(puuid)
       if (staleMatches) await syncMatchesRankedOnly(puuid)
 
-      // Always compute after match sync so it reflects newest data
-      await computeTopChampsRankedOnly(puuid)
+      // ✅ NEW: compute if matches refreshed OR missingTop
+      if (staleMatches || missingTop) {
+        await computeTopChamps(puuid)
+      }
+
+      await upsertRiotState(puuid, { last_error: null })
     } catch (e: any) {
       console.error('Error for', puuid.slice(0, 12), e?.message ?? e)
       await upsertRiotState(puuid, { last_error: String(e?.message ?? e) })
