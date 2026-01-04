@@ -234,11 +234,11 @@ async function fetchAndUpsertRankCutoffs() {
     const all = [...(chall.entries ?? []), ...(gm.entries ?? []), ...(master.entries ?? [])]
 
     const challenger_lp = cutoff(all, 300, 500)
-    const grandmaster_lp = cutoff(all, 700, 200)
+    const grandmaster_lp = cutoff(all, 1000, 200)
 
     console.log('[cutoffs] Merged entries:', all.length)
     console.log('[cutoffs] Challenger (top 300, min 500):', challenger_lp, 'LP')
-    console.log('[cutoffs] Grandmaster (top 700, min 200):', grandmaster_lp, 'LP')
+    console.log('[cutoffs] Grandmaster (top 1000, min 200):', grandmaster_lp, 'LP')
 
     const cutoffs = [
       { queue_type: QUEUE, tier: 'CHALLENGER', cutoff_lp: challenger_lp },
@@ -257,6 +257,11 @@ async function fetchAndUpsertRankCutoffs() {
   } catch (e: any) {
     console.error('[cutoffs] Error:', e?.message ?? e)
   }
+}
+
+function isStale(ts?: string | null) {
+  if (!ts) return true
+  return Date.now() - new Date(ts).getTime() > 30 * 60 * 1000
 }
 
 async function main() {
