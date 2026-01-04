@@ -207,62 +207,44 @@ async function computeTopChamps(puuid: string) {
   }
 }
 
-function isStale(ts?: string | null) {
-  if (!ts) return true
-  return Date.now() - new Date(ts).getTime() > 30 * 60 * 1000
-}
-
 async function fetchAndUpsertRankCutoffs() {
-  // Fetch Solo/Duo Grandmaster + Challenger LP cutoffs from Riot API
-  // Uses ONLY active entries to match ladder site accuracy
-  const SOLO_QUEUE = 'RANKED_SOLO_5x5'
+  // Fetch Solo/Duo Grandmaster + Challenger + Master LP cutoffs from Riot API
+  // Merges all three tiers and computes promotion-line cutoffs
+  const QUEUE = 'RANKED_SOLO_5x5'
 
-  type LeagueEntryDTO = { leaguePoints: number; inactive?: boolean }
+  type Entry = { leaguePoints: number; inactive?: boolean }
+  type LeagueList = { entries: Entry[] }
 
-  function cutoffLp(entries: LeagueEntryDTO[], slots: number): number | null {
-    // Filter to active players only
-    const active = entries.filter((e) => !e.inactive)
-    const sorted = active
-      .map((e) => Number(e.leaguePoints ?? 0))
-      .sort((a, b) => b - a) // descending
+  function cutoff(entries: Entry[], slots: number, floorLp: number): number {
+    const eligible = entries
+      .filter((e) => !e.inactive) // filter inactive
+      .filter((e) => (e.leaguePoints ?? 0) >= floorLp)
+      .sort((a, b) => (b.leaguePoints ?? 0) - (a.leaguePoints ?? 0))
 
-    if (sorted.length < slots) return null
-    return sorted[slots - 1] // return the Nth active player's LP
+    return eligible.length >= slots ? eligible[slots - 1].leaguePoints : floorLp
   }
-
-  const cutoffs: Array<{ queue_type: string; tier: string; cutoff_lp: number }> = []
 
   try {
-    // Challenger - top 300 active
-    const chall = await riotFetch<{ entries: LeagueEntryDTO[] }>(
-      `${NA1}/lol/league/v4/challengerleagues/by-queue/${SOLO_QUEUE}`
-    )
-    if (chall.entries && chall.entries.length > 0) {
-      const challCutoff = cutoffLp(chall.entries, 300)
-      if (challCutoff !== null) {
-        cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'CHALLENGER', cutoff_lp: challCutoff })
-        const inactiveCount = chall.entries.filter((e) => e.inactive).length
-        console.log('[cutoffs] Challenger:', chall.entries.length, 'total,', inactiveCount, 'inactive, cutoff LP:', challCutoff)
-      }
-    }
+    const [chall, gm, master] = await Promise.all([
+      riotFetch<LeagueList>(`${NA1}/lol/league/v4/challengerleagues/by-queue/${QUEUE}`),
+      riotFetch<LeagueList>(`${NA1}/lol/league/v4/grandmasterleagues/by-queue/${QUEUE}`),
+      riotFetch<LeagueList>(`${NA1}/lol/league/v4/masterleagues/by-queue/${QUEUE}`),
+    ])
 
-    // Grandmaster - top 700 active
-    const gm = await riotFetch<{ entries: LeagueEntryDTO[] }>(
-      `${NA1}/lol/league/v4/grandmasterleagues/by-queue/${SOLO_QUEUE}`
-    )
-    if (gm.entries && gm.entries.length > 0) {
-      const gmCutoff = cutoffLp(gm.entries, 700)
-      if (gmCutoff !== null) {
-        cutoffs.push({ queue_type: SOLO_QUEUE, tier: 'GRANDMASTER', cutoff_lp: gmCutoff })
-        const inactiveCount = gm.entries.filter((e) => e.inactive).length
-        console.log('[cutoffs] Grandmaster:', gm.entries.length, 'total,', inactiveCount, 'inactive, cutoff LP:', gmCutoff)
-      }
-    }
-  } catch (e: any) {
-    console.error('[cutoffs] Error fetching Solo/Duo cutoffs:', e?.message ?? e)
-  }
+    const all = [...(chall.entries ?? []), ...(gm.entries ?? []), ...(master.entries ?? [])]
 
-  if (cutoffs.length > 0) {
+    const challenger_lp = cutoff(all, 300, 500)
+    const grandmaster_lp = cutoff(all, 700, 200)
+
+    console.log('[cutoffs] Merged entries:', all.length)
+    console.log('[cutoffs] Challenger (top 300, min 500):', challenger_lp, 'LP')
+    console.log('[cutoffs] Grandmaster (top 700, min 200):', grandmaster_lp, 'LP')
+
+    const cutoffs = [
+      { queue_type: QUEUE, tier: 'CHALLENGER', cutoff_lp: challenger_lp },
+      { queue_type: QUEUE, tier: 'GRANDMASTER', cutoff_lp: grandmaster_lp },
+    ]
+
     const { error } = await supabase.from('rank_cutoffs').upsert(
       cutoffs.map((c) => ({
         ...c,
@@ -271,7 +253,9 @@ async function fetchAndUpsertRankCutoffs() {
       { onConflict: 'queue_type,tier' }
     )
     if (error) throw error
-    console.log('[cutoffs] Upserted', cutoffs.length, 'cutoff rows')
+    console.log('[cutoffs] Upserted 2 cutoff rows')
+  } catch (e: any) {
+    console.error('[cutoffs] Error:', e?.message ?? e)
   }
 }
 

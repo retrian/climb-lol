@@ -232,8 +232,8 @@ export default async function LeaderboardDetail({
           <div className="mt-4 flex flex-wrap gap-2">
             {Array.from(
               new Map([
-                ['RANKED_SOLO_5x5::CHALLENGER', 'Challenger'],
-                ['RANKED_SOLO_5x5::GRANDMASTER', 'Grandmaster'],
+                ['RANKED_SOLO_5x5::CHALLENGER', 'Challenger (top 300, min 500)'],
+                ['RANKED_SOLO_5x5::GRANDMASTER', 'Grandmaster (top 700, min 200)'],
               ])
             ).map(([key, label]) => {
               const lp = cutoffsByQueueTier.get(key)
