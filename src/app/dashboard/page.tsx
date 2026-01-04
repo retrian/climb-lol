@@ -484,7 +484,7 @@ export default async function DashboardPage({
 
               <Link
                 href={`/lb/${lb.slug}`}
-                className="rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5"
+                className="rounded-2xl bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-all duration-200 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5"
               >
                 View Leaderboard →
               </Link>

@@ -116,7 +116,7 @@ function TeamHeaderCard({
       <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50" />
       <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none" />
 
-      {/* UPDATED: Banner Image Area (inside the card now) */}
+      {/* Banner Image Area */}
       {bannerUrl && (
         <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -139,7 +139,7 @@ function TeamHeaderCard({
           </div>
 
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2">
-              {name}
+            {name}
           </h1>
           {description && (
             <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium">
@@ -219,6 +219,17 @@ function PodiumCard({
     glowClass = 'shadow-orange-200/50'
   }
 
+  // UPDATED: Logic to prepare the tier and division string for display.
+  const tier = rankData?.tier
+  const division = rankData?.rank
+  const isApex = tier && ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
+  let tierDisplay = null
+
+  // Only show division if it's a non-apex tier (Iron - Diamond)
+  if (tier && !isApex) {
+    tierDisplay = `${tier} ${division || ''}`.trim()
+  }
+
   return (
     <div
       className={`relative flex flex-col items-center rounded-3xl bg-white border-2 p-6 lg:p-7 shadow-xl ${glowClass} transition-all duration-300 hover:shadow-2xl ${borderClass} ${ringClass} ${scaleClass} ${
@@ -253,6 +264,14 @@ function PodiumCard({
           <img src={rankIcon} alt={rankData?.tier || ''} className="h-12 w-12 object-contain mb-2 drop-shadow-sm" />
         )}
         <div className="text-lg font-black text-slate-900">{rankData?.league_points ?? 0} LP</div>
+        
+        {/* UPDATED: Display the tier and division if applicable */}
+        {tierDisplay && (
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5">
+            {tierDisplay}
+          </div>
+        )}
+
         <div className={`text-xs font-black mt-2 ${winrate.pct >= 50 ? 'text-emerald-600' : 'text-rose-600'}`}>
           {winrate.pct}%
         </div>
@@ -330,6 +349,17 @@ function PlayerListRow({
   const icon = profileIconUrl(stateData?.profile_icon_id)
   const rankIcon = getRankIconSrc(rankData?.tier)
 
+  // Logic to display division (I, II, III, IV) for Diamond and below
+  const tier = rankData?.tier
+  const division = rankData?.rank
+  let tierDisplay = 'Unranked'
+  
+  if (tier) {
+    const isApex = ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
+    // Only show division if NOT Apex tier
+    tierDisplay = isApex ? tier : `${tier} ${division || ''}`.trim()
+  }
+
   return (
     <div className="group flex items-center gap-3 lg:gap-4 rounded-2xl border border-slate-200 bg-white px-4 lg:px-6 py-4 transition-all hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 duration-200">
       {/* 1. Rank # */}
@@ -363,8 +393,9 @@ function PlayerListRow({
           )}
           <div className="flex flex-col">
             <span className="text-sm font-black text-slate-900 whitespace-nowrap">{rankData?.league_points ?? 0} LP</span>
+            {/* Displays Tier + Division (e.g. DIAMOND I) */}
             <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap">
-              {rankData?.tier || 'Unranked'}
+              {tierDisplay}
             </span>
           </div>
         </div>
@@ -384,40 +415,39 @@ function PlayerListRow({
         </div>
       </div>
 
-      {/* 4. Socials & Champs - Right Aligned */}
-      <div className="flex items-center gap-2 lg:gap-3 shrink-0">
-        {/* Social Icons */}
-        {(player.twitch_url || player.twitter_url) && (
-          <div className="flex gap-1.5">
-            {player.twitch_url && (
-              <a
-                href={player.twitch_url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200"
-              >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
-                </svg>
-              </a>
-            )}
-            {player.twitter_url && (
-              <a
-                href={player.twitter_url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200"
-              >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
-                </svg>
-              </a>
-            )}
-          </div>
-        )}
+      {/* 4. Socials & Champs - Right Aligned (fixed width so stats don't shift) */}
+      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 w-[84px] lg:w-[200px]">
+        {/* Social Icons: reserve space even if empty */}
+        <div className="flex justify-end gap-1.5 w-[74px]">
+          {player.twitch_url && (
+            <a
+              href={player.twitch_url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
+              </svg>
+            </a>
+          )}
 
-        {/* Champs */}
-        <div className="hidden lg:flex gap-1">
+          {player.twitter_url && (
+            <a
+              href={player.twitter_url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
+              </svg>
+            </a>
+          )}
+        </div>
+
+        {/* Champs: reserve space on lg so it's always the same width */}
+        <div className="hidden lg:flex justify-end gap-1 w-[104px]">
           {topChamps.slice(0, 3).map((c) => {
             const champ = champMap[c.champion_id]
             if (!champ) return null
@@ -546,7 +576,7 @@ export default async function LeaderboardDetail({
   const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.1.1'
   const champMap = await getChampionMap(ddVersion)
 
-  // UPDATED: Fetches banner_url directly from DB
+  // Fetches banner_url directly from DB
   const { data: lb } = await supabase
     .from('leaderboards')
     .select('id, user_id, name, description, visibility, banner_url, updated_at')
@@ -649,8 +679,6 @@ export default async function LeaderboardDetail({
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
       <div className="mx-auto max-w-7xl px-4 py-8 lg:py-12 space-y-10 lg:space-y-12">
-        {/* UPDATED: Banner logic removed from here, now inside TeamHeaderCard */}
-
         {/* 1. Header & Cutoffs */}
         <TeamHeaderCard
           name={lb.name}
@@ -681,32 +709,32 @@ export default async function LeaderboardDetail({
                   <h2 className="text-xs font-black uppercase tracking-widest text-slate-500">Top Players</h2>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-end">
-  {finalPodium.map((p, idx) => {
-    const actualRank = idx + 1 // This is 1, 2, or 3
-    const r = rankBy.get(p.puuid)
-    
-    // CSS Grid ordering for desktop: 2nd left, 1st center, 3rd right
-    let orderClass = ''
-    if (actualRank === 1) orderClass = 'sm:order-2' // 1st place in center on desktop
-    if (actualRank === 2) orderClass = 'sm:order-1' // 2nd place on left on desktop
-    if (actualRank === 3) orderClass = 'sm:order-3' // 3rd place on right on desktop
-    
-    return (
-      <div key={p.id} className={orderClass}>
-        <PodiumCard
-          rank={actualRank}
-          player={p}
-          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id)}
-          rankData={r}
-          winrate={formatWinrate(r?.wins, r?.losses)}
-          topChamps={champsBy.get(p.puuid) ?? []}
-          champMap={champMap}
-          ddVersion={ddVersion}
-        />
-      </div>
-    )
-  })}
-</div>
+                  {finalPodium.map((p, idx) => {
+                    const actualRank = idx + 1 // This is 1, 2, or 3
+                    const r = rankBy.get(p.puuid)
+                    
+                    // CSS Grid ordering for desktop: 2nd left, 1st center, 3rd right
+                    let orderClass = ''
+                    if (actualRank === 1) orderClass = 'sm:order-2' // 1st place in center on desktop
+                    if (actualRank === 2) orderClass = 'sm:order-1' // 2nd place on left on desktop
+                    if (actualRank === 3) orderClass = 'sm:order-3' // 3rd place on right on desktop
+                    
+                    return (
+                      <div key={p.id} className={orderClass}>
+                        <PodiumCard
+                          rank={actualRank}
+                          player={p}
+                          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id)}
+                          rankData={r}
+                          winrate={formatWinrate(r?.wins, r?.losses)}
+                          topChamps={champsBy.get(p.puuid) ?? []}
+                          champMap={champMap}
+                          ddVersion={ddVersion}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
 
