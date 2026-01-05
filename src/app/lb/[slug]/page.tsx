@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { compareRanks } from '@/lib/rankSort'
+import FitText from './FitText'
 
 // --- Types ---
 
@@ -39,6 +40,7 @@ interface Game {
   endTs?: number
   durationS?: number
   queueId?: number
+  lpChange?: number | null
 }
 
 // --- Helpers ---
@@ -270,9 +272,10 @@ function PodiumCard({
 
         {/* Player Name & Role */}
         <div className="mt-4 text-center w-full px-2">
-          <div className="truncate text-lg font-bold text-slate-900 dark:text-slate-100">
-            {displayRiotId(player)}
-          </div>
+          <FitText
+            text={displayRiotId(player)}
+            className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100"
+          />
           {player.role && (
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1 dark:text-slate-400">
               {player.role}
@@ -410,7 +413,7 @@ function PlayerListRow({
       </div>
 
       {/* 2. Player Profile */}
-      <div className="flex items-center gap-3 w-40 lg:w-52 shrink-0">
+      <div className="flex items-center gap-3 w-64 lg:w-72 shrink-0">
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
           {icon && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -418,9 +421,10 @@ function PlayerListRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white">
-            {displayRiotId(player)}
-          </div>
+          <FitText
+            text={displayRiotId(player)}
+            className="block max-w-full whitespace-nowrap font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white"
+          />
           {player.role && (
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5 dark:text-slate-500">
               {player.role}
@@ -557,7 +561,7 @@ function LatestGamesFeed({
     <div className="space-y-2.5">
       {games.map((g) => {
         const p = playersByPuuid.get(g.puuid)
-        const name = p ? p.game_name || p.puuid : 'Unknown'
+        const name = p ? displayRiotId(p) : 'Unknown'
         const when = g.endTs ? timeAgo(g.endTs) : ''
         const champ = champMap[g.championId]
         const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
@@ -565,6 +569,7 @@ function LatestGamesFeed({
         const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
         const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
         const duration = formatDuration(g.durationS)
+        const lpChange = g.lpChange
 
         return (
           <div
@@ -589,8 +594,10 @@ function LatestGamesFeed({
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-bold text-slate-900 dark:text-slate-100">{name}</span>
-                  <span className="text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                    {name}
+                  </span>
+                  <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-[11px] text-slate-600 font-medium dark:text-slate-300">
@@ -611,6 +618,18 @@ function LatestGamesFeed({
               <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200">
                 {g.k}/{g.d}/{g.a}
               </span>
+              {typeof lpChange === 'number' && !Number.isNaN(lpChange) && (
+                <>
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span
+                    className={`font-semibold tabular-nums ${
+                      lpChange >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {lpChange >= 0 ? `+${lpChange}` : lpChange} LP
+                  </span>
+                </>
+              )}
               <span className="text-slate-300 dark:text-slate-600">•</span>
               <span className={`tabular-nums ${kdaColor}`}>{kda} KDA</span>
               <span className="text-slate-300 dark:text-slate-600">•</span>
@@ -726,6 +745,7 @@ export default async function LeaderboardDetail({
     endTs: row.game_end_ts,
     durationS: row.game_duration_s,
     queueId: row.queue_id,
+    lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? null,
   }))
 
   const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null

@@ -30,8 +30,8 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </Script>
       </head>
       <body className="min-h-screen bg-gray-50 text-gray-900 dark:bg-slate-950 dark:text-slate-100">
-        {/* Sticky / translucent navbar */}
-        <header className="sticky top-0 z-50 border-b border-gray-200 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-slate-800 dark:bg-slate-950/70 supports-[backdrop-filter]:dark:bg-slate-950/60">
+        {/* Translucent navbar */}
+        <header className="border-b border-gray-200 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-slate-800 dark:bg-slate-950/70 supports-[backdrop-filter]:dark:bg-slate-950/60">
           <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
             <Link href="/" className="text-lg font-bold text-gray-900 dark:text-slate-100">
               CWF.LOL
