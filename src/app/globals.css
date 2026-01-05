@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -16,12 +17,10 @@ html {
   scrollbar-gutter: stable;
 }
 
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html.dark {
+  --background: #0b1120;
+  --foreground: #e2e8f0;
+  color-scheme: dark;
 }
 
 body {
