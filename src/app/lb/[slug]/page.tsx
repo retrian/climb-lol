@@ -594,12 +594,14 @@ function LatestGamesFeed({
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
-                  <FitText
-                    text={name}
-                    className="block max-w-full whitespace-nowrap text-xs font-bold text-slate-900 dark:text-slate-100"
-                    minScale={0.7}
-                  />
-                  <span className="text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
+                  <div className="min-w-0 flex-1 overflow-hidden">
+                    <FitText
+                      text={name}
+                      className="block max-w-full whitespace-nowrap text-xs font-bold text-slate-900 dark:text-slate-100"
+                      minScale={0.55}
+                    />
+                  </div>
+                  <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
                   <span className="text-[11px] text-slate-600 font-medium dark:text-slate-300">
