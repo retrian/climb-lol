@@ -489,6 +489,24 @@ export default function LeaderboardGraphClient({
                       onMouseLeave={() => setTooltip(null)}
                       className="cursor-pointer"
                     />
+                    <g transform={`translate(${lastX + 10}, ${lastY - 10})`}>
+                      <rect
+                        width="64"
+                        height="22"
+                        rx="11"
+                        fill="white"
+                        stroke={color}
+                        strokeWidth="1.5"
+                      />
+                      <text
+                        x="32"
+                        y="14"
+                        textAnchor="middle"
+                        className="fill-slate-800 text-[10px] font-bold"
+                      >
+                        {`LP ${lastPoint.lp ?? 0}`}
+                      </text>
+                    </g>
                   </g>
                 )
               })}
