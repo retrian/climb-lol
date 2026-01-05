@@ -263,7 +263,6 @@ function PodiumCard({
         {/* Profile Icon */}
         <div className="relative h-24 w-24 rounded-2xl overflow-hidden border-2 border-slate-200 shadow-md bg-slate-100 group-hover:scale-105 transition-transform duration-300 dark:border-slate-700 dark:bg-slate-800">
           {icon ? (
-            // eslint-disable-next-line @next/next/no-img-element
             <img src={icon} alt="" className="h-full w-full object-cover" />
           ) : (
             <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
@@ -275,6 +274,7 @@ function PodiumCard({
           <FitText
             text={displayRiotId(player)}
             className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100"
+            minScale={0.65}
           />
           {player.role && (
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1 dark:text-slate-400">
@@ -288,7 +288,6 @@ function PodiumCard({
           {/* LP Display */}
           <div className="flex items-center gap-3 bg-slate-50 px-5 py-3 rounded-xl border border-slate-200 w-full justify-center group-hover:bg-slate-100 transition-colors duration-200 dark:border-slate-700 dark:bg-slate-900 dark:group-hover:bg-slate-800">
             {rankIcon && (
-              // eslint-disable-next-line @next/next/no-img-element
               <img src={rankIcon} alt={rankData?.tier || ''} className="h-11 w-11 object-contain" />
             )}
             <div className="flex flex-col items-start">
@@ -323,7 +322,6 @@ function PodiumCard({
             const champ = champMap[c.champion_id]
             if (!champ) return null
             return (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={c.champion_id}
                 src={championIconUrl(ddVersion, champ.id)}
@@ -392,14 +390,12 @@ function PlayerListRow({
   const icon = profileIconUrl(stateData?.profile_icon_id)
   const rankIcon = getRankIconSrc(rankData?.tier)
 
-  // Logic to display division (I, II, III, IV) for Diamond and below
   const tier = rankData?.tier
   const division = rankData?.rank
   let tierDisplay = 'Unranked'
   
   if (tier) {
     const isApex = ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
-    // Only show division if NOT Apex tier
     tierDisplay = isApex ? tier : `${tier} ${division || ''}`.trim()
   }
 
@@ -413,17 +409,17 @@ function PlayerListRow({
       </div>
 
       {/* 2. Player Profile */}
-      <div className="flex items-center gap-3 w-64 lg:w-72 shrink-0">
+      <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
           {icon && (
-            // eslint-disable-next-line @next/next/no-img-element
             <img src={icon} alt="" className="h-full w-full object-cover" />
           )}
         </div>
         <div className="min-w-0 flex-1">
           <FitText
             text={displayRiotId(player)}
-            className="block max-w-full whitespace-nowrap font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white"
+            className="block max-w-full whitespace-nowrap font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white"
+            minScale={0.65}
           />
           {player.role && (
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5 dark:text-slate-500">
@@ -433,88 +429,80 @@ function PlayerListRow({
         </div>
       </div>
 
-      {/* 3. Rank & Stats Grid - Flexible Center */}
-      <div className="flex-1 flex items-center gap-4 lg:gap-6 min-w-0">
-        {/* Rank Section */}
-        <div className="flex items-center gap-2 lg:gap-3 shrink-0">
-          {rankIcon && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={rankIcon} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />
-          )}
-          <div className="flex flex-col">
-            <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">
-              {rankData?.league_points ?? 0} LP
-            </span>
-            {/* Displays Tier + Division (e.g. DIAMOND I) */}
-            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap dark:text-slate-500">
-              {tierDisplay}
-            </span>
-          </div>
-        </div>
-
-        {/* Stats Section */}
-        <div className="hidden sm:flex items-center gap-4 lg:gap-6 ml-auto">
-          <div className="flex flex-col items-center">
-            <span
-              className={`text-sm font-black whitespace-nowrap ${
-                winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'
-              }`}
-            >
-              {winrate.pct}%
-            </span>
-            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">
-              Win
-            </span>
-          </div>
-          <div className="flex flex-col items-center">
-            <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">
-              {winrate.total}
-            </span>
-            <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">
-              Games
-            </span>
-          </div>
+      {/* 3. Rank Section */}
+      <div className="hidden md:flex items-center gap-2 lg:gap-3 shrink-0">
+        {rankIcon && (
+          <img src={rankIcon} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />
+        )}
+        <div className="flex flex-col">
+          <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">
+            {rankData?.league_points ?? 0} LP
+          </span>
+          <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap dark:text-slate-500">
+            {tierDisplay}
+          </span>
         </div>
       </div>
 
-      {/* 4. Socials & Champs - Right Aligned (fixed width so stats don't shift) */}
-      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 w-[84px] lg:w-[200px]">
-        {/* Social Icons: reserve space even if empty */}
-        <div className="flex justify-end gap-1.5 w-[74px]">
-          {player.twitch_url && (
-            <a
-              href={player.twitch_url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-purple-500/20"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
-              </svg>
-            </a>
-          )}
-
-          {player.twitter_url && (
-            <a
-              href={player.twitter_url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-blue-500/20"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
-              </svg>
-            </a>
-          )}
+      {/* 4. Stats Section - Fixed width containers */}
+      <div className="hidden md:flex items-center gap-4 lg:gap-6 shrink-0">
+        <div className="flex flex-col items-center w-14">
+          <span className={`text-sm font-black whitespace-nowrap ${winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>
+            {winrate.pct}%
+          </span>
+          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">
+            Win
+          </span>
         </div>
+        <div className="flex flex-col items-center w-14">
+          <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">
+            {winrate.total}
+          </span>
+          <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">
+            Games
+          </span>
+        </div>
+      </div>
 
-        {/* Champs: reserve space on lg so it's always the same width */}
-        <div className="hidden lg:flex justify-end gap-1 w-[104px]">
-          {topChamps.slice(0, 3).map((c) => {
-            const champ = champMap[c.champion_id]
-            if (!champ) return null
+      {/* 5. Social Icons - Fixed width, always reserve space */}
+      <div className="hidden sm:flex items-center justify-center gap-1.5 shrink-0 w-[72px]">
+        {player.twitch_url ? (
+          <a
+            href={player.twitch_url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-purple-50 hover:text-purple-600 hover:scale-110 transition-all duration-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-purple-500/20"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
+            </svg>
+          </a>
+        ) : (
+          <div className="h-8 w-8" />
+        )}
+        {player.twitter_url ? (
+          <a
+            href={player.twitter_url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center justify-center h-8 w-8 rounded-lg bg-slate-100 text-slate-300 hover:bg-blue-50 hover:text-blue-500 hover:scale-110 transition-all duration-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-blue-500/20"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
+            </svg>
+          </a>
+        ) : (
+          <div className="h-8 w-8" />
+        )}
+      </div>
+
+      {/* 6. Champion Icons - Fixed width, always reserve space */}
+      <div className="hidden lg:flex items-center gap-1 shrink-0">
+        {[0, 1, 2].map((idx) => {
+          const c = topChamps[idx]
+          const champ = c ? champMap[c.champion_id] : null
+          if (champ) {
             return (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={c.champion_id}
                 src={championIconUrl(ddVersion, champ.id)}
@@ -523,8 +511,9 @@ function PlayerListRow({
                 title={champ.name}
               />
             )
-          })}
-        </div>
+          }
+          return <div key={`empty-${idx}`} className="h-8 w-8" />
+        })}
       </div>
     </div>
   )
