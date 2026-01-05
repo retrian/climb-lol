@@ -453,7 +453,7 @@ function PlayerListRow({
         </div>
 
         {/* Stats Section */}
-        <div className="hidden sm:flex items-center gap-4 lg:gap-6 ml-auto">
+        <div className="hidden sm:flex items-center gap-4 lg:gap-6 ml-auto pr-3 lg:pr-4">
           <div className="flex flex-col items-center">
             <span
               className={`text-sm font-black whitespace-nowrap ${
