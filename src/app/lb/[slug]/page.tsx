@@ -478,9 +478,9 @@ function PlayerListRow({
       </div>
 
       {/* 4. Socials & Champs - Right Aligned (fixed width so stats don't shift) */}
-      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 w-[96px] lg:w-[208px]">
+      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 min-w-[120px] lg:min-w-[200px]">
         {/* Social Icons: reserve space even if empty */}
-        <div className="flex justify-end gap-1.5 w-[84px]">
+        <div className="flex justify-end gap-1.5">
           {player.twitch_url && (
             <a
               href={player.twitch_url}
