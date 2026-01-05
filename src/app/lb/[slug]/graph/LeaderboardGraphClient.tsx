@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { rankScore } from '@/lib/rankSort'
 import { formatRank } from '@/lib/rankFormat'
 
@@ -39,6 +39,11 @@ const TIME_OPTIONS = [
 ]
 
 const GAME_OPTIONS = [10, 20, 30, 40, 50]
+const RANGE_SUMMARIES = [
+  { id: 'day', label: '24h', ms: 24 * 60 * 60 * 1000 },
+  { id: 'week', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
+  { id: 'month', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
+]
 
 const TIER_LABELS = [
   'CHALLENGER',
@@ -61,6 +66,12 @@ function colorFromString(value: string) {
   }
   const hue = Math.abs(hash) % 360
   return `hsl(${hue} 70% 50%)`
+}
+
+function formatDelta(delta: number) {
+  const rounded = Math.round(delta)
+  if (rounded === 0) return '0'
+  return `${rounded > 0 ? '+' : ''}${rounded}`
 }
 
 type TooltipState = {
@@ -107,6 +118,57 @@ export default function LeaderboardGraphClient({
       .filter((p) => !Number.isNaN(p.ts))
   }, [points])
 
+  const availability = useMemo(() => {
+    const byPlayer = new Map<string, NormalizedPoint[]>()
+    for (const point of normalizedPoints) {
+      const list = byPlayer.get(point.puuid) ?? []
+      list.push(point)
+      byPlayer.set(point.puuid, list)
+    }
+
+    const timeAvailability = new Map<string, boolean>()
+    for (const option of TIME_OPTIONS) {
+      const cutoff = Date.now() - option.ms
+      let hasEnough = false
+      for (const list of byPlayer.values()) {
+        const count = list.filter((p) => p.ts >= cutoff).length
+        if (count >= 2) {
+          hasEnough = true
+          break
+        }
+      }
+      timeAvailability.set(option.id, hasEnough)
+    }
+
+    const gameAvailability = new Map<number, boolean>()
+    for (const count of GAME_OPTIONS) {
+      let hasEnough = false
+      for (const list of byPlayer.values()) {
+        if (list.length >= count) {
+          hasEnough = true
+          break
+        }
+      }
+      gameAvailability.set(count, hasEnough)
+    }
+
+    return { timeAvailability, gameAvailability }
+  }, [normalizedPoints])
+
+  useEffect(() => {
+    if (mode === 'time' && !availability.timeAvailability.get(timeRange)) {
+      const fallback = TIME_OPTIONS.find((option) => availability.timeAvailability.get(option.id))
+      if (fallback) setTimeRange(fallback.id)
+    }
+  }, [availability, mode, timeRange])
+
+  useEffect(() => {
+    if (mode === 'games' && !availability.gameAvailability.get(gameCount)) {
+      const fallback = GAME_OPTIONS.find((count) => availability.gameAvailability.get(count))
+      if (fallback) setGameCount(fallback)
+    }
+  }, [availability, gameCount, mode])
+
   const filteredPoints = useMemo<FilteredPoint[]>(() => {
     if (mode === 'time') {
       const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
@@ -142,6 +204,39 @@ export default function LeaderboardGraphClient({
     }
     return byPlayer
   }, [filteredPoints, mode])
+
+  const rangeStats = useMemo(() => {
+    const byPlayer = new Map<string, NormalizedPoint[]>()
+    for (const point of normalizedPoints) {
+      const list = byPlayer.get(point.puuid) ?? []
+      list.push(point)
+      byPlayer.set(point.puuid, list)
+    }
+
+    return RANGE_SUMMARIES.map((range) => {
+      const cutoff = Date.now() - range.ms
+      let bestGain: { puuid: string; delta: number; start: NormalizedPoint; end: NormalizedPoint } | null = null
+      let bestLoss: { puuid: string; delta: number; start: NormalizedPoint; end: NormalizedPoint } | null = null
+
+      for (const [puuid, list] of byPlayer.entries()) {
+        const windowed = list.filter((p) => p.ts >= cutoff).sort((a, b) => a.ts - b.ts)
+        if (windowed.length < 2) continue
+        const start = windowed[0]
+        const end = windowed[windowed.length - 1]
+        const delta = end.score - start.score
+
+        if (!bestGain || delta > bestGain.delta) {
+          bestGain = { puuid, delta, start, end }
+        }
+
+        if (delta < 0 && (!bestLoss || delta < bestLoss.delta)) {
+          bestLoss = { puuid, delta, start, end }
+        }
+      }
+
+      return { range, bestGain, bestLoss }
+    })
+  }, [normalizedPoints])
 
   const chart = useMemo(() => {
     const allPoints = [...series.values()].flat()
@@ -236,10 +331,15 @@ export default function LeaderboardGraphClient({
                 key={option.id}
                 type="button"
                 onClick={() => setTimeRange(option.id)}
+                disabled={!availability.timeAvailability.get(option.id)}
                 className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
                   timeRange === option.id
                     ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
+                } ${
+                  availability.timeAvailability.get(option.id)
+                    ? ''
+                    : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
                 }`}
               >
                 {option.label}
@@ -253,10 +353,15 @@ export default function LeaderboardGraphClient({
                 key={count}
                 type="button"
                 onClick={() => setGameCount(count)}
+                disabled={!availability.gameAvailability.get(count)}
                 className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
                   gameCount === count
                     ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-400 dark:bg-emerald-500/20 dark:text-emerald-200'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
+                } ${
+                  availability.gameAvailability.get(count)
+                    ? ''
+                    : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
                 }`}
               >
                 {count} games
@@ -423,6 +528,85 @@ export default function LeaderboardGraphClient({
             })()}
           </div>
         )}
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-3">
+        {rangeStats.map(({ range, bestGain, bestLoss }) => (
+          <div key={range.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                {range.label}
+              </h3>
+              <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">Rank delta</span>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-500">Most gained</div>
+                {bestGain ? (
+                  <div className="mt-2 flex items-center gap-3">
+                    {playersByPuuid.get(bestGain.puuid)?.profileIconUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={playersByPuuid.get(bestGain.puuid)?.profileIconUrl ?? ''}
+                        alt=""
+                        className="h-9 w-9 rounded-full border border-slate-200"
+                      />
+                    ) : (
+                      <div className="h-9 w-9 rounded-full bg-slate-200" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {playersByPuuid.get(bestGain.puuid)?.name ?? 'Player'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-300">
+                        {formatRank(bestGain.start.tier, bestGain.start.rank, bestGain.start.lp)} →{' '}
+                        {formatRank(bestGain.end.tier, bestGain.end.rank, bestGain.end.lp)}
+                      </div>
+                    </div>
+                    <div className="ml-auto text-sm font-bold text-emerald-600 dark:text-emerald-300">
+                      {formatDelta(bestGain.delta)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Not enough data</div>
+                )}
+              </div>
+
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-500">Most lost</div>
+                {bestLoss ? (
+                  <div className="mt-2 flex items-center gap-3">
+                    {playersByPuuid.get(bestLoss.puuid)?.profileIconUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={playersByPuuid.get(bestLoss.puuid)?.profileIconUrl ?? ''}
+                        alt=""
+                        className="h-9 w-9 rounded-full border border-slate-200"
+                      />
+                    ) : (
+                      <div className="h-9 w-9 rounded-full bg-slate-200" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        {playersByPuuid.get(bestLoss.puuid)?.name ?? 'Player'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-300">
+                        {formatRank(bestLoss.start.tier, bestLoss.start.rank, bestLoss.start.lp)} →{' '}
+                        {formatRank(bestLoss.end.tier, bestLoss.end.rank, bestLoss.end.lp)}
+                      </div>
+                    </div>
+                    <div className="ml-auto text-sm font-bold text-rose-600 dark:text-rose-300">
+                      {formatDelta(bestLoss.delta)}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Not enough data</div>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
