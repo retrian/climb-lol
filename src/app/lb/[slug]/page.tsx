@@ -569,7 +569,7 @@ function LatestGamesFeed({
         const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
         const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
         const duration = formatDuration(g.durationS)
-        const lpChange = g.lpChange
+        const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
 
         return (
           <div
@@ -593,16 +593,32 @@ function LatestGamesFeed({
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] grid-rows-2 items-center gap-x-2 gap-y-1">
+                  <span className="min-w-0 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
                     {name}
                   </span>
-                  <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
-                </div>
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-[11px] text-slate-600 font-medium dark:text-slate-300">
+                  <span className="justify-self-end text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
+                  <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
                     {champ?.name || 'Unknown'}
                   </span>
+                  {lpChange !== null && (
+                    <span
+                      className={`inline-flex items-center justify-self-end gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+                        lpChange >= 0
+                          ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
+                          : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                      }`}
+                    >
+                      <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        {lpChange >= 0 ? (
+                          <path d="M10 4l6 8H4l6-8z" />
+                        ) : (
+                          <path d="M10 16l-6-8h12l-6 8z" />
+                        )}
+                      </svg>
+                      {Math.abs(lpChange)} LP
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
@@ -618,18 +634,6 @@ function LatestGamesFeed({
               <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200">
                 {g.k}/{g.d}/{g.a}
               </span>
-              {typeof lpChange === 'number' && !Number.isNaN(lpChange) && (
-                <>
-                  <span className="text-slate-300 dark:text-slate-600">•</span>
-                  <span
-                    className={`font-semibold tabular-nums ${
-                      lpChange >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-                    }`}
-                  >
-                    {lpChange >= 0 ? `+${lpChange}` : lpChange} LP
-                  </span>
-                </>
-              )}
               <span className="text-slate-300 dark:text-slate-600">•</span>
               <span className={`tabular-nums ${kdaColor}`}>{kda} KDA</span>
               <span className="text-slate-300 dark:text-slate-600">•</span>
@@ -733,6 +737,23 @@ export default async function LeaderboardDetail({
 
   // Latest Games
   const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 })
+  const latestMatchIds = Array.from(new Set((latestRaw ?? []).map((row: any) => row.match_id).filter(Boolean)))
+  const lpByMatchAndPlayer = new Map<string, number>()
+
+  if (latestMatchIds.length > 0 && puuids.length > 0) {
+    const { data: lpEventsRaw } = await supabase
+      .from('player_lp_events')
+      .select('match_id, puuid, lp_delta')
+      .in('match_id', latestMatchIds)
+      .in('puuid', puuids)
+
+    ;(lpEventsRaw ?? []).forEach((row) => {
+      if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
+        lpByMatchAndPlayer.set(`${row.match_id}-${row.puuid}`, row.lp_delta)
+      }
+    })
+  }
+
   const latestGames: Game[] = (latestRaw ?? []).map((row: any) => ({
     matchId: row.match_id,
     puuid: row.puuid,
@@ -745,7 +766,12 @@ export default async function LeaderboardDetail({
     endTs: row.game_end_ts,
     durationS: row.game_duration_s,
     queueId: row.queue_id,
-    lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? null,
+    lpChange:
+      row.lp_change ??
+      row.lp_delta ??
+      row.lp_diff ??
+      lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`) ??
+      null,
   }))
 
   const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null
