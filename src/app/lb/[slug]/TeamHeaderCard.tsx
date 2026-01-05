@@ -7,7 +7,8 @@ export default function TeamHeaderCard({
   lastUpdated,
   cutoffs,
   bannerUrl,
-  graphHref,
+  actionHref,
+  actionLabel,
 }: {
   name: string
   description?: string | null
@@ -15,7 +16,8 @@ export default function TeamHeaderCard({
   lastUpdated: string | null
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
-  graphHref: string
+  actionHref: string
+  actionLabel: string
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
@@ -43,16 +45,18 @@ export default function TeamHeaderCard({
             <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
               {visibility}
             </span>
-            <Link
-              href={graphHref}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
-              </svg>
-              View graph
-            </Link>
+            {actionHref && actionLabel && (
+              <Link
+                href={actionHref}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
+                </svg>
+                {actionLabel}
+              </Link>
+            )}
           </div>
 
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">

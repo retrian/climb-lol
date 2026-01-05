@@ -701,7 +701,8 @@ export default async function LeaderboardDetail({
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
-          graphHref={`/lb/${slug}/graph`}
+          actionHref={`/lb/${slug}/graph`}
+          actionLabel="View graph"
         />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">

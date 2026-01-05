@@ -81,6 +81,12 @@ const DIVISION_WEIGHT: Record<string, number> = {
   IV: 1,
 }
 
+const SCORE_STEPS = {
+  tier: 1_000_000,
+  division: 50_000,
+  lp: 1_000,
+}
+
 function rankScoreWithCutoffs(
   point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>,
   cutoffs: RankCutoffs
@@ -94,18 +100,18 @@ function rankScoreWithCutoffs(
 
   if (tier === 'MASTER') {
     const cappedLp = Math.min(lp, Math.max(0, cutoffs.grandmaster - 1))
-    return tierWeight * 10000 + cappedLp
+    return tierWeight * SCORE_STEPS.tier + cappedLp * SCORE_STEPS.lp
   }
 
   if (tier === 'GRANDMASTER') {
-    return TIER_WEIGHT.MASTER * 10000 + cutoffs.grandmaster + lp
+    return TIER_WEIGHT.MASTER * SCORE_STEPS.tier + (cutoffs.grandmaster + lp) * SCORE_STEPS.lp
   }
 
   if (tier === 'CHALLENGER') {
-    return TIER_WEIGHT.MASTER * 10000 + cutoffs.challenger + lp
+    return TIER_WEIGHT.MASTER * SCORE_STEPS.tier + (cutoffs.challenger + lp) * SCORE_STEPS.lp
   }
 
-  return tierWeight * 10000 + divisionWeight * 1000 + lp
+  return tierWeight * SCORE_STEPS.tier + divisionWeight * SCORE_STEPS.division + lp * SCORE_STEPS.lp
 }
 
 function colorFromString(value: string) {
@@ -313,10 +319,14 @@ export default function LeaderboardGraphClient({
       if (rangeMs <= 12 * 60 * 60 * 1000) {
         label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       } else if (rangeMs <= 3 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+        label =
+          date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+          ' ' +
           date.toLocaleTimeString([], { hour: 'numeric' })
+      } else if (rangeMs <= 10 * 24 * 60 * 60 * 1000) {
+        label = date.toLocaleDateString([], { weekday: 'short' })
       } else if (rangeMs <= 14 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+        label = date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
       } else {
         label = date.toLocaleDateString([], { month: 'short', day: 'numeric' })
       }
@@ -489,24 +499,6 @@ export default function LeaderboardGraphClient({
                       onMouseLeave={() => setTooltip(null)}
                       className="cursor-pointer"
                     />
-                    <g transform={`translate(${lastX + 10}, ${lastY - 10})`}>
-                      <rect
-                        width="64"
-                        height="22"
-                        rx="11"
-                        fill="white"
-                        stroke={color}
-                        strokeWidth="1.5"
-                      />
-                      <text
-                        x="32"
-                        y="14"
-                        textAnchor="middle"
-                        className="fill-slate-800 text-[10px] font-bold"
-                      >
-                        {`LP ${lastPoint.lp ?? 0}`}
-                      </text>
-                    </g>
                   </g>
                 )
               })}
