@@ -254,7 +254,7 @@ export default function LeaderboardGraphClient({
         if (windowed.length < 2) continue
         const start = windowed[0]
         const end = windowed[windowed.length - 1]
-        const delta = end.score - start.score
+        const delta = (end.lp ?? 0) - (start.lp ?? 0)
 
         if (!bestGain || delta > bestGain.delta) {
           bestGain = { puuid, delta, start, end }
