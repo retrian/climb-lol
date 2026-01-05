@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { compareRanks } from '@/lib/rankSort'
+import FitText from './FitText'
 
 // --- Types ---
 
@@ -77,13 +78,6 @@ function displayRiotId(p: Player) {
   const tl = (p.tag_line ?? '').trim()
   if (gn && tl) return `${gn}#${tl}`
   return p.puuid
-}
-
-function nameSizeClass(name: string) {
-  const length = name.length
-  if (length > 26) return 'text-xs'
-  if (length > 20) return 'text-sm'
-  return 'text-base'
 }
 
 function formatDuration(durationS?: number) {
@@ -277,13 +271,10 @@ function PodiumCard({
 
         {/* Player Name & Role */}
         <div className="mt-4 text-center w-full px-2">
-          <div
-            className={`max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100 ${nameSizeClass(
-              displayRiotId(player)
-            )}`}
-          >
-            {displayRiotId(player)}
-          </div>
+          <FitText
+            text={displayRiotId(player)}
+            className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100"
+          />
           {player.role && (
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1 dark:text-slate-400">
               {player.role}
@@ -429,13 +420,10 @@ function PlayerListRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div
-            className={`max-w-full whitespace-nowrap font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white ${nameSizeClass(
-              displayRiotId(player)
-            )}`}
-          >
-            {displayRiotId(player)}
-          </div>
+          <FitText
+            text={displayRiotId(player)}
+            className="block max-w-full whitespace-nowrap font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white"
+          />
           {player.role && (
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5 dark:text-slate-500">
               {player.role}
