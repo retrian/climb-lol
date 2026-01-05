@@ -17,8 +17,7 @@ html {
   scrollbar-gutter: stable;
 }
 
-html.dark,
-:root[data-theme='dark'] {
+html.dark {
   --background: #0b1120;
   --foreground: #e2e8f0;
   color-scheme: dark;

@@ -270,7 +270,7 @@ function PodiumCard({
 
         {/* Player Name & Role */}
         <div className="mt-4 text-center w-full px-2">
-          <div className="max-w-full whitespace-nowrap text-[clamp(0.6rem,1.2vw,1rem)] font-bold tracking-tight text-slate-900 dark:text-slate-100">
+          <div className="max-w-full whitespace-nowrap text-[clamp(0.5rem,1vw,0.95rem)] font-bold text-slate-900 dark:text-slate-100">
             {displayRiotId(player)}
           </div>
           {player.role && (
@@ -410,7 +410,7 @@ function PlayerListRow({
       </div>
 
       {/* 2. Player Profile */}
-      <div className="flex items-center gap-3 w-56 lg:w-64 shrink-0">
+      <div className="flex items-center gap-3 w-64 lg:w-72 shrink-0">
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
           {icon && (
             // eslint-disable-next-line @next/next/no-img-element
@@ -418,7 +418,7 @@ function PlayerListRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="max-w-full whitespace-nowrap text-[clamp(0.6rem,0.9vw,0.85rem)] font-bold tracking-tight text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white">
+          <div className="max-w-full whitespace-nowrap text-[clamp(0.55rem,0.85vw,0.8rem)] font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white">
             {displayRiotId(player)}
           </div>
           {player.role && (

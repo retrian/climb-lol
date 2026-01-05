@@ -3,7 +3,6 @@ import Link from 'next/link'
 import Script from 'next/script'
 import { createClient } from '@/lib/supabase/server'
 import { AuthButtons } from '@/app/_components/AuthButtons'
-import { ThemeToggle } from '@/app/_components/ThemeToggle'
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -17,28 +16,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           {`(() => {
   const root = document.documentElement;
   const media = window.matchMedia('(prefers-color-scheme: dark)');
-  const getStored = () => window.localStorage.getItem('theme-preference');
-  const getTheme = () => {
-    const stored = getStored();
-    return stored === 'dark' || stored === 'light'
-      ? stored
-      : (media.matches ? 'dark' : 'light');
+  const apply = () => {
+    root.classList.toggle('dark', media.matches);
+    root.style.colorScheme = media.matches ? 'dark' : 'light';
   };
-  const apply = (theme) => {
-    root.classList.toggle('dark', theme === 'dark');
-    root.style.colorScheme = theme;
-    root.dataset.theme = theme;
-  };
-  apply(getTheme());
-  const handleChange = () => {
-    if (!getStored()) {
-      apply(media.matches ? 'dark' : 'light');
-    }
-  };
+  apply();
   if (media.addEventListener) {
-    media.addEventListener('change', handleChange);
+    media.addEventListener('change', apply);
   } else {
-    media.addListener(handleChange);
+    media.addListener(apply);
   }
 })();`}
         </Script>
@@ -72,7 +58,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   Dashboard
                 </Link>
               ) : null}
-              <ThemeToggle />
               <AuthButtons signedIn={!!user} />
             </div>
           </nav>
