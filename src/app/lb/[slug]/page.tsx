@@ -434,7 +434,7 @@ function PlayerListRow({
       </div>
 
       {/* 3. Rank & Stats Grid - Flexible Center */}
-      <div className="flex-1 flex items-center gap-4 lg:gap-6 min-w-0">
+      <div className="flex-1 flex items-center gap-4 lg:gap-6 min-w-0 pr-2 lg:pr-4">
         {/* Rank Section */}
         <div className="flex items-center gap-2 lg:gap-3 shrink-0">
           {rankIcon && (
