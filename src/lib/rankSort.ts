@@ -22,6 +22,8 @@ const DIVISION_WEIGHT = {
   IV: 1,
 } as const
 
+const APEX_TIERS = new Set(['CHALLENGER', 'GRANDMASTER', 'MASTER'])
+
 export type RankSnapshot = {
   tier?: string | null
   rank?: string | null
@@ -55,4 +57,14 @@ export function compareRanks(a: RankSnapshot | undefined, b: RankSnapshot | unde
   if (keyB[1] !== keyA[1]) return keyB[1] - keyA[1]
   // Compare LP
   return keyB[2] - keyA[2]
+}
+
+/**
+ * Convert a rank snapshot into a sortable numeric score.
+ */
+export function rankScore(r: RankSnapshot | undefined): number {
+  const [tier, division, lp] = rankSortKey(r)
+  const isApex = APEX_TIERS.has(r?.tier?.toUpperCase?.() ?? '')
+  const divisionScore = isApex ? 0 : division
+  return tier * 10000 + divisionScore * 1000 + lp
 }
