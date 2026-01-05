@@ -597,32 +597,30 @@ function LatestGamesFeed({
                   <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
                     {name}
                   </span>
-                  <span className="shrink-0 text-right leading-tight">
-                    <span className="block text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
-                    {lpChange !== null && (
-                      <span
-                        className={`mt-1 inline-flex items-center justify-end gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
-                          lpChange >= 0
-                            ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
-                            : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
-                        }`}
-                      >
-                        <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                          {lpChange >= 0 ? (
-                            <path d="M10 4l6 8H4l6-8z" />
-                          ) : (
-                            <path d="M10 16l-6-8h12l-6 8z" />
-                          )}
-                        </svg>
-                        {Math.abs(lpChange)} LP
-                      </span>
-                    )}
-                  </span>
+                  <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
                 </div>
-                <div className="flex items-center justify-between mt-1">
-                  <span className="text-[11px] text-slate-600 font-medium dark:text-slate-300">
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
                     {champ?.name || 'Unknown'}
                   </span>
+                  {lpChange !== null && (
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+                        lpChange >= 0
+                          ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
+                          : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                      }`}
+                    >
+                      <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        {lpChange >= 0 ? (
+                          <path d="M10 4l6 8H4l6-8z" />
+                        ) : (
+                          <path d="M10 16l-6-8h12l-6 8z" />
+                        )}
+                      </svg>
+                      {Math.abs(lpChange)} LP
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
