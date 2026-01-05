@@ -478,7 +478,7 @@ function PlayerListRow({
       </div>
 
       {/* 4. Socials & Champs - Right Aligned (fixed width so stats don't shift) */}
-      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 min-w-[160px] lg:min-w-[220px] ml-4">
+      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 ml-6 lg:ml-8">
         {/* Social Icons: reserve space even if empty */}
         <div className="flex justify-end gap-1.5">
           {player.twitch_url && (
@@ -509,7 +509,7 @@ function PlayerListRow({
         </div>
 
         {/* Champs: reserve space on lg so it's always the same width */}
-        <div className="hidden lg:flex justify-end gap-1 w-[104px]">
+        <div className="hidden lg:flex justify-end gap-1">
           {topChamps.slice(0, 3).map((c) => {
             const champ = champMap[c.champion_id]
             if (!champ) return null
