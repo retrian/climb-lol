@@ -49,6 +49,8 @@ const RANGE_SUMMARIES = [
   { id: 'month', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
 ]
 
+const ZOOM_LEVELS = [1, 2, 3, 4]
+
 const TIER_LABELS = [
   'CHALLENGER',
   'GRANDMASTER',
@@ -143,6 +145,7 @@ export default function LeaderboardGraphClient({
   const [mode, setMode] = useState<'time' | 'games'>('time')
   const [timeRange, setTimeRange] = useState(TIME_OPTIONS[0].id)
   const [gameCount, setGameCount] = useState(GAME_OPTIONS[0])
+  const [zoom, setZoom] = useState(1)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
 
   const playersByPuuid = useMemo(() => {
@@ -239,9 +242,23 @@ export default function LeaderboardGraphClient({
     return clipped
   }, [mode, timeRange, gameCount, normalizedPoints])
 
+  const zoomedPoints = useMemo<FilteredPoint[]>(() => {
+    if (filteredPoints.length === 0 || zoom === 1) return filteredPoints
+    const xValues = filteredPoints.map((p) => (mode === 'time' ? p.ts : p.gameIndex ?? 0))
+    const minX = Math.min(...xValues)
+    const maxX = Math.max(...xValues)
+    const range = maxX - minX || 1
+    const windowSize = range / zoom
+    const windowStart = maxX - windowSize
+    return filteredPoints.filter((p) => {
+      const x = mode === 'time' ? p.ts : p.gameIndex ?? 0
+      return x >= windowStart
+    })
+  }, [filteredPoints, mode, zoom])
+
   const series = useMemo(() => {
     const byPlayer = new Map<string, FilteredPoint[]>()
-    for (const point of filteredPoints) {
+    for (const point of zoomedPoints) {
       const list = byPlayer.get(point.puuid) ?? []
       list.push(point)
       byPlayer.set(point.puuid, list)
@@ -251,7 +268,7 @@ export default function LeaderboardGraphClient({
       byPlayer.set(puuid, list)
     }
     return byPlayer
-  }, [filteredPoints, mode])
+  }, [mode, zoomedPoints])
 
   const rangeStats = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
@@ -381,6 +398,22 @@ export default function LeaderboardGraphClient({
             Games
           </button>
             </div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Zoom</span>
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={1}
+              max={ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
+              step={1}
+              value={zoom}
+              onChange={(event) => setZoom(Number(event.target.value))}
+              className="h-2 w-32 cursor-pointer accent-slate-900 dark:accent-white"
+            />
+            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">{zoom}x</span>
           </div>
         </div>
 

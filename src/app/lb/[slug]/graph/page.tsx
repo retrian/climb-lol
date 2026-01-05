@@ -22,7 +22,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const { data: lb } = await supabase
     .from('leaderboards')
-    .select('id, user_id, name, visibility')
+    .select('id, user_id, name, visibility, banner_url, description')
     .eq('slug', slug)
     .maybeSingle()
 
@@ -47,15 +47,30 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   if (puuids.length === 0) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-        <div className="mx-auto max-w-4xl px-4 py-12 space-y-6 text-center">
-          <h1 className="text-3xl font-black text-slate-900 dark:text-white">{lb.name}</h1>
-          <p className="text-sm text-slate-600 dark:text-slate-300">No players found for this leaderboard yet.</p>
-          <Link
-            href={`/lb/${slug}`}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-          >
-            Back to leaderboard
-          </Link>
+        <div className="mx-auto max-w-5xl px-4 py-12 space-y-6">
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
+            {lb.banner_url && (
+              <div className="relative h-40 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={lb.banner_url} alt="Leaderboard Banner" className="h-full w-full object-cover" />
+              </div>
+            )}
+            <div className="p-6 text-center">
+              <h1 className="text-3xl font-black text-slate-900 dark:text-white">{lb.name}</h1>
+              {lb.description && (
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{lb.description}</p>
+              )}
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                No players found for this leaderboard yet.
+              </p>
+              <Link
+                href={`/lb/${slug}`}
+                className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+              >
+                Back to leaderboard
+              </Link>
+            </div>
+          </div>
         </div>
       </main>
     )
@@ -97,25 +112,34 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Leaderboard Graph
-            </p>
-            <h1 className="mt-2 text-3xl lg:text-4xl font-black text-slate-900 dark:text-white">{lb.name}</h1>
-            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-              Track ranking history across the leaderboard.
-            </p>
+        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
+          {lb.banner_url && (
+            <div className="relative h-44 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={lb.banner_url} alt="Leaderboard Banner" className="h-full w-full object-cover" />
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/40 via-slate-900/10 to-transparent" />
+            </div>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-4 p-6">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                Leaderboard Graph
+              </p>
+              <h1 className="mt-2 text-3xl lg:text-4xl font-black text-slate-900 dark:text-white">{lb.name}</h1>
+              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                Track ranking history across the leaderboard.
+              </p>
+            </div>
+            <Link
+              href={`/lb/${slug}`}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path d="M12.293 4.293a1 1 0 011.414 1.414L9.414 10l4.293 4.293a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414l5-5z" />
+              </svg>
+              Back to leaderboard
+            </Link>
           </div>
-          <Link
-            href={`/lb/${slug}`}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-          >
-            <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-              <path d="M12.293 4.293a1 1 0 011.414 1.414L9.414 10l4.293 4.293a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414l5-5z" />
-            </svg>
-            Back to leaderboard
-          </Link>
         </div>
 
         <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} cutoffs={cutoffs} />
