@@ -68,6 +68,17 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
+  const { data: cutoffsRaw } = await supabase
+    .from('rank_cutoffs')
+    .select('queue_type, tier, cutoff_lp')
+    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+
+  const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
+  const cutoffs = {
+    grandmaster: Number(cutoffsByTier.get('GRANDMASTER') ?? 200),
+    challenger: Number(cutoffsByTier.get('CHALLENGER') ?? 500),
+  }
+
   const minDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
@@ -107,7 +118,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           </Link>
         </div>
 
-        <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} />
+        <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} cutoffs={cutoffs} />
       </div>
     </main>
   )

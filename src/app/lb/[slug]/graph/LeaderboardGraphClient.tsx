@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { rankScore } from '@/lib/rankSort'
 import { formatRank } from '@/lib/rankFormat'
 
 type PlayerSummary = {
@@ -18,6 +17,11 @@ type LpPoint = {
   wins: number | null
   losses: number | null
   fetched_at: string
+}
+
+type RankCutoffs = {
+  grandmaster: number
+  challenger: number
 }
 
 type NormalizedPoint = LpPoint & {
@@ -58,6 +62,52 @@ const TIER_LABELS = [
   'IRON',
 ]
 
+const TIER_WEIGHT: Record<string, number> = {
+  CHALLENGER: 10,
+  GRANDMASTER: 9,
+  MASTER: 8,
+  DIAMOND: 7,
+  EMERALD: 6,
+  PLATINUM: 5,
+  GOLD: 4,
+  SILVER: 3,
+  BRONZE: 2,
+  IRON: 1,
+}
+
+const DIVISION_WEIGHT: Record<string, number> = {
+  I: 4,
+  II: 3,
+  III: 2,
+  IV: 1,
+}
+
+function rankScoreWithCutoffs(
+  point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>,
+  cutoffs: RankCutoffs
+) {
+  const tier = point.tier?.toUpperCase?.() ?? ''
+  const division = point.rank?.toUpperCase?.() ?? ''
+  const lp = point.lp ?? 0
+
+  const tierWeight = TIER_WEIGHT[tier] ?? 0
+  const divisionWeight = DIVISION_WEIGHT[division] ?? 0
+
+  if (tier === 'MASTER') {
+    return tierWeight * 10000 + lp
+  }
+
+  if (tier === 'GRANDMASTER') {
+    return TIER_WEIGHT.MASTER * 10000 + cutoffs.grandmaster + lp
+  }
+
+  if (tier === 'CHALLENGER') {
+    return TIER_WEIGHT.MASTER * 10000 + cutoffs.challenger + lp
+  }
+
+  return tierWeight * 10000 + divisionWeight * 1000 + lp
+}
+
 function colorFromString(value: string) {
   let hash = 0
   for (let i = 0; i < value.length; i += 1) {
@@ -83,9 +133,11 @@ type TooltipState = {
 export default function LeaderboardGraphClient({
   players,
   points,
+  cutoffs,
 }: {
   players: PlayerSummary[]
   points: LpPoint[]
+  cutoffs: RankCutoffs
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [mode, setMode] = useState<'time' | 'games'>('time')
@@ -104,11 +156,7 @@ export default function LeaderboardGraphClient({
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
     return points
       .map((p) => {
-        const score = rankScore({
-          tier: p.tier ?? undefined,
-          rank: p.rank ?? undefined,
-          league_points: p.lp ?? 0,
-        })
+        const score = rankScoreWithCutoffs(p, cutoffs)
         return {
           ...p,
           score,
@@ -116,7 +164,7 @@ export default function LeaderboardGraphClient({
         }
       })
       .filter((p) => !Number.isNaN(p.ts))
-  }, [points])
+  }, [cutoffs, points])
 
   const availability = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
@@ -266,7 +314,7 @@ export default function LeaderboardGraphClient({
   const axisLabels = useMemo(() => {
     if (!chart) return []
     return TIER_LABELS.map((tier) => {
-      const score = rankScore({ tier, rank: 'IV', league_points: 0 })
+      const score = rankScoreWithCutoffs({ tier, rank: 'IV', lp: 0 }, cutoffs)
       if (score < chart.minScore || score > chart.maxScore) return null
       const y =
         padding.top +
@@ -274,7 +322,7 @@ export default function LeaderboardGraphClient({
         ((score - chart.minScore) / chart.scoreRange) * innerHeight
       return { tier, y }
     }).filter(Boolean) as Array<{ tier: string; y: number }>
-  }, [chart, innerHeight, padding.top])
+  }, [chart, cutoffs, innerHeight, padding.top])
 
   const xLabel = mode === 'time' ? 'Time' : 'Games'
   const xStartLabel =
