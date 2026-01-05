@@ -453,7 +453,7 @@ function PlayerListRow({
         </div>
 
         {/* Stats Section */}
-        <div className="hidden sm:flex items-center gap-4 lg:gap-6 ml-auto pr-6 lg:pr-8">
+        <div className="hidden sm:flex items-center gap-6 lg:gap-8 ml-auto pr-6 lg:pr-8">
           <div className="flex flex-col items-center">
             <span
               className={`text-sm font-black whitespace-nowrap ${
@@ -478,7 +478,7 @@ function PlayerListRow({
       </div>
 
       {/* 4. Socials & Champs - Right Aligned (fixed width so stats don't shift) */}
-      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 min-w-[140px] lg:min-w-[200px]">
+      <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 min-w-[160px] lg:min-w-[220px] ml-4">
         {/* Social Icons: reserve space even if empty */}
         <div className="flex justify-end gap-1.5">
           {player.twitch_url && (
