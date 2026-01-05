@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
+import Link from 'next/link'
 import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { compareRanks } from '@/lib/rankSort'
@@ -104,6 +105,7 @@ function TeamHeaderCard({
   lastUpdated,
   cutoffs,
   bannerUrl,
+  graphHref,
 }: {
   name: string
   description?: string | null
@@ -111,6 +113,7 @@ function TeamHeaderCard({
   lastUpdated: string | null
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
+  graphHref: string
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
@@ -134,10 +137,20 @@ function TeamHeaderCard({
       <div className="relative flex flex-col lg:flex-row">
         {/* Left: Info */}
         <div className="flex-1 p-8 lg:p-10">
-          <div className="flex flex-wrap gap-2.5 mb-6">
+          <div className="flex flex-wrap items-center gap-2.5 mb-6">
             <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
               {visibility}
             </span>
+            <Link
+              href={graphHref}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+            >
+              <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
+              </svg>
+              View graph
+            </Link>
           </div>
 
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
@@ -784,6 +797,7 @@ export default async function LeaderboardDetail({
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
+          graphHref={`/lb/${slug}/graph`}
         />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">

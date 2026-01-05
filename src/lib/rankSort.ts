@@ -56,3 +56,11 @@ export function compareRanks(a: RankSnapshot | undefined, b: RankSnapshot | unde
   // Compare LP
   return keyB[2] - keyA[2]
 }
+
+/**
+ * Convert a rank snapshot into a sortable numeric score.
+ */
+export function rankScore(r: RankSnapshot | undefined): number {
+  const [tier, division, lp] = rankSortKey(r)
+  return tier * 10000 + division * 1000 + lp
+}
