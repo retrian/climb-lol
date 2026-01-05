@@ -270,7 +270,7 @@ function PodiumCard({
 
         {/* Player Name & Role */}
         <div className="mt-4 text-center w-full px-2">
-          <div className="break-words text-lg font-bold text-slate-900 dark:text-slate-100">
+          <div className="max-w-full whitespace-nowrap text-[clamp(0.7rem,1.6vw,1.125rem)] font-bold tracking-tight text-slate-900 dark:text-slate-100">
             {displayRiotId(player)}
           </div>
           {player.role && (
@@ -418,7 +418,7 @@ function PlayerListRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white">
+          <div className="max-w-full whitespace-nowrap text-[clamp(0.65rem,1vw,0.875rem)] font-bold tracking-tight text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white">
             {displayRiotId(player)}
           </div>
           {player.role && (
