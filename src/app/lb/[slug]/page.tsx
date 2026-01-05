@@ -79,6 +79,13 @@ function displayRiotId(p: Player) {
   return p.puuid
 }
 
+function nameSizeClass(name: string) {
+  const length = name.length
+  if (length > 26) return 'text-xs'
+  if (length > 20) return 'text-sm'
+  return 'text-base'
+}
+
 function formatDuration(durationS?: number) {
   if (!durationS) return ''
   const m = Math.floor(durationS / 60)
@@ -270,7 +277,11 @@ function PodiumCard({
 
         {/* Player Name & Role */}
         <div className="mt-4 text-center w-full px-2">
-          <div className="max-w-full whitespace-nowrap text-[clamp(0.5rem,1vw,0.95rem)] font-bold text-slate-900 dark:text-slate-100">
+          <div
+            className={`max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100 ${nameSizeClass(
+              displayRiotId(player)
+            )}`}
+          >
             {displayRiotId(player)}
           </div>
           {player.role && (
@@ -418,7 +429,11 @@ function PlayerListRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="max-w-full whitespace-nowrap text-[clamp(0.55rem,0.85vw,0.8rem)] font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white">
+          <div
+            className={`max-w-full whitespace-nowrap font-bold text-slate-900 transition-colors group-hover:text-slate-700 dark:text-slate-100 dark:group-hover:text-white ${nameSizeClass(
+              displayRiotId(player)
+            )}`}
+          >
             {displayRiotId(player)}
           </div>
           {player.role && (
