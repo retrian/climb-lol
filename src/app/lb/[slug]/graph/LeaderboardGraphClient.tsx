@@ -298,8 +298,18 @@ export default function LeaderboardGraphClient({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="rounded-3xl border border-slate-200/70 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800/70 dark:bg-slate-900/70">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+              Filters
+            </p>
+            <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-300">
+              Choose a window to compare rank movement.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <button
             type="button"
             onClick={() => setMode('time')}
@@ -322,10 +332,12 @@ export default function LeaderboardGraphClient({
           >
             Games
           </button>
+            </div>
+          </div>
         </div>
 
         {mode === 'time' ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             {TIME_OPTIONS.map((option) => (
               <button
                 key={option.id}
@@ -347,7 +359,7 @@ export default function LeaderboardGraphClient({
             ))}
           </div>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-4 flex flex-wrap gap-2">
             {GAME_OPTIONS.map((count) => (
               <button
                 key={count}
@@ -371,7 +383,11 @@ export default function LeaderboardGraphClient({
         )}
       </div>
 
-      <div ref={containerRef} className="relative rounded-3xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div
+        ref={containerRef}
+        className="relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-lg dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
+      >
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_55%)] dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_60%)]" />
         {chart ? (
           <>
             <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
@@ -380,7 +396,7 @@ export default function LeaderboardGraphClient({
                 y={padding.top}
                 width={innerWidth}
                 height={innerHeight}
-                className="fill-slate-50 dark:fill-slate-950"
+                className="fill-white/70 dark:fill-slate-950/70"
                 rx={16}
               />
 
@@ -433,7 +449,7 @@ export default function LeaderboardGraphClient({
 
                 return (
                   <g key={puuid}>
-                    <path d={path} fill="none" stroke={color} strokeWidth={2.5} opacity={0.9} />
+                    <path d={path} fill="none" stroke={color} strokeWidth={2.75} opacity={0.9} />
                     <circle
                       cx={lastX}
                       cy={lastY}
@@ -481,7 +497,7 @@ export default function LeaderboardGraphClient({
                 const player = playersByPuuid.get(puuid)
                 if (!player) return null
                 return (
-                  <div key={puuid} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 dark:border-slate-700 dark:bg-slate-900">
+                  <div key={puuid} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 shadow-sm dark:border-slate-700 dark:bg-slate-900">
                     <span
                       className="h-2.5 w-2.5 rounded-full"
                       style={{ backgroundColor: colorByPuuid.get(puuid) }}
@@ -500,7 +516,7 @@ export default function LeaderboardGraphClient({
 
         {tooltip && (
           <div
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg dark:border-slate-700 dark:bg-slate-900"
+            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900"
             style={{ left: tooltip.x, top: tooltip.y - 10 }}
           >
             {(() => {
@@ -532,7 +548,10 @@ export default function LeaderboardGraphClient({
 
       <div className="grid gap-4 lg:grid-cols-3">
         {rangeStats.map(({ range, bestGain, bestLoss }) => (
-          <div key={range.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <div
+            key={range.id}
+            className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
+          >
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
                 {range.label}
