@@ -593,7 +593,7 @@ function LatestGamesFeed({
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] grid-rows-2 items-center gap-x-2 gap-y-1">
+                <div className="grid grid-cols-[minmax(0,1fr)_80px] grid-rows-2 items-center gap-x-2 gap-y-1">
                   <span className="min-w-0 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
                     {name}
                   </span>
