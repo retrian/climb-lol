@@ -137,7 +137,7 @@ export default function LeaderboardGraphClient({
       byPlayer.set(point.puuid, list)
     }
     for (const [puuid, list] of byPlayer.entries()) {
-      list.sort((a, b) => (mode === 'time' ? a.ts - b.ts : a.gameIndex - b.gameIndex))
+      list.sort((a, b) => (mode === 'time' ? a.ts - b.ts : (a.gameIndex ?? 0) - (b.gameIndex ?? 0)))
       byPlayer.set(puuid, list)
     }
     return byPlayer
