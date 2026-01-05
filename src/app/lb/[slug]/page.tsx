@@ -436,7 +436,7 @@ function PlayerListRow({
       {/* 3. Rank & Stats Grid - Flexible Center */}
       <div className="flex-1 flex items-center gap-4 lg:gap-6 min-w-0">
         {/* Rank Section */}
-        <div className="flex items-center gap-2 lg:gap-3 shrink-0">
+        <div className="flex items-center gap-2 lg:gap-3 shrink-0 w-32">
           {rankIcon && (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={rankIcon} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />
@@ -454,7 +454,7 @@ function PlayerListRow({
 
         {/* Stats Section */}
         <div className="hidden sm:flex items-center gap-6 lg:gap-8 ml-auto pr-6 lg:pr-8">
-          <div className="flex flex-col items-center">
+          <div className="flex w-16 flex-col items-center">
             <span
               className={`text-sm font-black whitespace-nowrap ${
                 winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'
@@ -466,7 +466,7 @@ function PlayerListRow({
               Win
             </span>
           </div>
-          <div className="flex flex-col items-center">
+          <div className="flex w-16 flex-col items-center">
             <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">
               {winrate.total}
             </span>
@@ -480,8 +480,8 @@ function PlayerListRow({
       {/* 4. Socials & Champs - Right Aligned (fixed width so stats don't shift) */}
       <div className="flex items-center justify-end gap-2 lg:gap-3 shrink-0 ml-6 lg:ml-8">
         {/* Social Icons: reserve space even if empty */}
-        <div className="flex justify-end gap-1.5">
-          {player.twitch_url && (
+        <div className="flex w-[72px] justify-end gap-1.5">
+          {player.twitch_url ? (
             <a
               href={player.twitch_url}
               target="_blank"
@@ -492,9 +492,11 @@ function PlayerListRow({
                 <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h2.998L22.286 11.143V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z" />
               </svg>
             </a>
+          ) : (
+            <div className="h-8 w-8 rounded-lg bg-slate-100 dark:bg-slate-800" />
           )}
 
-          {player.twitter_url && (
+          {player.twitter_url ? (
             <a
               href={player.twitter_url}
               target="_blank"
@@ -505,18 +507,23 @@ function PlayerListRow({
                 <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
               </svg>
             </a>
+          ) : (
+            <div className="h-8 w-8 rounded-lg bg-slate-100 dark:bg-slate-800" />
           )}
         </div>
 
         {/* Champs: reserve space on lg so it's always the same width */}
-        <div className="hidden lg:flex justify-end gap-1">
-          {topChamps.slice(0, 3).map((c) => {
-            const champ = champMap[c.champion_id]
-            if (!champ) return null
+        <div className="hidden lg:flex w-[108px] justify-end gap-1">
+          {Array.from({ length: 3 }).map((_, idx) => {
+            const champEntry = topChamps[idx]
+            const champ = champEntry ? champMap[champEntry.champion_id] : null
+            if (!champ) {
+              return <div key={`champ-placeholder-${idx}`} className="h-8 w-8 rounded-lg bg-slate-100 dark:bg-slate-800" />
+            }
             return (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                key={c.champion_id}
+                key={champEntry.champion_id}
                 src={championIconUrl(ddVersion, champ.id)}
                 className="h-8 w-8 rounded-lg border-2 border-slate-200 shadow-sm hover:scale-110 hover:border-slate-300 transition-all duration-200 dark:border-slate-700"
                 alt=""
