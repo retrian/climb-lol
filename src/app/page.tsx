@@ -39,7 +39,7 @@ export default function HomePage() {
   const features: Array<{ title: string; desc: string; icon: FeatureIconName }> = [
     {
       title: 'Track Players',
-      desc: 'Monitor up to 15 players with ranked-only stats and progress snapshots.',
+      desc: 'Monitor up to 30 players with ranked-only stats and progress snapshots.',
       icon: 'users',
     },
     {
@@ -55,16 +55,16 @@ export default function HomePage() {
   ]
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50">
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-4xl px-4 py-10 lg:py-16">
         {/* Hero */}
         <div className="mb-10">
           <div className="flex items-center gap-3 mb-4">
-            <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600">
+            <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 dark:from-white dark:via-slate-200 dark:to-slate-400">
               Track NA Ranked Climbs
             </h1>
           </div>
-          <p className="text-base text-slate-600 font-medium">
+          <p className="text-base text-slate-600 font-medium dark:text-slate-300">
             Create a leaderboard, start climbing with friends
           </p>
         </div>
@@ -74,21 +74,21 @@ export default function HomePage() {
           {features.map((f) => (
             <div
               key={f.title}
-              className="group rounded-2xl border-2 border-slate-200 bg-white p-5 lg:p-6 shadow-sm transition-all duration-200 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5"
+              className="group rounded-2xl border-2 border-slate-200 bg-white p-5 lg:p-6 shadow-sm transition-all duration-200 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
             >
               <div className="flex items-start gap-4">
-                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-slate-200 bg-slate-50 text-slate-600">
+                <div className="flex h-11 w-11 items-center justify-center rounded-2xl border-2 border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
                   <FeatureIcon name={f.icon} />
                 </div>
 
                 <div className="min-w-0">
-                  <h3 className="text-base lg:text-lg font-bold text-slate-900 group-hover:text-slate-700 transition-colors">
+                  <h3 className="text-base lg:text-lg font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white">
                     {f.title}
                   </h3>
-                  <p className="mt-1.5 text-sm text-slate-600">{f.desc}</p>
+                  <p className="mt-1.5 text-sm text-slate-600 dark:text-slate-300">{f.desc}</p>
                 </div>
 
-                <div className="ml-auto flex-shrink-0 text-slate-300 group-hover:text-slate-500 group-hover:translate-x-1 transition-all duration-200">
+                <div className="ml-auto flex-shrink-0 text-slate-300 group-hover:text-slate-500 group-hover:translate-x-1 transition-all duration-200 dark:text-slate-600 dark:group-hover:text-slate-400">
                 </div>
               </div>
             </div>
