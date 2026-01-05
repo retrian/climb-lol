@@ -40,6 +40,7 @@ interface Game {
   endTs?: number
   durationS?: number
   queueId?: number
+  lpChange?: number | null
 }
 
 // --- Helpers ---
@@ -560,7 +561,7 @@ function LatestGamesFeed({
     <div className="space-y-2.5">
       {games.map((g) => {
         const p = playersByPuuid.get(g.puuid)
-        const name = p ? p.game_name || p.puuid : 'Unknown'
+        const name = p ? displayRiotId(p) : 'Unknown'
         const when = g.endTs ? timeAgo(g.endTs) : ''
         const champ = champMap[g.championId]
         const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
@@ -568,6 +569,7 @@ function LatestGamesFeed({
         const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
         const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
         const duration = formatDuration(g.durationS)
+        const lpChange = g.lpChange
 
         return (
           <div
@@ -592,7 +594,11 @@ function LatestGamesFeed({
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-xs font-bold text-slate-900 dark:text-slate-100">{name}</span>
+                  <FitText
+                    text={name}
+                    className="block max-w-full whitespace-nowrap text-xs font-bold text-slate-900 dark:text-slate-100"
+                    minScale={0.7}
+                  />
                   <span className="text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
                 </div>
                 <div className="flex items-center justify-between mt-1">
@@ -614,6 +620,18 @@ function LatestGamesFeed({
               <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200">
                 {g.k}/{g.d}/{g.a}
               </span>
+              {typeof lpChange === 'number' && !Number.isNaN(lpChange) && (
+                <>
+                  <span className="text-slate-300 dark:text-slate-600">•</span>
+                  <span
+                    className={`font-semibold tabular-nums ${
+                      lpChange >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
+                    }`}
+                  >
+                    {lpChange >= 0 ? `+${lpChange}` : lpChange} LP
+                  </span>
+                </>
+              )}
               <span className="text-slate-300 dark:text-slate-600">•</span>
               <span className={`tabular-nums ${kdaColor}`}>{kda} KDA</span>
               <span className="text-slate-300 dark:text-slate-600">•</span>
@@ -729,6 +747,7 @@ export default async function LeaderboardDetail({
     endTs: row.game_end_ts,
     durationS: row.game_duration_s,
     queueId: row.queue_id,
+    lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? null,
   }))
 
   const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null
