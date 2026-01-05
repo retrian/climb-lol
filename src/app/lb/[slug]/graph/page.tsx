@@ -1,7 +1,7 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
+import TeamHeaderCard from '../TeamHeaderCard'
 
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
   const gn = (player.game_name ?? '').trim()
@@ -44,32 +44,43 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   const players = playersRaw ?? []
   const puuids = players.map((p) => p.puuid).filter(Boolean)
 
+  const { data: cutoffsRaw } = await supabase
+    .from('rank_cutoffs')
+    .select('queue_type, tier, cutoff_lp')
+    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+
+  const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
+  const cutoffs = {
+    grandmaster: Number(cutoffsByTier.get('GRANDMASTER') ?? 200),
+    challenger: Number(cutoffsByTier.get('CHALLENGER') ?? 500),
+  }
+
+  const cutoffsDisplay = [
+    { key: 'GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
+    { key: 'CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
+  ]
+    .map((item) => ({
+      label: item.label,
+      lp: Number(cutoffsByTier.get(item.key)),
+      icon: item.icon,
+    }))
+    .filter((item) => !Number.isNaN(item.lp))
+
   if (puuids.length === 0) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
         <div className="mx-auto max-w-5xl px-4 py-12 space-y-6">
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
-            {lb.banner_url && (
-              <div className="relative h-40 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={lb.banner_url} alt="Leaderboard Banner" className="h-full w-full object-cover" />
-              </div>
-            )}
-            <div className="p-6 text-center">
-              <h1 className="text-3xl font-black text-slate-900 dark:text-white">{lb.name}</h1>
-              {lb.description && (
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{lb.description}</p>
-              )}
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                No players found for this leaderboard yet.
-              </p>
-              <Link
-                href={`/lb/${slug}`}
-                className="mt-4 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                Back to leaderboard
-              </Link>
-            </div>
+          <TeamHeaderCard
+            name={lb.name}
+            description={lb.description}
+            visibility={lb.visibility}
+            lastUpdated={null}
+            cutoffs={cutoffsDisplay}
+            bannerUrl={lb.banner_url}
+            graphHref={`/lb/${slug}/graph`}
+          />
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            No players found for this leaderboard yet.
           </div>
         </div>
       </main>
@@ -82,17 +93,6 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .in('puuid', puuids)
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
-
-  const { data: cutoffsRaw } = await supabase
-    .from('rank_cutoffs')
-    .select('queue_type, tier, cutoff_lp')
-    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
-
-  const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
-  const cutoffs = {
-    grandmaster: Number(cutoffsByTier.get('GRANDMASTER') ?? 200),
-    challenger: Number(cutoffsByTier.get('CHALLENGER') ?? 500),
-  }
 
   const minDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
   const { data: historyRaw } = await supabase
@@ -112,35 +112,15 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
-        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
-          {lb.banner_url && (
-            <div className="relative h-44 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={lb.banner_url} alt="Leaderboard Banner" className="h-full w-full object-cover" />
-              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/40 via-slate-900/10 to-transparent" />
-            </div>
-          )}
-          <div className="flex flex-wrap items-center justify-between gap-4 p-6">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Leaderboard Graph
-              </p>
-              <h1 className="mt-2 text-3xl lg:text-4xl font-black text-slate-900 dark:text-white">{lb.name}</h1>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                Track ranking history across the leaderboard.
-              </p>
-            </div>
-            <Link
-              href={`/lb/${slug}`}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path d="M12.293 4.293a1 1 0 011.414 1.414L9.414 10l4.293 4.293a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414l5-5z" />
-              </svg>
-              Back to leaderboard
-            </Link>
-          </div>
-        </div>
+        <TeamHeaderCard
+          name={lb.name}
+          description={lb.description}
+          visibility={lb.visibility}
+          lastUpdated={null}
+          cutoffs={cutoffsDisplay}
+          bannerUrl={lb.banner_url}
+          graphHref={`/lb/${slug}/graph`}
+        />
 
         <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} cutoffs={cutoffs} />
       </div>

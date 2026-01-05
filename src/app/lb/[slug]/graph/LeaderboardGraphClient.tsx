@@ -29,9 +29,7 @@ type NormalizedPoint = LpPoint & {
   ts: number
 }
 
-type FilteredPoint = NormalizedPoint & {
-  gameIndex?: number
-}
+type FilteredPoint = NormalizedPoint
 
 const TIME_OPTIONS = [
   { id: '30d', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
@@ -42,7 +40,6 @@ const TIME_OPTIONS = [
   { id: '6h', label: '6h', ms: 6 * 60 * 60 * 1000 },
 ]
 
-const GAME_OPTIONS = [10, 20, 30, 40, 50]
 const RANGE_SUMMARIES = [
   { id: 'day', label: '24h', ms: 24 * 60 * 60 * 1000 },
   { id: 'week', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
@@ -96,7 +93,8 @@ function rankScoreWithCutoffs(
   const divisionWeight = DIVISION_WEIGHT[division] ?? 0
 
   if (tier === 'MASTER') {
-    return tierWeight * 10000 + lp
+    const cappedLp = Math.min(lp, Math.max(0, cutoffs.grandmaster - 1))
+    return tierWeight * 10000 + cappedLp
   }
 
   if (tier === 'GRANDMASTER') {
@@ -142,9 +140,7 @@ export default function LeaderboardGraphClient({
   cutoffs: RankCutoffs
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [mode, setMode] = useState<'time' | 'games'>('time')
   const [timeRange, setTimeRange] = useState(TIME_OPTIONS[0].id)
-  const [gameCount, setGameCount] = useState(GAME_OPTIONS[0])
   const [zoom, setZoom] = useState(1)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
 
@@ -191,70 +187,34 @@ export default function LeaderboardGraphClient({
       timeAvailability.set(option.id, hasEnough)
     }
 
-    const gameAvailability = new Map<number, boolean>()
-    for (const count of GAME_OPTIONS) {
-      let hasEnough = false
-      for (const list of byPlayer.values()) {
-        if (list.length >= count) {
-          hasEnough = true
-          break
-        }
-      }
-      gameAvailability.set(count, hasEnough)
-    }
-
-    return { timeAvailability, gameAvailability }
+    return { timeAvailability }
   }, [normalizedPoints])
 
   useEffect(() => {
-    if (mode === 'time' && !availability.timeAvailability.get(timeRange)) {
+    if (!availability.timeAvailability.get(timeRange)) {
       const fallback = TIME_OPTIONS.find((option) => availability.timeAvailability.get(option.id))
       if (fallback) setTimeRange(fallback.id)
     }
-  }, [availability, mode, timeRange])
-
-  useEffect(() => {
-    if (mode === 'games' && !availability.gameAvailability.get(gameCount)) {
-      const fallback = GAME_OPTIONS.find((count) => availability.gameAvailability.get(count))
-      if (fallback) setGameCount(fallback)
-    }
-  }, [availability, gameCount, mode])
+  }, [availability, timeRange])
 
   const filteredPoints = useMemo<FilteredPoint[]>(() => {
-    if (mode === 'time') {
-      const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
-      const cutoff = Date.now() - option.ms
-      return normalizedPoints.filter((p) => p.ts >= cutoff)
-    }
-
-    const byPlayer = new Map<string, NormalizedPoint[]>()
-    for (const point of normalizedPoints) {
-      const list = byPlayer.get(point.puuid) ?? []
-      list.push(point)
-      byPlayer.set(point.puuid, list)
-    }
-    const clipped: FilteredPoint[] = []
-    for (const [puuid, list] of byPlayer.entries()) {
-      const sorted = [...list].sort((a, b) => a.ts - b.ts)
-      const slice = sorted.slice(-gameCount)
-      clipped.push(...slice.map((item, index) => ({ ...item, gameIndex: index })))
-    }
-    return clipped
-  }, [mode, timeRange, gameCount, normalizedPoints])
+    const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
+    const cutoff = Date.now() - option.ms
+    return normalizedPoints.filter((p) => p.ts >= cutoff)
+  }, [timeRange, normalizedPoints])
 
   const zoomedPoints = useMemo<FilteredPoint[]>(() => {
     if (filteredPoints.length === 0 || zoom === 1) return filteredPoints
-    const xValues = filteredPoints.map((p) => (mode === 'time' ? p.ts : p.gameIndex ?? 0))
+    const xValues = filteredPoints.map((p) => p.ts)
     const minX = Math.min(...xValues)
     const maxX = Math.max(...xValues)
     const range = maxX - minX || 1
     const windowSize = range / zoom
     const windowStart = maxX - windowSize
     return filteredPoints.filter((p) => {
-      const x = mode === 'time' ? p.ts : p.gameIndex ?? 0
-      return x >= windowStart
+      return p.ts >= windowStart
     })
-  }, [filteredPoints, mode, zoom])
+  }, [filteredPoints, zoom])
 
   const series = useMemo(() => {
     const byPlayer = new Map<string, FilteredPoint[]>()
@@ -264,11 +224,11 @@ export default function LeaderboardGraphClient({
       byPlayer.set(point.puuid, list)
     }
     for (const [puuid, list] of byPlayer.entries()) {
-      list.sort((a, b) => (mode === 'time' ? a.ts - b.ts : (a.gameIndex ?? 0) - (b.gameIndex ?? 0)))
+      list.sort((a, b) => a.ts - b.ts)
       byPlayer.set(puuid, list)
     }
     return byPlayer
-  }, [mode, zoomedPoints])
+  }, [zoomedPoints])
 
   const rangeStats = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
@@ -314,13 +274,13 @@ export default function LeaderboardGraphClient({
     const maxScore = Math.max(...scores)
     const scoreRange = maxScore - minScore || 1
 
-    const xValues = allPoints.map((p) => (mode === 'time' ? p.ts : p.gameIndex ?? 0))
+    const xValues = allPoints.map((p) => p.ts)
     const minX = Math.min(...xValues)
     const maxX = Math.max(...xValues)
     const xRange = maxX - minX || 1
 
     return { minScore, maxScore, scoreRange, minX, maxX, xRange }
-  }, [series, mode])
+  }, [series])
 
   const width = 960
   const height = 420
@@ -341,15 +301,29 @@ export default function LeaderboardGraphClient({
     }).filter(Boolean) as Array<{ tier: string; y: number }>
   }, [chart, cutoffs, innerHeight, padding.top])
 
-  const xLabel = mode === 'time' ? 'Time' : 'Games'
-  const xStartLabel =
-    mode === 'time' && chart
-      ? new Date(chart.minX).toLocaleDateString()
-      : 'Oldest'
-  const xEndLabel =
-    mode === 'time' && chart
-      ? new Date(chart.maxX).toLocaleDateString()
-      : 'Latest'
+  const xTicks = useMemo(() => {
+    if (!chart) return []
+    const count = 5
+    const step = chart.xRange / (count - 1)
+    const rangeMs = chart.xRange
+    return Array.from({ length: count }, (_, idx) => {
+      const value = chart.minX + step * idx
+      const date = new Date(value)
+      let label = date.toLocaleDateString()
+      if (rangeMs <= 12 * 60 * 60 * 1000) {
+        label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      } else if (rangeMs <= 3 * 24 * 60 * 60 * 1000) {
+        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
+          date.toLocaleTimeString([], { hour: 'numeric' })
+      } else if (rangeMs <= 14 * 24 * 60 * 60 * 1000) {
+        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      } else {
+        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' })
+      }
+      const x = padding.left + ((value - chart.minX) / chart.xRange) * innerWidth
+      return { x, label }
+    })
+  }, [chart, innerWidth, padding.left])
 
   const handleHover = (puuid: string, clientX: number, clientY: number) => {
     const container = containerRef.current?.getBoundingClientRect()
@@ -373,32 +347,6 @@ export default function LeaderboardGraphClient({
               Choose a window to compare rank movement.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-          <button
-            type="button"
-            onClick={() => setMode('time')}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-              mode === 'time'
-                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
-                : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
-            }`}
-          >
-            Time
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('games')}
-            className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
-              mode === 'games'
-                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
-                : 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white'
-            }`}
-          >
-            Games
-          </button>
-            </div>
-          </div>
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
@@ -417,51 +365,27 @@ export default function LeaderboardGraphClient({
           </div>
         </div>
 
-        {mode === 'time' ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {TIME_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                onClick={() => setTimeRange(option.id)}
-                disabled={!availability.timeAvailability.get(option.id)}
-                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                  timeRange === option.id
-                    ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
-                } ${
-                  availability.timeAvailability.get(option.id)
-                    ? ''
-                    : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {GAME_OPTIONS.map((count) => (
-              <button
-                key={count}
-                type="button"
-                onClick={() => setGameCount(count)}
-                disabled={!availability.gameAvailability.get(count)}
-                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                  gameCount === count
-                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700 dark:border-emerald-400 dark:bg-emerald-500/20 dark:text-emerald-200'
-                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
-                } ${
-                  availability.gameAvailability.get(count)
-                    ? ''
-                    : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
-                }`}
-              >
-                {count} games
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {TIME_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setTimeRange(option.id)}
+              disabled={!availability.timeAvailability.get(option.id)}
+              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                timeRange === option.id
+                  ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
+              } ${
+                availability.timeAvailability.get(option.id)
+                  ? ''
+                  : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div
@@ -503,12 +427,34 @@ export default function LeaderboardGraphClient({
                 </g>
               ))}
 
+              {xTicks.map((tick, idx) => (
+                <g key={`${tick.label}-${idx}`}>
+                  <line
+                    x1={tick.x}
+                    x2={tick.x}
+                    y1={padding.top}
+                    y2={padding.top + innerHeight}
+                    stroke="currentColor"
+                    className="text-slate-200/70 dark:text-slate-800/70"
+                    strokeDasharray="2 8"
+                  />
+                  <text
+                    x={tick.x}
+                    y={height - 16}
+                    textAnchor="middle"
+                    className="fill-slate-400 text-[10px] font-semibold"
+                  >
+                    {tick.label}
+                  </text>
+                </g>
+              ))}
+
               {[...series.entries()].map(([puuid, list]) => {
                 if (list.length === 0) return null
                 const color = colorByPuuid.get(puuid) ?? 'hsl(210 80% 50%)'
                 const path = list
                   .map((point, idx) => {
-                    const xValue = mode === 'time' ? point.ts : point.gameIndex ?? idx
+                    const xValue = point.ts
                     const x =
                       padding.left + ((xValue - chart.minX) / chart.xRange) * innerWidth
                     const y =
@@ -520,7 +466,7 @@ export default function LeaderboardGraphClient({
                   .join(' ')
 
                 const lastPoint = list[list.length - 1]
-                const lastXValue = mode === 'time' ? lastPoint.ts : lastPoint.gameIndex ?? list.length - 1
+                const lastXValue = lastPoint.ts
                 const lastX =
                   padding.left + ((lastXValue - chart.minX) / chart.xRange) * innerWidth
                 const lastY =
@@ -547,30 +493,6 @@ export default function LeaderboardGraphClient({
                 )
               })}
 
-              <text
-                x={padding.left}
-                y={height - 18}
-                textAnchor="start"
-                className="fill-slate-400 text-[11px] font-semibold"
-              >
-                {xStartLabel}
-              </text>
-              <text
-                x={width - padding.right}
-                y={height - 18}
-                textAnchor="end"
-                className="fill-slate-400 text-[11px] font-semibold"
-              >
-                {xEndLabel}
-              </text>
-              <text
-                x={width / 2}
-                y={height - 10}
-                textAnchor="middle"
-                className="fill-slate-500 text-[11px] font-semibold uppercase tracking-wide"
-              >
-                {xLabel}
-              </text>
             </svg>
 
             <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
