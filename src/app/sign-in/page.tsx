@@ -16,17 +16,17 @@ export default function SignInPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-4 bg-gray-50">
+    <main className="flex min-h-screen items-center justify-center px-4 bg-gray-50 dark:bg-slate-950">
       <div className="w-full max-w-md">
-        <div className="rounded-lg border border-gray-200 bg-white p-8 shadow-sm">
-          <h1 className="text-3xl font-bold text-gray-900">Sign in</h1>
-          <p className="mt-2 text-gray-600">
+        <div className="rounded-lg border border-gray-200 bg-white p-8 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-slate-100">Sign in</h1>
+          <p className="mt-2 text-gray-600 dark:text-slate-300">
             Sign in to create and manage your leaderboard.
           </p>
 
           <button
             onClick={signIn}
-            className="mt-8 w-full rounded-lg border border-gray-300 bg-white px-4 py-3 font-medium text-gray-700 transition hover:bg-gray-50 flex items-center justify-center gap-3"
+            className="mt-8 flex w-full items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-4 py-3 font-medium text-gray-700 transition hover:bg-gray-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >
             <svg className="h-5 w-5" viewBox="0 0 24 24">
               <path
@@ -50,7 +50,7 @@ export default function SignInPage() {
           </button>
         </div>
 
-        <p className="mt-4 text-center text-xs text-gray-500">
+        <p className="mt-4 text-center text-xs text-gray-500 dark:text-slate-400">
           By signing in, you agree to our Terms of Service and Privacy Policy
         </p>
       </div>
