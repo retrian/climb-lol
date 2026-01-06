@@ -89,6 +89,38 @@ type SoloSnapshot = {
   fetched_at: string
 }
 
+const NON_APEX_TIERS = ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND'] as const
+const APEX_TIERS = new Set(['MASTER', 'GRANDMASTER', 'CHALLENGER'])
+const DIVISION_ORDER = ['IV', 'III', 'II', 'I'] as const
+const APEX_STEP_INDEX = NON_APEX_TIERS.length * DIVISION_ORDER.length
+
+function rankStepIndex(tier?: string | null, rank?: string | null): number | null {
+  const tierKey = tier?.toUpperCase?.() ?? ''
+  if (!tierKey) return null
+  if (APEX_TIERS.has(tierKey)) return APEX_STEP_INDEX
+  const tierIndex = NON_APEX_TIERS.indexOf(tierKey as (typeof NON_APEX_TIERS)[number])
+  if (tierIndex === -1) return null
+  const rankKey = rank?.toUpperCase?.() ?? ''
+  const divisionIndex = DIVISION_ORDER.indexOf(rankKey as (typeof DIVISION_ORDER)[number])
+  if (divisionIndex === -1) return null
+  return tierIndex * DIVISION_ORDER.length + divisionIndex
+}
+
+function computeLpDelta(opts: {
+  lastTier?: string | null
+  lastRank?: string | null
+  lastLp: number
+  nextTier?: string | null
+  nextRank?: string | null
+  nextLp: number
+}): number {
+  const { lastTier, lastRank, lastLp, nextTier, nextRank, nextLp } = opts
+  const lastStep = rankStepIndex(lastTier, lastRank)
+  const nextStep = rankStepIndex(nextTier, nextRank)
+  if (lastStep === null || nextStep === null) return nextLp - lastLp
+  return (nextStep - lastStep) * 100 + (nextLp - lastLp)
+}
+
 function pickSolo(entries: RankEntry[]): RankEntry | null {
   return entries.find((e) => e.queueType === QUEUE_SOLO) ?? null
 }
@@ -242,6 +274,8 @@ async function maybeInsertPerGameLpEvent(opts: {
   const lastW = typeof state?.last_solo_wins === 'number' ? Number(state.last_solo_wins) : null
   const lastL = typeof state?.last_solo_losses === 'number' ? Number(state.last_solo_losses) : null
   const lastMatch = state?.last_solo_match_id ? String(state.last_solo_match_id) : null
+  const lastTier = state?.last_solo_tier ? String(state.last_solo_tier) : null
+  const lastRank = state?.last_solo_rank ? String(state.last_solo_rank) : null
 
   // find new matches since lastMatch (ids are newest-first)
   let newSince: string[] = []
@@ -262,6 +296,8 @@ async function maybeInsertPerGameLpEvent(opts: {
   if (lastLp === null || lastW === null || lastL === null) {
     await upsertRiotState(puuid, {
       last_solo_lp: snap.lp,
+      last_solo_tier: snap.tier,
+      last_solo_rank: snap.rank,
       last_solo_wins: snap.wins,
       last_solo_losses: snap.losses,
       last_solo_match_id: newest,
@@ -275,7 +311,14 @@ async function maybeInsertPerGameLpEvent(opts: {
   // only attribute if exactly 1 new game occurred AND we can point to exactly 1 new match
   if (gamesDelta === 1 && newSince.length === 1) {
     const matchId = newSince[0]
-    const lpDelta = snap.lp - lastLp
+    const lpDelta = computeLpDelta({
+      lastTier,
+      lastRank,
+      lastLp,
+      nextTier: snap.tier,
+      nextRank: snap.rank,
+      nextLp: snap.lp,
+    })
 
     const { error } = await supabase.from('player_lp_events').insert({
       puuid,
@@ -305,6 +348,8 @@ async function maybeInsertPerGameLpEvent(opts: {
 
   await upsertRiotState(puuid, {
     last_solo_lp: snap.lp,
+    last_solo_tier: snap.tier,
+    last_solo_rank: snap.rank,
     last_solo_wins: snap.wins,
     last_solo_losses: snap.losses,
     last_solo_match_id: newest,
@@ -485,7 +530,9 @@ async function main() {
 
   const { data: states, error: stErr } = await supabase
     .from('player_riot_state')
-    .select('puuid, last_poll_at, last_solo_lp, last_solo_wins, last_solo_losses, last_solo_match_id')
+    .select(
+      'puuid, last_poll_at, last_solo_lp, last_solo_tier, last_solo_rank, last_solo_wins, last_solo_losses, last_solo_match_id'
+    )
     .in('puuid', puuids)
 
   if (stErr) throw stErr
