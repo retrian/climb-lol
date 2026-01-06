@@ -83,6 +83,33 @@ function displayRiotId(p: Player) {
   return p.puuid
 }
 
+function getOpggUrl(player: Player) {
+  const gn = (player.game_name ?? '').trim()
+  const tl = (player.tag_line ?? '').trim()
+  if (!gn || !tl) return null
+  const regionMap: Record<string, string> = {
+    NA1: 'na',
+    EUW1: 'euw',
+    EUN1: 'eune',
+    KR: 'kr',
+    JP1: 'jp',
+    BR1: 'br',
+    LA1: 'lan',
+    LA2: 'las',
+    OC1: 'oce',
+    TR1: 'tr',
+    RU: 'ru',
+    PH2: 'ph',
+    SG2: 'sg',
+    TH2: 'th',
+    TW2: 'tw',
+    VN2: 'vn',
+  }
+  const region = regionMap[tl.toUpperCase()] ?? 'na'
+  const riotId = `${gn}-${tl}`
+  return `https://op.gg/lol/summoners/${region}/${encodeURIComponent(riotId)}`
+}
+
 function formatDuration(durationS?: number) {
   if (!durationS) return ''
   const m = Math.floor(durationS / 60)
@@ -120,6 +147,7 @@ function PodiumCard({
 }) {
   const isFirst = rank === 1
   const rankIcon = getRankIconSrc(rankData?.tier)
+  const opggUrl = getOpggUrl(player)
 
   // Gold, Silver, Bronze colors with sizing
   let cardBg = 'bg-white dark:bg-slate-900'
@@ -189,11 +217,27 @@ function PodiumCard({
 
         {/* Player Name & Role */}
         <div className="mt-4 text-center w-full px-2">
-          <FitText
-            text={displayRiotId(player)}
-            className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100"
-            minScale={0.65}
-          />
+          {opggUrl ? (
+            <a
+              href={opggUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex max-w-full items-center justify-center gap-1 text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+              title="View on OP.GG"
+            >
+              <FitText
+                text={displayRiotId(player)}
+                className="block max-w-full whitespace-nowrap font-bold"
+                minScale={0.65}
+              />
+            </a>
+          ) : (
+            <FitText
+              text={displayRiotId(player)}
+              className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100"
+              minScale={0.65}
+            />
+          )}
           {player.role && (
             <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1 dark:text-slate-400">
               {player.role}
@@ -307,6 +351,7 @@ function PlayerListRow({
 }) {
   const icon = profileIconUrl(stateData?.profile_icon_id)
   const rankIcon = getRankIconSrc(rankData?.tier)
+  const opggUrl = getOpggUrl(player)
 
   const tier = rankData?.tier
   const division = rankData?.rank
@@ -334,11 +379,27 @@ function PlayerListRow({
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <FitText
-            text={displayRiotId(player)}
-            className="block max-w-full whitespace-nowrap font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white"
-            minScale={0.65}
-          />
+          {opggUrl ? (
+            <a
+              href={opggUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex max-w-full items-center text-slate-900 transition-colors hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+              title="View on OP.GG"
+            >
+              <FitText
+                text={displayRiotId(player)}
+                className="block max-w-full whitespace-nowrap font-bold"
+                minScale={0.65}
+              />
+            </a>
+          ) : (
+            <FitText
+              text={displayRiotId(player)}
+              className="block max-w-full whitespace-nowrap font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white"
+              minScale={0.65}
+            />
+          )}
           {player.role && (
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5 dark:text-slate-500">
               {player.role}
@@ -468,6 +529,7 @@ function LatestGamesFeed({
     <div className="space-y-2.5">
       {games.map((g) => {
         const p = playersByPuuid.get(g.puuid)
+        const opggUrl = p ? getOpggUrl(p) : null
         const name = p ? displayRiotId(p) : 'Unknown'
         const when = g.endTs ? timeAgo(g.endTs) : ''
         const champ = champMap[g.championId]
@@ -504,9 +566,21 @@ function LatestGamesFeed({
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2">
-                  <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                    {name}
-                  </span>
+                  {opggUrl ? (
+                    <a
+                      href={opggUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+                      title="View on OP.GG"
+                    >
+                      {name}
+                    </a>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                      {name}
+                    </span>
+                  )}
                   <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{when}</span>
                 </div>
                 <div className="mt-1 flex items-center justify-between gap-2">
