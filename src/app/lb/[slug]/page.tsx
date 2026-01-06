@@ -42,6 +42,7 @@ interface Game {
   durationS?: number
   queueId?: number
   lpChange?: number | null
+  lpNote?: string | null
 }
 
 // --- Helpers ---
@@ -476,6 +477,9 @@ function LatestGamesFeed({
         const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
         const duration = formatDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
+        const lpNote = g.lpNote?.toUpperCase() ?? null
+        const lpTitle =
+          lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : undefined
 
         return (
           <div
@@ -510,22 +514,35 @@ function LatestGamesFeed({
                     {champ?.name || 'Unknown'}
                   </span>
                   {lpChange !== null && (
-                    <span
-                      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
-                        lpChange >= 0
-                          ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
-                          : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
-                      }`}
-                    >
-                      <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                        {lpChange >= 0 ? (
-                          <path d="M10 4l6 8H4l6-8z" />
-                        ) : (
-                          <path d="M10 16l-6-8h12l-6 8z" />
-                        )}
-                      </svg>
-                      {Math.abs(lpChange)} LP
-                    </span>
+                    lpNote ? (
+                      <span
+                        title={lpTitle}
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          lpNote === 'PROMOTED'
+                            ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
+                            : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                        }`}
+                      >
+                        {lpNote}
+                      </span>
+                    ) : (
+                      <span
+                        className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+                          lpChange >= 0
+                            ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
+                            : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                        }`}
+                      >
+                        <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                          {lpChange >= 0 ? (
+                            <path d="M10 4l6 8H4l6-8z" />
+                          ) : (
+                            <path d="M10 16l-6-8h12l-6 8z" />
+                          )}
+                        </svg>
+                        {Math.abs(lpChange)} LP
+                      </span>
+                    )
                   )}
                 </div>
               </div>
@@ -646,18 +663,21 @@ export default async function LeaderboardDetail({
   // Latest Games
   const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 })
   const latestMatchIds = Array.from(new Set((latestRaw ?? []).map((row: any) => row.match_id).filter(Boolean)))
-  const lpByMatchAndPlayer = new Map<string, number>()
+  const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
 
   if (latestMatchIds.length > 0 && puuids.length > 0) {
     const { data: lpEventsRaw } = await supabase
       .from('player_lp_events')
-      .select('match_id, puuid, lp_delta')
+      .select('match_id, puuid, lp_delta, note')
       .in('match_id', latestMatchIds)
       .in('puuid', puuids)
 
     ;(lpEventsRaw ?? []).forEach((row) => {
       if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
-        lpByMatchAndPlayer.set(`${row.match_id}-${row.puuid}`, row.lp_delta)
+        lpByMatchAndPlayer.set(`${row.match_id}-${row.puuid}`, {
+          delta: row.lp_delta,
+          note: row.note ?? null,
+        })
       }
     })
   }
@@ -678,8 +698,9 @@ export default async function LeaderboardDetail({
       row.lp_change ??
       row.lp_delta ??
       row.lp_diff ??
-      lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`) ??
+      lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)?.delta ??
       null,
+    lpNote: lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)?.note ?? null,
   }))
 
   const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null

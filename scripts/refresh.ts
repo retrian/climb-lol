@@ -311,6 +311,9 @@ async function maybeInsertPerGameLpEvent(opts: {
   // only attribute if exactly 1 new game occurred AND we can point to exactly 1 new match
   if (gamesDelta === 1 && newSince.length === 1) {
     const matchId = newSince[0]
+    const lastStep = rankStepIndex(lastTier, lastRank)
+    const nextStep = rankStepIndex(snap.tier, snap.rank)
+    const stepDelta = lastStep !== null && nextStep !== null ? nextStep - lastStep : 0
     const lpDelta = computeLpDelta({
       lastTier,
       lastRank,
@@ -332,7 +335,7 @@ async function maybeInsertPerGameLpEvent(opts: {
       losses_before: lastL,
       losses_after: snap.losses,
       recorded_at: snap.fetched_at,
-      note: null,
+      note: stepDelta > 0 ? 'PROMOTED' : stepDelta < 0 ? 'DEMOTED' : null,
     })
 
     // ignore unique constraint duplicates (reruns)
