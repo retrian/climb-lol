@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
+import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
 import FitText from './FitText'
 import Link from 'next/link'
@@ -57,9 +58,9 @@ function syncTimeAgo(iso?: string | null) {
   return timeAgo(new Date(iso).getTime())
 }
 
-function profileIconUrl(profileIconId?: number | null) {
+function profileIconUrl(profileIconId?: number | null, ddVersion?: string) {
   if (!profileIconId && profileIconId !== 0) return null
-  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
+  const v = ddVersion || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
 }
 
@@ -349,7 +350,7 @@ function PlayerListRow({
   champMap: any
   ddVersion: string
 }) {
-  const icon = profileIconUrl(stateData?.profile_icon_id)
+  const icon = profileIconUrl(stateData?.profile_icon_id, ddVersion)
   const rankIcon = getRankIconSrc(rankData?.tier)
   const opggUrl = getOpggUrl(player)
 
@@ -541,7 +542,9 @@ function LatestGamesFeed({
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
         const lpTitle =
-          lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : undefined
+          lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
+        const lpHoverLabel =
+          lpChange !== null ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` : 'LP'
 
         return (
           <div
@@ -597,7 +600,8 @@ function LatestGamesFeed({
                             : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                         }`}
                       >
-                        {lpNote}
+                        <span className="group-hover:hidden">{lpNote}</span>
+                        <span className="hidden group-hover:inline">{lpHoverLabel}</span>
                       </span>
                     ) : (
                       <span
@@ -655,7 +659,8 @@ export default async function LeaderboardDetail({
   const { slug } = await params
   const supabase = await createClient()
 
-  const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
+  const latestPatch = await getLatestDdragonVersion()
+  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   const champMap = await getChampionMap(ddVersion)
 
   // Fetches banner_url directly from DB
@@ -756,26 +761,25 @@ export default async function LeaderboardDetail({
     })
   }
 
-  const latestGames: Game[] = (latestRaw ?? []).map((row: any) => ({
-    matchId: row.match_id,
-    puuid: row.puuid,
-    championId: row.champion_id,
-    win: row.win,
-    k: row.kills ?? 0,
-    d: row.deaths ?? 0,
-    a: row.assists ?? 0,
-    cs: row.cs ?? 0,
-    endTs: row.game_end_ts,
-    durationS: row.game_duration_s,
-    queueId: row.queue_id,
-    lpChange:
-      row.lp_change ??
-      row.lp_delta ??
-      row.lp_diff ??
-      lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)?.delta ??
-      null,
-    lpNote: lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)?.note ?? null,
-  }))
+  const latestGames: Game[] = (latestRaw ?? []).map((row: any) => {
+    const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
+
+    return {
+      matchId: row.match_id,
+      puuid: row.puuid,
+      championId: row.champion_id,
+      win: row.win,
+      k: row.kills ?? 0,
+      d: row.deaths ?? 0,
+      a: row.assists ?? 0,
+      cs: row.cs ?? 0,
+      endTs: row.game_end_ts,
+      durationS: row.game_duration_s,
+      queueId: row.queue_id,
+      lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null,
+      lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+    }
+  })
 
   const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null
   const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
@@ -839,7 +843,7 @@ export default async function LeaderboardDetail({
                         <PodiumCard
                           rank={actualRank}
                           player={p}
-                          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id)}
+                          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id, ddVersion)}
                           rankData={r}
                           winrate={formatWinrate(r?.wins, r?.losses)}
                           topChamps={champsBy.get(p.puuid) ?? []}

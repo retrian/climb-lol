@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const RIOT_API_KEY = process.env.RIOT_API_KEY!
+const RANKED_SEASON_START = process.env.RANKED_SEASON_START
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !RIOT_API_KEY) {
   throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / RIOT_API_KEY')
@@ -25,6 +26,84 @@ const QUEUE_FLEX = 'RANKED_FLEX_SR'
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+async function resetSeasonDataIfNeeded() {
+  if (!RANKED_SEASON_START) return
+
+  const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
+  if (Number.isNaN(seasonStartMs)) {
+    console.warn('[season] invalid RANKED_SEASON_START:', RANKED_SEASON_START)
+    return
+  }
+
+  const { data: oldMatch, error: oldMatchErr } = await supabase
+    .from('matches')
+    .select('match_id')
+    .lt('game_end_ts', seasonStartMs)
+    .limit(1)
+    .maybeSingle()
+
+  if (oldMatchErr) throw oldMatchErr
+  if (!oldMatch) return
+
+  console.log('[season] clearing data before', RANKED_SEASON_START)
+
+  const chunkSize = 500
+  let offset = 0
+
+  while (true) {
+    const { data: matches, error: matchErr } = await supabase
+      .from('matches')
+      .select('match_id')
+      .lt('game_end_ts', seasonStartMs)
+      .range(offset, offset + chunkSize - 1)
+
+    if (matchErr) throw matchErr
+    if (!matches || matches.length === 0) break
+
+    const matchIds = matches.map((m: any) => m.match_id).filter(Boolean)
+    if (!matchIds.length) break
+
+    const { error: partErr } = await supabase.from('match_participants').delete().in('match_id', matchIds)
+    if (partErr) throw partErr
+
+    const { error: lpEventErr } = await supabase.from('player_lp_events').delete().in('match_id', matchIds)
+    if (lpEventErr) throw lpEventErr
+
+    const { error: matchDeleteErr } = await supabase.from('matches').delete().in('match_id', matchIds)
+    if (matchDeleteErr) throw matchDeleteErr
+
+    offset += chunkSize
+  }
+
+  const { error: historyErr } = await supabase.from('player_lp_history').delete().lt('fetched_at', RANKED_SEASON_START)
+  if (historyErr) throw historyErr
+
+  const { error: snapshotErr } = await supabase
+    .from('player_rank_snapshot')
+    .delete()
+    .lt('fetched_at', RANKED_SEASON_START)
+  if (snapshotErr) throw snapshotErr
+
+  const { error: topErr } = await supabase.from('player_top_champions').delete().neq('puuid', '')
+  if (topErr) throw topErr
+
+  const { error: stateErr } = await supabase
+    .from('player_riot_state')
+    .update({
+      last_solo_lp: null,
+      last_solo_tier: null,
+      last_solo_rank: null,
+      last_solo_wins: null,
+      last_solo_losses: null,
+      last_solo_match_id: null,
+      last_poll_at: null,
+    })
+    .neq('puuid', '')
+  if (stateErr) throw stateErr
+
+  console.log('[season] reset complete')
 }
 
 async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
@@ -172,8 +251,18 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
  * Returns the full ids list + which ones were newly inserted.
  */
 async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
+  const params = new URLSearchParams({ queue: '420', count: '10' })
+  if (RANKED_SEASON_START) {
+    const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
+    if (Number.isNaN(seasonStartMs)) {
+      console.warn('[season] invalid RANKED_SEASON_START for match filter:', RANKED_SEASON_START)
+    } else {
+      params.set('startTime', Math.floor(seasonStartMs / 1000).toString())
+    }
+  }
+
   const ids = await riotFetch<string[]>(
-    `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?queue=420&count=10`
+    `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params.toString()}`
   )
 
   const now = new Date().toISOString()
@@ -519,6 +608,8 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
 }
 
 async function main() {
+  await resetSeasonDataIfNeeded()
+
   // hourly cutoffs
   await fetchAndUpsertRankCutoffsIfDue()
 
