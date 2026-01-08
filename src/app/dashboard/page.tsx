@@ -8,6 +8,14 @@ const VISIBILITY = ['PUBLIC', 'UNLISTED', 'PRIVATE'] as const
 type Visibility = (typeof VISIBILITY)[number]
 
 const ROLES = ['TOP', 'JGL', 'MID', 'ADC', 'SUP'] as const
+const MAX_PLAYERS = 30
+
+function normalizePlayerError(message: string) {
+  if (message.includes('Player limit reached')) {
+    return `Player limit reached (${MAX_PLAYERS} max)`
+  }
+  return message
+}
 
 // --- Helper Functions ---
 function slugify(input: string) {
@@ -57,7 +65,7 @@ export default async function DashboardPage({
   if (!user) redirect('/sign-in')
 
   const sp = await Promise.resolve(searchParams ?? {})
-  const playerErr = sp.player_err ? decodeURIComponent(sp.player_err) : null
+  const playerErr = sp.player_err ? normalizePlayerError(decodeURIComponent(sp.player_err)) : null
   const playerOk = sp.player_ok ? decodeURIComponent(sp.player_ok) : null
   const showDeleteConfirm = sp.delete_confirm === '1'
   const section = (sp.section ?? 'top').toString()
@@ -258,7 +266,9 @@ export default async function DashboardPage({
       .select('*', { count: 'exact', head: true })
       .eq('leaderboard_id', lb.id)
 
-    if ((count ?? 0) >= 30) redirect(sectionRedirect({ section: 'players', err: 'Max 30 players per leaderboard' }))
+    if ((count ?? 0) >= MAX_PLAYERS) {
+      redirect(sectionRedirect({ section: 'players', err: `Max ${MAX_PLAYERS} players per leaderboard` }))
+    }
 
     let puuid = ''
     try {
@@ -627,12 +637,14 @@ export default async function DashboardPage({
               <summary className="flex cursor-pointer items-center justify-between p-6 hover:bg-slate-50 dark:hover:bg-slate-900/60">
                 <div>
                   <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Players</h2>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Add and manage up to 30 players</p>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                    Add and manage up to {MAX_PLAYERS} players
+                  </p>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <div className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                    {playerCount}/30
+                    {playerCount}/{MAX_PLAYERS}
                   </div>
                   <svg
                     className="h-5 w-5 text-slate-400 transition group-open:rotate-180 dark:text-slate-500"
@@ -690,10 +702,10 @@ export default async function DashboardPage({
 
                     <button
                       type="submit"
-                      disabled={playerCount >= 30}
+                      disabled={playerCount >= MAX_PLAYERS}
                       className="w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
                     >
-                      {playerCount >= 30 ? 'Maximum Players Reached' : 'Add Player'}
+                      {playerCount >= MAX_PLAYERS ? 'Maximum Players Reached' : 'Add Player'}
                     </button>
 
                     <p className="text-xs text-slate-500 dark:text-slate-400">
