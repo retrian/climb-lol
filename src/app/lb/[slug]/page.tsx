@@ -543,7 +543,8 @@ function LatestGamesFeed({
         const lpNote = g.lpNote?.toUpperCase() ?? null
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
-        const lpHoverLabel = lpChange !== null ? `${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP'
+        const lpHoverLabel =
+          lpChange !== null ? `${lpChange >= 0 ? '▲' : '▼'}${Math.abs(lpChange)} LP` : 'LP'
 
         return (
           <div
