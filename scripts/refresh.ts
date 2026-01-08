@@ -2,11 +2,16 @@ import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = process.env.SUPABASE_URL!
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
-const RIOT_API_KEY = process.env.RIOT_API_KEY!
+const rawRiotApiKey = process.env.RIOT_API_KEY
 const RANKED_SEASON_START = process.env.RANKED_SEASON_START
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !RIOT_API_KEY) {
+if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !rawRiotApiKey) {
   throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / RIOT_API_KEY')
+}
+
+const RIOT_API_KEY = rawRiotApiKey.trim().replace(/^['"]|['"]$/g, '')
+if (!RIOT_API_KEY) {
+  throw new Error('RIOT_API_KEY is empty after trimming quotes')
 }
 
 console.log('[env] RIOT_API_KEY prefix=', RIOT_API_KEY.slice(0, 5), 'len=', RIOT_API_KEY.length)
@@ -119,6 +124,9 @@ async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
 
   if (!res.ok) {
     const t = await res.text().catch(() => '')
+    if (res.status === 401) {
+      throw new Error('Riot API key invalid or missing. Check RIOT_API_KEY (no quotes).')
+    }
     console.error('[riotFetch] FAIL', res.status, url, t.slice(0, 200))
     throw new Error(`Riot ${res.status}: ${t}`.slice(0, 240))
   }
