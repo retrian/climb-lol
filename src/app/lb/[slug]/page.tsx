@@ -697,7 +697,17 @@ export default async function LeaderboardDetail({
 
   const stateBy = new Map((statesRaw ?? []).map((s) => [s.puuid, s]))
   const rankBy = new Map()
-  const ranksList = ranksRaw ?? []
+  const ranksList = (() => {
+    const list = ranksRaw ?? []
+    const seasonStartRaw = process.env.RANKED_SEASON_START
+    if (!seasonStartRaw) return list
+    const seasonStartMs = new Date(seasonStartRaw).getTime()
+    if (Number.isNaN(seasonStartMs)) return list
+    return list.filter((rank) => {
+      if (!rank?.fetched_at) return false
+      return new Date(rank.fetched_at).getTime() >= seasonStartMs
+    })
+  })()
 
   puuids.forEach((pid) => {
     const solo = ranksList.find((r) => r.puuid === pid && r.queue_type === 'RANKED_SOLO_5x5')
