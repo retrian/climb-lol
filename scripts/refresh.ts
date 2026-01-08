@@ -251,8 +251,18 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
  * Returns the full ids list + which ones were newly inserted.
  */
 async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
+  const params = new URLSearchParams({ queue: '420', count: '10' })
+  if (RANKED_SEASON_START) {
+    const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
+    if (Number.isNaN(seasonStartMs)) {
+      console.warn('[season] invalid RANKED_SEASON_START for match filter:', RANKED_SEASON_START)
+    } else {
+      params.set('startTime', Math.floor(seasonStartMs / 1000).toString())
+    }
+  }
+
   const ids = await riotFetch<string[]>(
-    `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?queue=420&count=10`
+    `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params.toString()}`
   )
 
   const now = new Date().toISOString()
