@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { resolvePuuid } from '@/lib/riot/resolvePuuid'
 
 // --- Constants & Types ---
 const VISIBILITY = ['PUBLIC', 'UNLISTED', 'PRIVATE'] as const
@@ -24,29 +25,6 @@ function parseRiotId(input: string): { gameName: string; tagLine: string } {
     throw new Error('Riot ID must be in the format gameName#tagLine')
   }
   return { gameName: parts[0].trim(), tagLine: parts[1].trim() }
-}
-
-async function resolvePuuid(gameName: string, tagLine: string): Promise<string> {
-  const key = process.env.RIOT_API_KEY
-  if (!key) throw new Error('RIOT_API_KEY is not set')
-
-  const url = `https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(
-    gameName
-  )}/${encodeURIComponent(tagLine)}`
-
-  const res = await fetch(url, {
-    headers: { 'X-Riot-Token': key },
-    cache: 'no-store',
-  })
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '')
-    throw new Error(`Riot lookup failed (${res.status}). ${txt}`.slice(0, 180))
-  }
-
-  const data = (await res.json()) as { puuid?: string }
-  if (!data?.puuid) throw new Error('No puuid returned from Riot')
-  return data.puuid
 }
 
 function sectionRedirect(opts: {
