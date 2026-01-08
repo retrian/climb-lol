@@ -1,6 +1,7 @@
+import { getRiotApiKey } from "./getRiotApiKey";
+
 export async function resolvePuuid(gameName: string, tagLine: string): Promise<string> {
-  const key = process.env.RIOT_API_KEY;
-  if (!key) throw new Error("RIOT_API_KEY is not set");
+  const key = getRiotApiKey();
 
   const url = `https://americas.api.riotgames.com/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(gameName)}/${encodeURIComponent(tagLine)}`;
 
