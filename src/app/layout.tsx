@@ -50,6 +50,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               >
                 Leaderboards
               </Link>
+              <Link
+                className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
+                href="/faq"
+              >
+                FAQ
+              </Link>
               {user ? (
                 <Link
                   className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
