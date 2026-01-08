@@ -1,7 +1,9 @@
 import Link from 'next/link'
+import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePuuid } from '@/lib/riot/resolvePuuid'
+import { AddPlayerButton } from './AddPlayerButton'
 
 // --- Constants & Types ---
 const VISIBILITY = ['PUBLIC', 'UNLISTED', 'PRIVATE'] as const
@@ -298,6 +300,7 @@ export default async function DashboardPage({
 
     if (error) redirect(sectionRedirect({ section: 'players', err: error.message }))
 
+    revalidatePath('/dashboard')
     // Key change: always land back on Players, open, and scrolled there
     redirect(sectionRedirect({ section: 'players', ok: `Added ${gameName}#${tagLine}` }))
   }
@@ -700,13 +703,7 @@ export default async function DashboardPage({
                       />
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={playerCount >= MAX_PLAYERS}
-                      className="w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                    >
-                      {playerCount >= MAX_PLAYERS ? 'Maximum Players Reached' : 'Add Player'}
-                    </button>
+                    <AddPlayerButton isAtLimit={playerCount >= MAX_PLAYERS} />
 
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       Tip: after adding, you’ll stay in this section so you can keep adding players fast.
