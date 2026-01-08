@@ -218,6 +218,24 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
 
   const now = new Date().toISOString()
 
+  if (!entries.length) {
+    const { error: snapErr } = await supabase.from('player_rank_snapshot').delete().eq('puuid', puuid)
+    if (snapErr) throw snapErr
+
+    await upsertRiotState(puuid, {
+      last_rank_sync_at: now,
+      last_solo_lp: null,
+      last_solo_tier: null,
+      last_solo_rank: null,
+      last_solo_wins: null,
+      last_solo_losses: null,
+      last_solo_match_id: null,
+      last_error: null,
+    })
+
+    return null
+  }
+
   for (const e of entries) {
     if (e.queueType !== QUEUE_SOLO && e.queueType !== QUEUE_FLEX) continue
 
