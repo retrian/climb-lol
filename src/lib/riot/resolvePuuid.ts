@@ -13,7 +13,14 @@ export async function resolvePuuid(gameName: string, tagLine: string): Promise<s
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Riot lookup failed (${res.status}). ${body}`.slice(0, 200));
+    console.error("[resolvePuuid] Riot lookup failed", res.status, body.slice(0, 200));
+    let message = `Riot lookup failed (${res.status}).`;
+    if (res.status === 401) {
+      message = "Riot API key is invalid or missing.";
+    } else if (res.status === 429) {
+      message = "Riot API rate limit hit. Please try again in a moment.";
+    }
+    throw new Error(message);
   }
 
   const data = (await res.json()) as { puuid: string };
