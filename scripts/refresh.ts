@@ -50,7 +50,9 @@ async function resetSeasonDataIfNeeded() {
     .maybeSingle()
 
   if (oldMatchErr) throw oldMatchErr
-  if (!oldMatch) return
+  if (!oldMatch) {
+    console.log('[season] no pre-season matches found; still resetting rank data')
+  }
 
   console.log('[season] clearing data before', RANKED_SEASON_START)
 
