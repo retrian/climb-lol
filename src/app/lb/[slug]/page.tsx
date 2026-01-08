@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
+import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
 import FitText from './FitText'
 import Link from 'next/link'
@@ -541,7 +542,7 @@ function LatestGamesFeed({
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
         const lpTitle =
-          lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : undefined
+          lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
 
         return (
           <div
@@ -657,6 +658,7 @@ export default async function LeaderboardDetail({
 
   const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   const champMap = await getChampionMap(ddVersion)
+  const latestPatch = await getLatestDdragonVersion()
 
   // Fetches banner_url directly from DB
   const { data: lb } = await supabase
@@ -756,26 +758,25 @@ export default async function LeaderboardDetail({
     })
   }
 
-  const latestGames: Game[] = (latestRaw ?? []).map((row: any) => ({
-    matchId: row.match_id,
-    puuid: row.puuid,
-    championId: row.champion_id,
-    win: row.win,
-    k: row.kills ?? 0,
-    d: row.deaths ?? 0,
-    a: row.assists ?? 0,
-    cs: row.cs ?? 0,
-    endTs: row.game_end_ts,
-    durationS: row.game_duration_s,
-    queueId: row.queue_id,
-    lpChange:
-      row.lp_change ??
-      row.lp_delta ??
-      row.lp_diff ??
-      lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)?.delta ??
-      null,
-    lpNote: lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)?.note ?? null,
-  }))
+  const latestGames: Game[] = (latestRaw ?? []).map((row: any) => {
+    const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
+
+    return {
+      matchId: row.match_id,
+      puuid: row.puuid,
+      championId: row.champion_id,
+      win: row.win,
+      k: row.kills ?? 0,
+      d: row.deaths ?? 0,
+      a: row.assists ?? 0,
+      cs: row.cs ?? 0,
+      endTs: row.game_end_ts,
+      durationS: row.game_duration_s,
+      queueId: row.queue_id,
+      lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null,
+      lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+    }
+  })
 
   const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null
   const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
@@ -796,6 +797,8 @@ export default async function LeaderboardDetail({
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
+          currentPatch={ddVersion}
+          latestPatch={latestPatch}
           actionHref={`/lb/${slug}/graph`}
           actionLabel="View graph"
         />
@@ -908,6 +911,8 @@ function TeamHeaderCard({
   lastUpdated,
   cutoffs,
   bannerUrl,
+  currentPatch,
+  latestPatch,
   actionHref,
   actionLabel,
 }: {
@@ -917,9 +922,13 @@ function TeamHeaderCard({
   lastUpdated: string | null
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
+  currentPatch: string
+  latestPatch: string | null
   actionHref: string
   actionLabel: string
 }) {
+  const hasPatchUpdate = Boolean(latestPatch && latestPatch !== currentPatch)
+
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       {/* Background pattern */}
@@ -946,6 +955,20 @@ function TeamHeaderCard({
             <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
               {visibility}
             </span>
+            <span
+              className="inline-flex items-center rounded-full bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200/70 uppercase tracking-wider dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700/70"
+              title={`Current patch ${currentPatch}`}
+            >
+              Patch {currentPatch}
+            </span>
+            {hasPatchUpdate && (
+              <span
+                className="inline-flex items-center rounded-full bg-amber-50 px-3.5 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200/80 uppercase tracking-wider dark:bg-amber-500/20 dark:text-amber-100 dark:ring-amber-400/40"
+                title={`New patch detected: ${latestPatch}`}
+              >
+                New patch {latestPatch}
+              </span>
+            )}
             {actionHref && actionLabel && (
               <Link
                 href={actionHref}
