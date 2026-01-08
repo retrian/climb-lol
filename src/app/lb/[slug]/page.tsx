@@ -58,9 +58,9 @@ function syncTimeAgo(iso?: string | null) {
   return timeAgo(new Date(iso).getTime())
 }
 
-function profileIconUrl(profileIconId?: number | null) {
+function profileIconUrl(profileIconId?: number | null, ddVersion?: string) {
   if (!profileIconId && profileIconId !== 0) return null
-  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
+  const v = ddVersion || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
 }
 
@@ -350,7 +350,7 @@ function PlayerListRow({
   champMap: any
   ddVersion: string
 }) {
-  const icon = profileIconUrl(stateData?.profile_icon_id)
+  const icon = profileIconUrl(stateData?.profile_icon_id, ddVersion)
   const rankIcon = getRankIconSrc(rankData?.tier)
   const opggUrl = getOpggUrl(player)
 
@@ -543,6 +543,7 @@ function LatestGamesFeed({
         const lpNote = g.lpNote?.toUpperCase() ?? null
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
+        const lpHoverLabel = lpChange !== null ? `${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP'
 
         return (
           <div
@@ -598,7 +599,8 @@ function LatestGamesFeed({
                             : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                         }`}
                       >
-                        {lpNote}
+                        <span className="group-hover:hidden">{lpNote}</span>
+                        <span className="hidden group-hover:inline">{lpHoverLabel}</span>
                       </span>
                     ) : (
                       <span
@@ -656,9 +658,9 @@ export default async function LeaderboardDetail({
   const { slug } = await params
   const supabase = await createClient()
 
-  const ddVersion = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-  const champMap = await getChampionMap(ddVersion)
   const latestPatch = await getLatestDdragonVersion()
+  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
+  const champMap = await getChampionMap(ddVersion)
 
   // Fetches banner_url directly from DB
   const { data: lb } = await supabase
@@ -797,8 +799,6 @@ export default async function LeaderboardDetail({
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
-          currentPatch={ddVersion}
-          latestPatch={latestPatch}
           actionHref={`/lb/${slug}/graph`}
           actionLabel="View graph"
         />
@@ -842,7 +842,7 @@ export default async function LeaderboardDetail({
                         <PodiumCard
                           rank={actualRank}
                           player={p}
-                          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id)}
+                          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id, ddVersion)}
                           rankData={r}
                           winrate={formatWinrate(r?.wins, r?.losses)}
                           topChamps={champsBy.get(p.puuid) ?? []}
@@ -911,8 +911,6 @@ function TeamHeaderCard({
   lastUpdated,
   cutoffs,
   bannerUrl,
-  currentPatch,
-  latestPatch,
   actionHref,
   actionLabel,
 }: {
@@ -922,13 +920,9 @@ function TeamHeaderCard({
   lastUpdated: string | null
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
-  currentPatch: string
-  latestPatch: string | null
   actionHref: string
   actionLabel: string
 }) {
-  const hasPatchUpdate = Boolean(latestPatch && latestPatch !== currentPatch)
-
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       {/* Background pattern */}
@@ -955,20 +949,6 @@ function TeamHeaderCard({
             <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
               {visibility}
             </span>
-            <span
-              className="inline-flex items-center rounded-full bg-slate-100 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200/70 uppercase tracking-wider dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700/70"
-              title={`Current patch ${currentPatch}`}
-            >
-              Patch {currentPatch}
-            </span>
-            {hasPatchUpdate && (
-              <span
-                className="inline-flex items-center rounded-full bg-amber-50 px-3.5 py-1.5 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200/80 uppercase tracking-wider dark:bg-amber-500/20 dark:text-amber-100 dark:ring-amber-400/40"
-                title={`New patch detected: ${latestPatch}`}
-              >
-                New patch {latestPatch}
-              </span>
-            )}
             {actionHref && actionLabel && (
               <Link
                 href={actionHref}
