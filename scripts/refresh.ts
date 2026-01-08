@@ -84,13 +84,10 @@ async function resetSeasonDataIfNeeded() {
     offset += chunkSize
   }
 
-  const { error: historyErr } = await supabase.from('player_lp_history').delete().lt('fetched_at', RANKED_SEASON_START)
+  const { error: historyErr } = await supabase.from('player_lp_history').delete().neq('puuid', '')
   if (historyErr) throw historyErr
 
-  const { error: snapshotErr } = await supabase
-    .from('player_rank_snapshot')
-    .delete()
-    .lt('fetched_at', RANKED_SEASON_START)
+  const { error: snapshotErr } = await supabase.from('player_rank_snapshot').delete().neq('puuid', '')
   if (snapshotErr) throw snapshotErr
 
   const { error: topErr } = await supabase.from('player_top_champions').delete().neq('puuid', '')
