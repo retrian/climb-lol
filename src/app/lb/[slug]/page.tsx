@@ -545,6 +545,7 @@ function LatestGamesFeed({
         const duration = formatDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
+        const isRemake = lpNote?.includes('REMAKE') ?? false
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
         const lpHoverLabel =
@@ -594,14 +595,16 @@ function LatestGamesFeed({
                   <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
                     {champ?.name || 'Unknown'}
                   </span>
-                  {lpChange !== null && (
+                  {lpChange !== null ? (
                     lpNote ? (
                       <span
                         title={lpTitle}
                         className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                           lpNote === 'PROMOTED'
                             ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
-                            : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                            : isRemake
+                              ? 'text-slate-500 bg-slate-100 dark:text-slate-200 dark:bg-slate-700/40'
+                              : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                         }`}
                       >
                         <span className="group-hover:hidden">{lpNote}</span>
@@ -625,6 +628,13 @@ function LatestGamesFeed({
                         {Math.abs(lpChange)} LP
                       </span>
                     )
+                  ) : (
+                    <span
+                      title={lpTitle}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
+                    >
+                      -
+                    </span>
                   )}
                 </div>
               </div>
