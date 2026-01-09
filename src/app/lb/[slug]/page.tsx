@@ -827,6 +827,7 @@ export default async function LeaderboardDetail({
 
   // Latest Games
   const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 })
+  const seasonStartIso = '2025-01-08T20:00:00.000Z'
   
   // Optimization: Map directly to Set to avoid intermediate array creation if possible, 
   // but here we need array for the .in() query. Filter only once.
@@ -841,17 +842,31 @@ export default async function LeaderboardDetail({
     }
   }
 
+  const seasonStartMsLatest = new Date(seasonStartIso).getTime()
+  const { data: latestMatchesRaw } = latestMatchIds.length
+    ? await supabase
+        .from('matches')
+        .select('match_id, fetched_at, game_end_ts')
+        .in('match_id', latestMatchIds)
+        .gte('fetched_at', seasonStartIso)
+        .gte('game_end_ts', seasonStartMsLatest)
+    : { data: [] as Array<{ match_id: string; fetched_at: string }> }
+
+  const allowedMatchIds = new Set((latestMatchesRaw ?? []).map((row) => row.match_id))
+  const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => allowedMatchIds.has(row.match_id))
+  const filteredMatchIds = latestMatchIds.filter((matchId) => allowedMatchIds.has(matchId))
+
   // FIX: Collect PUUIDs from the games themselves so we get LP data even if the player isn't in the Top 50 loaded above
-  const gamePuuids = (latestRaw ?? []).map((row: any) => row.puuid).filter(Boolean)
+  const gamePuuids = filteredLatestRaw.map((row: any) => row.puuid).filter(Boolean)
   const allRelevantPuuids = Array.from(new Set([...puuids, ...gamePuuids]))
 
   const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
 
-  if (latestMatchIds.length > 0 && allRelevantPuuids.length > 0) {
+  if (filteredMatchIds.length > 0 && allRelevantPuuids.length > 0) {
     const { data: lpEventsRaw } = await supabase
       .from('player_lp_events')
       .select('match_id, puuid, lp_delta, note')
-      .in('match_id', latestMatchIds)
+      .in('match_id', filteredMatchIds)
       .in('puuid', allRelevantPuuids)
 
     if (lpEventsRaw) {
@@ -866,7 +881,7 @@ export default async function LeaderboardDetail({
     }
   }
 
-  const latestGames: Game[] = (latestRaw ?? []).map((row: any) => {
+  const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
     const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
     const durationS = row.game_duration_s ?? row.gameDuration

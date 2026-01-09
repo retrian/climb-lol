@@ -186,8 +186,9 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
+  const seasonStartIso = '2025-01-08T20:00:00.000Z'
   const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000
-  const seasonStartMs = new Date('2025-01-08T20:00:00.000Z').getTime()
+  const seasonStartMs = new Date(seasonStartIso).getTime()
   const minDate = new Date(Math.max(ninetyDaysAgo, seasonStartMs)).toISOString()
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
