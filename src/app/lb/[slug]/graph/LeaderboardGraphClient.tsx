@@ -31,8 +31,8 @@ type NormalizedPoint = LpPoint & {
 
 type FilteredPoint = NormalizedPoint
 
+// ✅ remove 30d, keep 14d
 const TIME_OPTIONS = [
-  { id: '30d', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
   { id: '14d', label: '14d', ms: 14 * 24 * 60 * 60 * 1000 },
   { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
   { id: '24h', label: '24h', ms: 24 * 60 * 60 * 1000 },
@@ -40,10 +40,11 @@ const TIME_OPTIONS = [
   { id: '6h', label: '6h', ms: 6 * 60 * 60 * 1000 },
 ]
 
+// ✅ summaries should match
 const RANGE_SUMMARIES = [
   { id: 'day', label: '24h', ms: 24 * 60 * 60 * 1000 },
   { id: 'week', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
-  { id: 'month', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
+  { id: 'twoWeeks', label: '14d', ms: 14 * 24 * 60 * 60 * 1000 },
 ]
 
 const ZOOM_LEVELS = [1, 2, 3, 4]
@@ -130,6 +131,69 @@ function formatDelta(delta: number) {
   return `${rounded > 0 ? '+' : ''}${rounded}`
 }
 
+/**
+ * ✅ Ladder LP (what you want for "Rank delta"):
+ * - Each division is 0–100 LP
+ * - Each tier below Master is 4 divisions (400 LP)
+ * - Master+ continues from Diamond I 100
+ * - GM/Chall sit above Master using cutoffs
+ */
+const TIER_ORDER_LOW_TO_HIGH = [
+  'IRON',
+  'BRONZE',
+  'SILVER',
+  'GOLD',
+  'PLATINUM',
+  'EMERALD',
+  'DIAMOND',
+  'MASTER',
+  'GRANDMASTER',
+  'CHALLENGER',
+] as const
+
+const DIV_ORDER_LOW_TO_HIGH = ['IV', 'III', 'II', 'I'] as const
+
+function ladderLpWithCutoffs(
+  point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>,
+  cutoffs: RankCutoffs
+) {
+  const tier = (point.tier ?? '').toUpperCase()
+  const div = (point.rank ?? '').toUpperCase()
+  const lp = Math.max(0, point.lp ?? 0)
+
+  const tierIndex = TIER_ORDER_LOW_TO_HIGH.indexOf(tier as any)
+  if (tierIndex === -1) return lp
+
+  // Base for tiers below Master: tierIndex * 400
+  // Division offset: IV=0, III=100, II=200, I=300
+  const divIndex = DIV_ORDER_LOW_TO_HIGH.indexOf(div as any)
+
+  // Everything below Master
+  if (tierIndex <= TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')) {
+    const base = tierIndex * 400
+    const divOffset = divIndex === -1 ? 0 : divIndex * 100
+    return base + divOffset + lp
+  }
+
+  // Base at Diamond I 100 (end of Diamond ladder)
+  const diamondIndex = TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')
+  const baseMaster = diamondIndex * 400 + 3 * 100 + 100 // Diamond I (divIndex=3) at 100
+
+  if (tier === 'MASTER') {
+    return baseMaster + lp
+  }
+
+  if (tier === 'GRANDMASTER') {
+    return baseMaster + (cutoffs.grandmaster ?? 0) + lp
+  }
+
+  if (tier === 'CHALLENGER') {
+    return baseMaster + (cutoffs.challenger ?? 0) + lp
+  }
+
+  return baseMaster + lp
+}
+
 type TooltipState = {
   puuid: string
   x: number
@@ -210,7 +274,7 @@ export default function LeaderboardGraphClient({
     return normalizedPoints.filter((p) => p.ts >= cutoff)
   }, [timeRange, normalizedPoints])
 
-  const { zoomedPoints, series } = useMemo(() => {
+  const { series } = useMemo(() => {
     let zPoints = filteredPoints
     if (filteredPoints.length > 0 && zoom !== 1) {
       const xValues = filteredPoints.map((p) => p.ts)
@@ -230,9 +294,10 @@ export default function LeaderboardGraphClient({
       list.sort((a, b) => a.ts - b.ts)
     }
 
-    return { zoomedPoints: zPoints, series: byPlayer }
+    return { series: byPlayer }
   }, [filteredPoints, zoom])
 
+  // ✅ FIXED: use ladder LP delta (so Emerald I 55 -> Diamond IV 15 = +60)
   const rangeStats = useMemo(() => {
     const now = Date.now()
     return RANGE_SUMMARIES.map((range) => {
@@ -244,22 +309,21 @@ export default function LeaderboardGraphClient({
         const windowed = list.filter((p) => p.ts >= cutoff)
         if (windowed.length < 2) continue
         windowed.sort((a, b) => a.ts - b.ts)
+
         const start = windowed[0]
         const end = windowed[windowed.length - 1]
-        const delta = (end.lp ?? 0) - (start.lp ?? 0)
 
-        if (!bestGain || delta > bestGain.delta) {
-          bestGain = { puuid, delta, start, end }
-        }
+        const startL = ladderLpWithCutoffs(start, cutoffs)
+        const endL = ladderLpWithCutoffs(end, cutoffs)
+        const delta = endL - startL
 
-        if (delta < 0 && (!bestLoss || delta < bestLoss.delta)) {
-          bestLoss = { puuid, delta, start, end }
-        }
+        if (!bestGain || delta > bestGain.delta) bestGain = { puuid, delta, start, end }
+        if (!bestLoss || delta < bestLoss.delta) bestLoss = { puuid, delta, start, end }
       }
 
       return { range, bestGain, bestLoss }
     })
-  }, [pointsByPlayer])
+  }, [pointsByPlayer, cutoffs])
 
   const chart = useMemo(() => {
     const allPoints = [...series.values()].flat()
@@ -278,7 +342,7 @@ export default function LeaderboardGraphClient({
       scoreRange: maxScore - minScore || 1,
       minX,
       maxX,
-      xRange: maxX - minX || 1
+      xRange: maxX - minX || 1,
     }
   }, [series])
 
@@ -310,7 +374,10 @@ export default function LeaderboardGraphClient({
       if (rangeMs <= 12 * 60 * 60 * 1000) {
         label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       } else if (rangeMs <= 3 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: 'numeric' })
+        label =
+          date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
+          ' ' +
+          date.toLocaleTimeString([], { hour: 'numeric' })
       } else if (rangeMs <= 10 * 24 * 60 * 60 * 1000) {
         label = date.toLocaleDateString([], { weekday: 'short' })
       } else if (rangeMs <= 14 * 24 * 60 * 60 * 1000) {
@@ -453,14 +520,18 @@ export default function LeaderboardGraphClient({
                 const path = list
                   .map((point, idx) => {
                     const x = padding.left + ((point.ts - chart.minX) / chart.xRange) * innerWidth
-                    const y = padding.top + innerHeight - ((point.score - chart.minScore) / chart.scoreRange) * innerHeight
+                    const y =
+                      padding.top +
+                      innerHeight -
+                      ((point.score - chart.minScore) / chart.scoreRange) * innerHeight
                     return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`
                   })
                   .join(' ')
 
                 const lastPoint = list[list.length - 1]
                 const lastX = padding.left + ((lastPoint.ts - chart.minX) / chart.xRange) * innerWidth
-                const lastY = padding.top + innerHeight - ((lastPoint.score - chart.minScore) / chart.scoreRange) * innerHeight
+                const lastY =
+                  padding.top + innerHeight - ((lastPoint.score - chart.minScore) / chart.scoreRange) * innerHeight
 
                 return (
                   <g key={puuid}>
@@ -480,7 +551,6 @@ export default function LeaderboardGraphClient({
                   </g>
                 )
               })}
-
             </svg>
 
             <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
@@ -488,11 +558,11 @@ export default function LeaderboardGraphClient({
                 const player = playersByPuuid.get(puuid)
                 if (!player) return null
                 return (
-                  <div key={puuid} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-                    <span
-                      className="h-2.5 w-2.5 rounded-full"
-                      style={{ backgroundColor: colorByPuuid.get(puuid) }}
-                    />
+                  <div
+                    key={puuid}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 shadow-sm dark:border-slate-700 dark:bg-slate-900"
+                  >
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colorByPuuid.get(puuid) }} />
                     <span className="font-semibold">{player.name}</span>
                   </div>
                 )
@@ -579,7 +649,7 @@ export default function LeaderboardGraphClient({
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Not enough data</div>
+                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Insufficient data</div>
                 )}
               </div>
 
@@ -611,7 +681,7 @@ export default function LeaderboardGraphClient({
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Not enough data</div>
+                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Insufficient data</div>
                 )}
               </div>
             </div>
