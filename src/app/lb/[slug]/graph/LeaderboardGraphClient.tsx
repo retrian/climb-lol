@@ -209,6 +209,36 @@ function ladderLpWithCutoffs(
   return baseMaster + lp
 }
 
+function nextRankScore(point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>, cutoffs: RankCutoffs) {
+  const tier = (point.tier ?? '').toUpperCase()
+  const div = (point.rank ?? '').toUpperCase()
+  const tierIndex = TIER_ORDER_LOW_TO_HIGH.indexOf(tier as any)
+  const divIndex = DIV_ORDER_LOW_TO_HIGH.indexOf(div as any)
+
+  if (tierIndex === -1) return ladderLpWithCutoffs(point, cutoffs)
+
+  if (tierIndex <= TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')) {
+    if (divIndex >= 0 && divIndex < DIV_ORDER_LOW_TO_HIGH.length - 1) {
+      const nextDiv = DIV_ORDER_LOW_TO_HIGH[divIndex + 1]
+      return ladderLpWithCutoffs({ tier, rank: nextDiv, lp: 0 }, cutoffs)
+    }
+    const nextTier = TIER_ORDER_LOW_TO_HIGH[tierIndex + 1]
+    if (nextTier) {
+      return ladderLpWithCutoffs({ tier: nextTier, rank: 'IV', lp: 0 }, cutoffs)
+    }
+  }
+
+  return ladderLpWithCutoffs({ ...point, lp: (point.lp ?? 0) + 30 }, cutoffs)
+}
+
+function nextMasterStepScore(point: Pick<LpPoint, 'tier' | 'lp'>, cutoffs: RankCutoffs) {
+  const tier = (point.tier ?? '').toUpperCase()
+  if (!['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)) return 0
+  const currentLp = Math.max(0, point.lp ?? 0)
+  const nextStep = Math.ceil((currentLp + 30) / 50) * 50
+  return ladderLpWithCutoffs({ tier, rank: 'I', lp: nextStep }, cutoffs)
+}
+
 type TooltipState = {
   puuid: string
   point: SeriesPoint
@@ -251,6 +281,7 @@ export default function LeaderboardGraphClient({
       .map((p) => {
         const ts = new Date(p.fetched_at).getTime()
         if (Number.isNaN(ts)) return null
+        if (!p.match_id) return null
         return {
           ...p,
           score: ladderLpWithCutoffs(p, cutoffs),
@@ -423,18 +454,30 @@ export default function LeaderboardGraphClient({
   }, [pointsByPlayer, cutoffs])
 
   const chart = useMemo(() => {
-    const allPoints = [...renderableSeries.values()].flat()
+    const seriesList = [...renderableSeries.values()]
+    const allPoints = seriesList.flat()
     if (allPoints.length === 0) return null
 
     const scores = allPoints.map((p) => p.score)
-    const minScore = Math.min(...scores)
+    const startScores = seriesList.map((points) => points[0]?.score ?? 0)
+    const endScores = seriesList.map((points) => points[points.length - 1]?.score ?? 0)
+    const minScore = Math.min(...scores, ...startScores)
     const maxScore = Math.max(...scores)
+    const targetMaxScores = endScores.map((score, index) => {
+      const points = seriesList[index]
+      const lastPoint = points?.[points.length - 1]
+      if (!lastPoint) return score + 30
+      const nextScore = nextRankScore(lastPoint, cutoffs)
+      const nextStep = nextMasterStepScore(lastPoint, cutoffs)
+      return Math.max(score + 30, nextScore, nextStep)
+    })
+    const paddedMaxScore = Math.max(maxScore, ...targetMaxScores)
     const maxMatch = Math.max(...allPoints.map((p) => p.matchIndex))
 
     return {
       minScore,
-      maxScore,
-      scoreRange: maxScore - minScore || 1,
+      maxScore: paddedMaxScore,
+      scoreRange: paddedMaxScore - minScore || 1,
       maxMatch,
       matchRange: Math.max(maxMatch - 1, 1),
     }
@@ -554,11 +597,11 @@ export default function LeaderboardGraphClient({
 
       <div
         ref={containerRef}
-        className="relative overflow-hidden rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-950 to-slate-900 p-4 shadow-2xl"
+        className="relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-lg dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(34,197,94,0.14),_transparent_60%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_55%)] dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_60%)]" />
         {visiblePuuids.size === 0 ? (
-          <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950 px-6 py-16 text-center text-sm text-slate-400">
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
             No players selected.
           </div>
         ) : chart ? (
@@ -569,7 +612,7 @@ export default function LeaderboardGraphClient({
                 y={padding.top}
                 width={innerWidth}
                 height={innerHeight}
-                className="fill-slate-950/80"
+                className="fill-white/70 dark:fill-slate-950/70"
                 rx={16}
               />
 
@@ -581,7 +624,7 @@ export default function LeaderboardGraphClient({
                     y1={label.y}
                     y2={label.y}
                     stroke="currentColor"
-                    className="text-slate-800"
+                    className="text-slate-200 dark:text-slate-800"
                     strokeDasharray="4 6"
                   />
                   <text
@@ -603,7 +646,7 @@ export default function LeaderboardGraphClient({
                     y1={padding.top}
                     y2={padding.top + innerHeight}
                     stroke="currentColor"
-                    className="text-slate-800/70"
+                    className="text-slate-200/70 dark:text-slate-800/70"
                     strokeDasharray="2 8"
                   />
                   <text
@@ -620,7 +663,7 @@ export default function LeaderboardGraphClient({
 
               {[...renderableSeries.entries()].map(([puuid, list]) => {
                 if (list.length < 2) return null
-                const color = colorByPuuid.get(puuid) ?? 'hsl(145 80% 45%)'
+                const color = colorByPuuid.get(puuid) ?? 'hsl(210 80% 50%)'
                 const path = list
                   .map((point, idx) => {
                     const x = padding.left + ((point.matchIndex - 1) / chart.matchRange) * innerWidth
@@ -638,14 +681,13 @@ export default function LeaderboardGraphClient({
 
                 return (
                   <g key={puuid}>
-                    <path d={areaPath} fill={color} opacity={0.12} />
+                    <path d={areaPath} fill={color} opacity={0.1} />
                     <path
                       d={path}
                       fill="none"
                       stroke={color}
                       strokeWidth={2.8}
                       opacity={0.95}
-                      style={{ filter: `drop-shadow(0 0 6px ${color})` }}
                     />
                     {list.map((point) => {
                       const x = padding.left + ((point.matchIndex - 1) / chart.matchRange) * innerWidth
@@ -666,7 +708,6 @@ export default function LeaderboardGraphClient({
                           onMouseMove={(event) => handleHover(puuid, point, event.clientX, event.clientY)}
                           onMouseLeave={() => setTooltip(null)}
                           className="cursor-pointer"
-                          style={{ filter: `drop-shadow(0 0 4px ${color})` }}
                         />
                       )
                     })}
@@ -676,14 +717,14 @@ export default function LeaderboardGraphClient({
             </svg>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950 px-6 py-16 text-center text-sm text-slate-400">
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
             Insufficient data for this range.
           </div>
         )}
 
         {tooltip && (
           <div
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-emerald-400/40 bg-slate-950/95 px-3 py-2 text-xs text-white shadow-[0_0_18px_rgba(16,185,129,0.25)]"
+            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 shadow-xl dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             style={{ left: tooltip.x, top: tooltip.y - 10 }}
           >
             {(() => {
@@ -697,7 +738,9 @@ export default function LeaderboardGraphClient({
                 deltaValue !== null && deltaValue !== undefined
                   ? ` (${deltaValue > 0 ? '+' : ''}${deltaValue})`
                   : ''
-              const championLabel = tooltipPoint.champion_name ?? 'Unknown Champion'
+              const championLabel =
+                tooltipPoint.champion_name ??
+                (tooltipPoint.champion_id ? `Champion ${tooltipPoint.champion_id}` : 'Unknown Champion')
               const kdaLabel =
                 tooltipPoint.kills !== null &&
                 tooltipPoint.kills !== undefined &&
@@ -715,15 +758,15 @@ export default function LeaderboardGraphClient({
                 tooltipPoint.result === 'Win' ? 'Win' : tooltipPoint.result === 'Loss' ? 'Loss' : 'Result'
               return (
                 <div className="space-y-1">
-                  <div className="text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
                     Match {tooltipPoint.matchIndex}
                   </div>
-                  <div className="text-xs font-semibold text-white">
+                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
                     {formatRank(tooltipPoint.tier, tooltipPoint.rank, tooltipPoint.lp)}
                     {deltaLabel}
                     {globalRank}
                   </div>
-                  <div className="flex items-center gap-2 text-[11px] text-emerald-200">
+                  <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-300">
                     <span
                       className={`h-2 w-2 rounded-full ${
                         tooltipPoint.result === 'Win'
@@ -737,8 +780,8 @@ export default function LeaderboardGraphClient({
                       {championLabel} · {resultLabel}
                     </span>
                   </div>
-                  <div className="text-[11px] text-slate-300">{kdaLabel}</div>
-                  <div className="text-[11px] text-slate-400">{player?.name ?? 'Player'}</div>
+                  <div className="text-[11px] text-slate-500 dark:text-slate-300">{kdaLabel}</div>
+                  <div className="text-[11px] text-slate-400 dark:text-slate-400">{player?.name ?? 'Player'}</div>
                 </div>
               )
             })()}
@@ -746,21 +789,23 @@ export default function LeaderboardGraphClient({
         )}
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-sm">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">Players</div>
+          <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+            Players
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={showAllPlayers}
-              className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-emerald-400 hover:text-emerald-200"
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white"
             >
               Show all
             </button>
             <button
               type="button"
               onClick={hideAllPlayers}
-              className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-slate-500"
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white"
             >
               Hide all
             </button>
@@ -773,17 +818,17 @@ export default function LeaderboardGraphClient({
             value={legendFilter}
             onChange={(event) => setLegendFilter(event.target.value)}
             placeholder="Search players..."
-            className="w-full max-w-xs rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 placeholder:text-slate-500 shadow-sm focus:border-emerald-400 focus:outline-none"
+            className="w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 placeholder:text-slate-400 shadow-sm focus:border-blue-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
           />
           <span className="text-[11px] font-semibold text-slate-400">
             {visiblePuuids.size}/{players.length} visible
           </span>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-300">
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
           {filteredPlayers.map((player) => {
             const isActive = visiblePuuids.has(player.puuid)
-            const color = colorByPuuid.get(player.puuid) ?? 'hsl(145 80% 45%)'
+            const color = colorByPuuid.get(player.puuid) ?? 'hsl(210 80% 50%)'
             return (
               <button
                 key={player.puuid}
@@ -791,8 +836,8 @@ export default function LeaderboardGraphClient({
                 onClick={() => togglePlayerVisibility(player.puuid)}
                 className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 shadow-sm transition ${
                   isActive
-                    ? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-100'
-                    : 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                    ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
+                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400 dark:hover:text-slate-200'
                 }`}
               >
                 <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
