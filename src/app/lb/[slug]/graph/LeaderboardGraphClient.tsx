@@ -327,7 +327,7 @@ export default function LeaderboardGraphClient({
     const enriched = new Map<string, SeriesPoint[]>()
     for (const [puuid, list] of visibleSeries.entries()) {
       const sorted = [...list].sort((a, b) => a.ts - b.ts)
-      const points = sorted.map((point, index) => {
+      const points: SeriesPoint[] = sorted.map((point, index) => {
         const previous = index > 0 ? sorted[index - 1] : null
         const delta = previous ? ladderLpWithCutoffs(point, cutoffs) - ladderLpWithCutoffs(previous, cutoffs) : null
         const winDelta =
@@ -338,15 +338,17 @@ export default function LeaderboardGraphClient({
           previous && typeof point.losses === 'number' && typeof previous.losses === 'number'
             ? point.losses - previous.losses
             : null
-        const result =
+        const result: SeriesPoint['result'] =
           point.win !== null && point.win !== undefined
             ? point.win
               ? 'Win'
               : 'Loss'
             : winDelta !== null || lossDelta !== null
-              ? winDelta && winDelta > 0
+              ? winDelta !== null && winDelta > 0
                 ? 'Win'
-                : 'Loss'
+                : lossDelta !== null && lossDelta > 0
+                  ? 'Loss'
+                  : null
               : null
 
         return {
