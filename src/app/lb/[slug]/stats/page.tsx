@@ -164,9 +164,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   if (!lb) notFound()
 
   if (lb.visibility === 'PRIVATE') {
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user || user.id !== lb.user_id) notFound()
+    try {
+      // Wrapped in try/catch to prevent 'Refresh Token Already Used' errors crashing the page
+      const {
+        data: { user },
+      } = await supabase.auth.getUser()
+      if (!user || user.id !== lb.user_id) notFound()
+    } catch (error) {
+      // If auth fails (token invalid/expired/used), treat as unauthorized
+      notFound()
+    }
   }
 
   const { data: playersRaw } = await supabase
@@ -194,8 +201,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       label: item.label,
       lp: cutoffsByTier.get(item.key),
       icon: item.icon,
+      // eslint-disable-next-line
     }))
-    .filter((item) => item.lp !== undefined)
+    .filter((item) => item.lp !== undefined) as Array<{ label: string; lp: number; icon: string }>
 
   if (puuids.length === 0) {
     return (
@@ -218,27 +226,25 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     )
   }
 
+  const seasonStartMs = new Date('2026-01-08T20:00:00.000Z').getTime()
+
   const { data: participantsRaw } = await supabase
     .from('match_participants')
     .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win')
     .in('puuid', puuids)
 
-  const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id).filter(Boolean)))
-
-  const seasonStartIso = '2025-01-08T20:00:00.000Z'
-  const seasonStartMs = new Date(seasonStartIso).getTime()
+  const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id)))
 
   const { data: matchesRaw } = matchIds.length
     ? await supabase
         .from('matches')
-        .select('match_id, game_duration_s, game_end_ts, fetched_at')
+        .select('match_id, game_duration_s, game_end_ts')
         .in('match_id', matchIds)
-        .gte('fetched_at', seasonStartIso)
         .gte('game_end_ts', seasonStartMs)
     : { data: [] as MatchRow[] }
 
-  const matchById = new Map<string, { durationS: number; endTs: number | null }>()
-  for (const row of matchesRaw ?? []) {
+  const matchById = new Map<string, { durationS: number; endTs: number }>()
+  for (const row of (matchesRaw ?? []) as MatchRow[]) {
     const endTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
     if (!endTs || endTs < seasonStartMs) continue
     matchById.set(row.match_id, {
@@ -266,82 +272,66 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const championsTotals = new Map<number, StatTotals>()
   const championPlayers = new Map<number, Map<string, StatTotals>>()
 
-  const participantDetails = [] as Array<MatchParticipant & { durationS: number }>
-
   for (const row of participants) {
-    const matchMeta = matchById.get(row.match_id)
-    const durationS = matchMeta?.durationS ?? 0
+    const matchMeta = matchById.get(row.match_id)!
+    const durationS = matchMeta.durationS
+    const winVal = row.win ? 1 : 0
+    const lossVal = 1 - winVal
 
     totals.games += 1
-    totals.wins += row.win ? 1 : 0
-    totals.losses += row.win ? 0 : 1
+    totals.wins += winVal
+    totals.losses += lossVal
     totals.kills += row.kills
     totals.deaths += row.deaths
     totals.assists += row.assists
     totals.cs += row.cs
     totals.durationS += durationS
 
-    const playerTotal = playersTotals.get(row.puuid) ?? {
-      games: 0,
-      wins: 0,
-      losses: 0,
-      kills: 0,
-      deaths: 0,
-      assists: 0,
-      cs: 0,
-      durationS: 0,
+    let playerTotal = playersTotals.get(row.puuid)
+    if (!playerTotal) {
+      playerTotal = { games: 0, wins: 0, losses: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
+      playersTotals.set(row.puuid, playerTotal)
     }
     playerTotal.games += 1
-    playerTotal.wins += row.win ? 1 : 0
-    playerTotal.losses += row.win ? 0 : 1
+    playerTotal.wins += winVal
+    playerTotal.losses += lossVal
     playerTotal.kills += row.kills
     playerTotal.deaths += row.deaths
     playerTotal.assists += row.assists
     playerTotal.cs += row.cs
     playerTotal.durationS += durationS
-    playersTotals.set(row.puuid, playerTotal)
 
-    const champTotal = championsTotals.get(row.champion_id) ?? {
-      games: 0,
-      wins: 0,
-      losses: 0,
-      kills: 0,
-      deaths: 0,
-      assists: 0,
-      cs: 0,
-      durationS: 0,
+    let champTotal = championsTotals.get(row.champion_id)
+    if (!champTotal) {
+      champTotal = { games: 0, wins: 0, losses: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
+      championsTotals.set(row.champion_id, champTotal)
     }
     champTotal.games += 1
-    champTotal.wins += row.win ? 1 : 0
-    champTotal.losses += row.win ? 0 : 1
+    champTotal.wins += winVal
+    champTotal.losses += lossVal
     champTotal.kills += row.kills
     champTotal.deaths += row.deaths
     champTotal.assists += row.assists
     champTotal.cs += row.cs
-    championsTotals.set(row.champion_id, champTotal)
 
-    const champPlayers = championPlayers.get(row.champion_id) ?? new Map<string, StatTotals>()
-    const champPlayer = champPlayers.get(row.puuid) ?? {
-      games: 0,
-      wins: 0,
-      losses: 0,
-      kills: 0,
-      deaths: 0,
-      assists: 0,
-      cs: 0,
-      durationS: 0,
+    let champPlayers = championPlayers.get(row.champion_id)
+    if (!champPlayers) {
+      champPlayers = new Map<string, StatTotals>()
+      championPlayers.set(row.champion_id, champPlayers)
+    }
+    let champPlayer = champPlayers.get(row.puuid)
+    if (!champPlayer) {
+      champPlayer = { games: 0, wins: 0, losses: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
+      champPlayers.set(row.puuid, champPlayer)
     }
     champPlayer.games += 1
-    champPlayer.wins += row.win ? 1 : 0
-    champPlayer.losses += row.win ? 0 : 1
+    champPlayer.wins += winVal
+    champPlayer.losses += lossVal
     champPlayer.kills += row.kills
     champPlayer.deaths += row.deaths
     champPlayer.assists += row.assists
     champPlayer.cs += row.cs
-    champPlayers.set(row.puuid, champPlayer)
-    championPlayers.set(row.champion_id, champPlayers)
-
-    participantDetails.push({ ...row, durationS })
+    champPlayer.durationS += durationS
   }
 
   const championLeaderboard = Array.from(championsTotals.entries()).map(([championId, stats]) => {
@@ -398,33 +388,13 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topKills = [...playerLeaderboard].sort((a, b) => b.kills - a.kills).slice(0, 5)
   const topDeaths = [...playerLeaderboard].sort((a, b) => b.deaths - a.deaths).slice(0, 5)
   const topAssists = [...playerLeaderboard].sort((a, b) => b.assists - a.assists).slice(0, 5)
+  const topKdaPlayers = [...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value).slice(0, 5)
+  const topWinratePlayers = [...playerLeaderboard].sort((a, b) => b.wins / b.games - a.wins / a.games).slice(0, 5)
+  const topTotalTime = [...playerLeaderboard].sort((a, b) => b.durationS - a.durationS).slice(0, 5)
 
-  const topKdaPlayers = [...playerLeaderboard]
-    .filter((p) => p.games > 0)
-    .sort((a, b) => b.kda.value - a.kda.value)
-    .slice(0, 5)
-
-  const topWinratePlayers = [...playerLeaderboard]
-    .filter((p) => p.games > 0)
-    .sort((a, b) => (b.wins / b.games) - (a.wins / a.games))
-    .slice(0, 5)
-
-  const topTotalTime = [...playerLeaderboard]
-    .filter((p) => p.games > 0)
-    .sort((a, b) => b.durationS - a.durationS)
-    .slice(0, 5)
-
-  const topKillsSingle = [...participantDetails]
-    .sort((a, b) => b.kills - a.kills)
-    .slice(0, 3)
-
-  const topDeathsSingle = [...participantDetails]
-    .sort((a, b) => b.deaths - a.deaths)
-    .slice(0, 3)
-
-  const topAssistsSingle = [...participantDetails]
-    .sort((a, b) => b.assists - a.assists)
-    .slice(0, 3)
+  const topKillsSingle = [...participants].sort((a, b) => b.kills - a.kills).slice(0, 3)
+  const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
+  const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
 
   const longestMatches = Array.from(matchById.entries())
     .map(([matchId, meta]) => ({ matchId, durationS: meta.durationS, endTs: meta.endTs }))
@@ -447,23 +417,13 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
           actionLabel="Back to leaderboard"
         />
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Link
-            href={`/lb/${slug}`}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-500"
-          >
-            Leaderboard
-          </Link>
-          <Link
-            href={`/lb/${slug}/graph`}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-500"
-          >
-            Graph
-          </Link>
-          <span className="inline-flex items-center gap-2 rounded-full border border-slate-900/10 bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white shadow-sm dark:border-slate-700 dark:bg-slate-100 dark:text-slate-900">
-            Stats
-          </span>
-        </div>
+        {/* --- DELETED THE NAV BUTTONS ROW THAT WAS HERE --- */}
+
+        {noGames ? (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            No games found for this leaderboard yet (current season).
+          </div>
+        ) : null}
 
         <section className="grid gap-4 md:grid-cols-3">
           {[
@@ -515,9 +475,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             </div>
 
             {noGames ? (
-              <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">
-                No champion data yet.
-              </div>
+              <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">No champion data yet.</div>
             ) : (
               <div className="divide-y divide-slate-100 dark:divide-slate-800">
                 {championLeaderboard.map((champ) => {
@@ -627,7 +585,11 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               {[
                 { title: 'Most Total Kills', data: topKills, value: (row: typeof topKills[number]) => row.kills },
                 { title: 'Most Total Deaths', data: topDeaths, value: (row: typeof topDeaths[number]) => row.deaths },
-                { title: 'Most Total Assists', data: topAssists, value: (row: typeof topAssists[number]) => row.assists },
+                {
+                  title: 'Most Total Assists',
+                  data: topAssists,
+                  value: (row: typeof topAssists[number]) => row.assists,
+                },
               ].map((block) => (
                 <div key={block.title}>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
