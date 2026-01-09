@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatRank } from '@/lib/rankFormat'
 
 type PlayerSummary = {
@@ -213,6 +213,10 @@ export default function LeaderboardGraphClient({
   const [timeRange, setTimeRange] = useState(TIME_OPTIONS[0].id)
   const [zoom, setZoom] = useState(1)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [visiblePuuids, setVisiblePuuids] = useState<Set<string>>(
+    () => new Set(players.map((player) => player.puuid))
+  )
+  const [legendFilter, setLegendFilter] = useState('')
 
   const playersByPuuid = useMemo(() => {
     return new Map(players.map((p) => [p.puuid, p]))
@@ -220,6 +224,10 @@ export default function LeaderboardGraphClient({
 
   const colorByPuuid = useMemo(() => {
     return new Map(players.map((p) => [p.puuid, colorFromString(p.puuid)]))
+  }, [players])
+
+  useEffect(() => {
+    setVisiblePuuids(new Set(players.map((player) => player.puuid)))
   }, [players])
 
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
@@ -290,6 +298,38 @@ export default function LeaderboardGraphClient({
     return { series: byPlayer }
   }, [filteredPoints, zoom])
 
+  const visibleSeries = useMemo(() => {
+    if (visiblePuuids.size === 0) return new Map<string, FilteredPoint[]>()
+    const filtered = new Map<string, FilteredPoint[]>()
+    for (const [puuid, list] of series.entries()) {
+      if (visiblePuuids.has(puuid)) filtered.set(puuid, list)
+    }
+    return filtered
+  }, [series, visiblePuuids])
+
+  const filteredPlayers = useMemo(() => {
+    const query = legendFilter.trim().toLowerCase()
+    if (!query) return players
+    return players.filter((player) => player.name.toLowerCase().includes(query))
+  }, [legendFilter, players])
+
+  const togglePlayerVisibility = (puuid: string) => {
+    setVisiblePuuids((prev) => {
+      const next = new Set(prev)
+      if (next.has(puuid)) next.delete(puuid)
+      else next.add(puuid)
+      return next
+    })
+  }
+
+  const showAllPlayers = () => {
+    setVisiblePuuids(new Set(players.map((player) => player.puuid)))
+  }
+
+  const hideAllPlayers = () => {
+    setVisiblePuuids(new Set())
+  }
+
   // ✅ FIXED: use ladder LP delta (so Emerald I 55 -> Diamond IV 15 = +60)
   const rangeStats = useMemo(() => {
     const now = Date.now()
@@ -319,7 +359,7 @@ export default function LeaderboardGraphClient({
   }, [pointsByPlayer, cutoffs])
 
   const chart = useMemo(() => {
-    const allPoints = [...series.values()].flat()
+    const allPoints = [...visibleSeries.values()].flat()
     if (allPoints.length === 0) return null
 
     const scores = allPoints.map((p) => p.score)
@@ -337,7 +377,7 @@ export default function LeaderboardGraphClient({
       maxX,
       xRange: maxX - minX || 1,
     }
-  }, [series])
+  }, [visibleSeries])
 
   const width = 960
   const height = 420
@@ -449,6 +489,68 @@ export default function LeaderboardGraphClient({
         </div>
       </div>
 
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+            Players
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={showAllPlayers}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white"
+            >
+              Show all
+            </button>
+            <button
+              type="button"
+              onClick={hideAllPlayers}
+              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white"
+            >
+              Hide all
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={legendFilter}
+            onChange={(event) => setLegendFilter(event.target.value)}
+            placeholder="Search players..."
+            className="w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 placeholder:text-slate-400 shadow-sm focus:border-blue-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+          />
+          <span className="text-[11px] font-semibold text-slate-400">
+            {visiblePuuids.size}/{players.length} visible
+          </span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
+          {filteredPlayers.map((player) => {
+            const isActive = visiblePuuids.has(player.puuid)
+            const color = colorByPuuid.get(player.puuid) ?? 'hsl(210 80% 50%)'
+            return (
+              <button
+                key={player.puuid}
+                type="button"
+                onClick={() => togglePlayerVisibility(player.puuid)}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 shadow-sm transition ${
+                  isActive
+                    ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
+                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400 dark:hover:text-slate-200'
+                }`}
+              >
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                <span className="font-semibold">{player.name}</span>
+              </button>
+            )
+          })}
+          {filteredPlayers.length === 0 ? (
+            <div className="text-xs text-slate-400">No players match your search.</div>
+          ) : null}
+        </div>
+      </div>
+
       <div
         ref={containerRef}
         className="relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-lg dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
@@ -510,7 +612,7 @@ export default function LeaderboardGraphClient({
                 </g>
               ))}
 
-              {[...series.entries()].map(([puuid, list]) => {
+              {[...visibleSeries.entries()].map(([puuid, list]) => {
                 if (list.length === 0) return null
                 const color = colorByPuuid.get(puuid) ?? 'hsl(210 80% 50%)'
                 const path = list
@@ -548,22 +650,6 @@ export default function LeaderboardGraphClient({
                 )
               })}
             </svg>
-
-            <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
-              {[...series.keys()].map((puuid) => {
-                const player = playersByPuuid.get(puuid)
-                if (!player) return null
-                return (
-                  <div
-                    key={puuid}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-                  >
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colorByPuuid.get(puuid) }} />
-                    <span className="font-semibold">{player.name}</span>
-                  </div>
-                )
-              })}
-            </div>
           </>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
@@ -578,7 +664,7 @@ export default function LeaderboardGraphClient({
           >
             {(() => {
               const player = playersByPuuid.get(tooltip.puuid)
-              const seriesPoints = series.get(tooltip.puuid) ?? []
+              const seriesPoints = visibleSeries.get(tooltip.puuid) ?? []
               const lastPoint = seriesPoints[seriesPoints.length - 1]
               return (
                 <div className="flex items-center gap-2">
