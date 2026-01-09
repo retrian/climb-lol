@@ -44,6 +44,7 @@ interface Game {
   queueId?: number
   lpChange?: number | null
   lpNote?: string | null
+  endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
 // --- Constants ---
@@ -121,6 +122,37 @@ function formatDuration(durationS?: number) {
   const m = Math.floor(durationS / 60)
   const s = durationS % 60
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function computeEndType({
+  gameEndedInEarlySurrender,
+  gameEndedInSurrender,
+  gameDurationS,
+  lpChange,
+}: {
+  gameEndedInEarlySurrender?: boolean | null
+  gameEndedInSurrender?: boolean | null
+  gameDurationS?: number
+  lpChange?: number | null
+}): 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' {
+  const normalizedLpChange = typeof lpChange === 'number' && Number.isFinite(lpChange) ? lpChange : null
+
+  if (gameEndedInEarlySurrender === true) {
+    if (typeof gameDurationS === 'number') {
+      return gameDurationS <= 210 ? 'REMAKE' : 'EARLY_SURRENDER'
+    }
+    if (normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
+    return 'REMAKE'
+  }
+
+  if (gameEndedInSurrender === true) return 'SURRENDER'
+
+  if (typeof gameDurationS === 'number') {
+    if (gameDurationS <= 210 && (normalizedLpChange === null || normalizedLpChange === 0)) return 'REMAKE'
+    if (gameDurationS <= 300 && normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
+  }
+
+  return 'NORMAL'
 }
 
 function getKdaColor(kda: number) {
@@ -545,19 +577,22 @@ function LatestGamesFeed({
         const duration = formatDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
+        const isRemake = g.endType === 'REMAKE'
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
         const lpHoverLabel =
           lpChange !== null ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` : 'LP'
 
+        const resultBorderClasses = isRemake
+          ? 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
+          : g.win
+            ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
+            : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
+
         return (
           <div
             key={`${g.matchId}-${g.puuid}`}
-            className={`group flex flex-col gap-2 rounded-xl border-l-4 bg-white p-3 shadow-sm hover:shadow-md transition-all duration-200 dark:bg-slate-900 ${
-              g.win
-                ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
-                : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
-            }`}
+            className={`group flex flex-col gap-2 rounded-xl border-l-4 bg-white p-3 shadow-sm hover:shadow-md transition-all duration-200 dark:bg-slate-900 ${resultBorderClasses}`}
           >
             <div className="flex items-center gap-3">
               <div className="h-11 w-11 shrink-0">
@@ -594,14 +629,16 @@ function LatestGamesFeed({
                   <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
                     {champ?.name || 'Unknown'}
                   </span>
-                  {lpChange !== null && (
+                  {lpChange !== null ? (
                     lpNote ? (
                       <span
                         title={lpTitle}
                         className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                           lpNote === 'PROMOTED'
                             ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
-                            : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                            : isRemake
+                              ? 'text-slate-500 bg-slate-100 dark:text-slate-200 dark:bg-slate-700/40'
+                              : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                         }`}
                       >
                         <span className="group-hover:hidden">{lpNote}</span>
@@ -625,6 +662,13 @@ function LatestGamesFeed({
                         {Math.abs(lpChange)} LP
                       </span>
                     )
+                  ) : (
+                    <span
+                      title={lpTitle}
+                      className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
+                    >
+                      - LP
+                    </span>
                   )}
                 </div>
               </div>
@@ -835,6 +879,14 @@ export default async function LeaderboardDetail({
 
   const latestGames: Game[] = (latestRaw ?? []).map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
+    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+    const durationS = row.game_duration_s ?? row.gameDuration
+    const endType = computeEndType({
+      gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
+      gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
+      gameDurationS: durationS,
+      lpChange,
+    })
 
     return {
       matchId: row.match_id,
@@ -846,10 +898,11 @@ export default async function LeaderboardDetail({
       a: row.assists ?? 0,
       cs: row.cs ?? 0,
       endTs: row.game_end_ts,
-      durationS: row.game_duration_s,
+      durationS,
       queueId: row.queue_id,
-      lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null,
+      lpChange,
       lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+      endType,
     }
   })
 
