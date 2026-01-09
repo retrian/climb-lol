@@ -161,31 +161,32 @@ export default function LeaderboardGraphClient({
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
     return points
       .map((p) => {
-        const score = rankScoreWithCutoffs(p, cutoffs)
+        const ts = new Date(p.fetched_at).getTime()
+        if (Number.isNaN(ts)) return null
         return {
           ...p,
-          score,
-          ts: new Date(p.fetched_at).getTime(),
+          score: rankScoreWithCutoffs(p, cutoffs),
+          ts,
         }
       })
-      .filter((p) => !Number.isNaN(p.ts))
+      .filter((p): p is NormalizedPoint => p !== null)
   }, [cutoffs, points])
 
-  const availability = useMemo(() => {
+  const { availability, pointsByPlayer } = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
     for (const point of normalizedPoints) {
-      const list = byPlayer.get(point.puuid) ?? []
-      list.push(point)
-      byPlayer.set(point.puuid, list)
+      const list = byPlayer.get(point.puuid)
+      if (list) list.push(point)
+      else byPlayer.set(point.puuid, [point])
     }
 
     const timeAvailability = new Map<string, boolean>()
+    const now = Date.now()
     for (const option of TIME_OPTIONS) {
-      const cutoff = Date.now() - option.ms
+      const cutoff = now - option.ms
       let hasEnough = false
       for (const list of byPlayer.values()) {
-        const count = list.filter((p) => p.ts >= cutoff).length
-        if (count >= 2) {
+        if (list.filter((p) => p.ts >= cutoff).length >= 2) {
           hasEnough = true
           break
         }
@@ -193,7 +194,7 @@ export default function LeaderboardGraphClient({
       timeAvailability.set(option.id, hasEnough)
     }
 
-    return { timeAvailability }
+    return { availability: { timeAvailability }, pointsByPlayer: byPlayer }
   }, [normalizedPoints])
 
   useEffect(() => {
@@ -209,49 +210,40 @@ export default function LeaderboardGraphClient({
     return normalizedPoints.filter((p) => p.ts >= cutoff)
   }, [timeRange, normalizedPoints])
 
-  const zoomedPoints = useMemo<FilteredPoint[]>(() => {
-    if (filteredPoints.length === 0 || zoom === 1) return filteredPoints
-    const xValues = filteredPoints.map((p) => p.ts)
-    const minX = Math.min(...xValues)
-    const maxX = Math.max(...xValues)
-    const range = maxX - minX || 1
-    const windowSize = range / zoom
-    const windowStart = maxX - windowSize
-    return filteredPoints.filter((p) => {
-      return p.ts >= windowStart
-    })
+  const { zoomedPoints, series } = useMemo(() => {
+    let zPoints = filteredPoints
+    if (filteredPoints.length > 0 && zoom !== 1) {
+      const xValues = filteredPoints.map((p) => p.ts)
+      const minX = Math.min(...xValues)
+      const maxX = Math.max(...xValues)
+      const windowStart = maxX - (maxX - minX) / zoom
+      zPoints = filteredPoints.filter((p) => p.ts >= windowStart)
+    }
+
+    const byPlayer = new Map<string, FilteredPoint[]>()
+    for (const point of zPoints) {
+      const list = byPlayer.get(point.puuid)
+      if (list) list.push(point)
+      else byPlayer.set(point.puuid, [point])
+    }
+    for (const list of byPlayer.values()) {
+      list.sort((a, b) => a.ts - b.ts)
+    }
+
+    return { zoomedPoints: zPoints, series: byPlayer }
   }, [filteredPoints, zoom])
 
-  const series = useMemo(() => {
-    const byPlayer = new Map<string, FilteredPoint[]>()
-    for (const point of zoomedPoints) {
-      const list = byPlayer.get(point.puuid) ?? []
-      list.push(point)
-      byPlayer.set(point.puuid, list)
-    }
-    for (const [puuid, list] of byPlayer.entries()) {
-      list.sort((a, b) => a.ts - b.ts)
-      byPlayer.set(puuid, list)
-    }
-    return byPlayer
-  }, [zoomedPoints])
-
   const rangeStats = useMemo(() => {
-    const byPlayer = new Map<string, NormalizedPoint[]>()
-    for (const point of normalizedPoints) {
-      const list = byPlayer.get(point.puuid) ?? []
-      list.push(point)
-      byPlayer.set(point.puuid, list)
-    }
-
+    const now = Date.now()
     return RANGE_SUMMARIES.map((range) => {
-      const cutoff = Date.now() - range.ms
+      const cutoff = now - range.ms
       let bestGain: { puuid: string; delta: number; start: NormalizedPoint; end: NormalizedPoint } | null = null
       let bestLoss: { puuid: string; delta: number; start: NormalizedPoint; end: NormalizedPoint } | null = null
 
-      for (const [puuid, list] of byPlayer.entries()) {
-        const windowed = list.filter((p) => p.ts >= cutoff).sort((a, b) => a.ts - b.ts)
+      for (const [puuid, list] of pointsByPlayer.entries()) {
+        const windowed = list.filter((p) => p.ts >= cutoff)
         if (windowed.length < 2) continue
+        windowed.sort((a, b) => a.ts - b.ts)
         const start = windowed[0]
         const end = windowed[windowed.length - 1]
         const delta = (end.lp ?? 0) - (start.lp ?? 0)
@@ -267,25 +259,27 @@ export default function LeaderboardGraphClient({
 
       return { range, bestGain, bestLoss }
     })
-  }, [normalizedPoints])
+  }, [pointsByPlayer])
 
   const chart = useMemo(() => {
     const allPoints = [...series.values()].flat()
-    if (allPoints.length === 0) {
-      return null
-    }
+    if (allPoints.length === 0) return null
 
     const scores = allPoints.map((p) => p.score)
     const minScore = Math.min(...scores)
     const maxScore = Math.max(...scores)
-    const scoreRange = maxScore - minScore || 1
-
     const xValues = allPoints.map((p) => p.ts)
     const minX = Math.min(...xValues)
     const maxX = Math.max(...xValues)
-    const xRange = maxX - minX || 1
 
-    return { minScore, maxScore, scoreRange, minX, maxX, xRange }
+    return {
+      minScore,
+      maxScore,
+      scoreRange: maxScore - minScore || 1,
+      minX,
+      maxX,
+      xRange: maxX - minX || 1
+    }
   }, [series])
 
   const width = 960
@@ -299,12 +293,9 @@ export default function LeaderboardGraphClient({
     return TIER_LABELS.map((tier) => {
       const score = rankScoreWithCutoffs({ tier, rank: 'IV', lp: 0 }, cutoffs)
       if (score < chart.minScore || score > chart.maxScore) return null
-      const y =
-        padding.top +
-        innerHeight -
-        ((score - chart.minScore) / chart.scoreRange) * innerHeight
+      const y = padding.top + innerHeight - ((score - chart.minScore) / chart.scoreRange) * innerHeight
       return { tier, y }
-    }).filter(Boolean) as Array<{ tier: string; y: number }>
+    }).filter((l): l is { tier: string; y: number } => l !== null)
   }, [chart, cutoffs, innerHeight, padding.top])
 
   const xTicks = useMemo(() => {
@@ -319,10 +310,7 @@ export default function LeaderboardGraphClient({
       if (rangeMs <= 12 * 60 * 60 * 1000) {
         label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
       } else if (rangeMs <= 3 * 24 * 60 * 60 * 1000) {
-        label =
-          date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
-          ' ' +
-          date.toLocaleTimeString([], { hour: 'numeric' })
+        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + date.toLocaleTimeString([], { hour: 'numeric' })
       } else if (rangeMs <= 10 * 24 * 60 * 60 * 1000) {
         label = date.toLocaleDateString([], { weekday: 'short' })
       } else if (rangeMs <= 14 * 24 * 60 * 60 * 1000) {
@@ -464,25 +452,15 @@ export default function LeaderboardGraphClient({
                 const color = colorByPuuid.get(puuid) ?? 'hsl(210 80% 50%)'
                 const path = list
                   .map((point, idx) => {
-                    const xValue = point.ts
-                    const x =
-                      padding.left + ((xValue - chart.minX) / chart.xRange) * innerWidth
-                    const y =
-                      padding.top +
-                      innerHeight -
-                      ((point.score - chart.minScore) / chart.scoreRange) * innerHeight
+                    const x = padding.left + ((point.ts - chart.minX) / chart.xRange) * innerWidth
+                    const y = padding.top + innerHeight - ((point.score - chart.minScore) / chart.scoreRange) * innerHeight
                     return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`
                   })
                   .join(' ')
 
                 const lastPoint = list[list.length - 1]
-                const lastXValue = lastPoint.ts
-                const lastX =
-                  padding.left + ((lastXValue - chart.minX) / chart.xRange) * innerWidth
-                const lastY =
-                  padding.top +
-                  innerHeight -
-                  ((lastPoint.score - chart.minScore) / chart.scoreRange) * innerHeight
+                const lastX = padding.left + ((lastPoint.ts - chart.minX) / chart.xRange) * innerWidth
+                const lastY = padding.top + innerHeight - ((lastPoint.score - chart.minScore) / chart.scoreRange) * innerHeight
 
                 return (
                   <g key={puuid}>

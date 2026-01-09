@@ -23,7 +23,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
 const NA1 = 'https://na1.api.riotgames.com'
 const AMERICAS = 'https://americas.api.riotgames.com'
 
-const PLAYER_POLL_MS = 10_000 // your request (single worker, sequential)
 const CUTOFF_POLL_MS = 60 * 60 * 1000 // hourly
 
 const QUEUE_SOLO = 'RANKED_SOLO_5x5'
@@ -72,40 +71,40 @@ async function resetSeasonDataIfNeeded() {
     const matchIds = matches.map((m: any) => m.match_id).filter(Boolean)
     if (!matchIds.length) break
 
-    const { error: partErr } = await supabase.from('match_participants').delete().in('match_id', matchIds)
-    if (partErr) throw partErr
-
-    const { error: lpEventErr } = await supabase.from('player_lp_events').delete().in('match_id', matchIds)
-    if (lpEventErr) throw lpEventErr
-
-    const { error: matchDeleteErr } = await supabase.from('matches').delete().in('match_id', matchIds)
-    if (matchDeleteErr) throw matchDeleteErr
+    await Promise.all([
+      supabase.from('match_participants').delete().in('match_id', matchIds),
+      supabase.from('player_lp_events').delete().in('match_id', matchIds),
+      supabase.from('matches').delete().in('match_id', matchIds)
+    ]).then(results => {
+      for (const { error } of results) {
+        if (error) throw error
+      }
+    })
 
     offset += chunkSize
   }
 
-  const { error: historyErr } = await supabase.from('player_lp_history').delete().neq('puuid', '')
-  if (historyErr) throw historyErr
-
-  const { error: snapshotErr } = await supabase.from('player_rank_snapshot').delete().neq('puuid', '')
-  if (snapshotErr) throw snapshotErr
-
-  const { error: topErr } = await supabase.from('player_top_champions').delete().neq('puuid', '')
-  if (topErr) throw topErr
-
-  const { error: stateErr } = await supabase
-    .from('player_riot_state')
-    .update({
-      last_solo_lp: null,
-      last_solo_tier: null,
-      last_solo_rank: null,
-      last_solo_wins: null,
-      last_solo_losses: null,
-      last_solo_match_id: null,
-      last_poll_at: null,
-    })
-    .neq('puuid', '')
-  if (stateErr) throw stateErr
+  await Promise.all([
+    supabase.from('player_lp_history').delete().neq('puuid', ''),
+    supabase.from('player_rank_snapshot').delete().neq('puuid', ''),
+    supabase.from('player_top_champions').delete().neq('puuid', ''),
+    supabase
+      .from('player_riot_state')
+      .update({
+        last_solo_lp: null,
+        last_solo_tier: null,
+        last_solo_rank: null,
+        last_solo_wins: null,
+        last_solo_losses: null,
+        last_solo_match_id: null,
+        last_poll_at: null,
+      })
+      .neq('puuid', '')
+  ]).then(results => {
+    for (const { error } of results) {
+      if (error) throw error
+    }
+  })
 
   console.log('[season] reset complete')
 }
@@ -219,45 +218,49 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
   const now = new Date().toISOString()
 
   if (!entries.length) {
-    const { error: snapErr } = await supabase.from('player_rank_snapshot').delete().eq('puuid', puuid)
-    if (snapErr) throw snapErr
-
-    await upsertRiotState(puuid, {
-      last_rank_sync_at: now,
-      last_solo_lp: null,
-      last_solo_tier: null,
-      last_solo_rank: null,
-      last_solo_wins: null,
-      last_solo_losses: null,
-      last_solo_match_id: null,
-      last_error: null,
+    await Promise.all([
+      supabase.from('player_rank_snapshot').delete().eq('puuid', puuid),
+      upsertRiotState(puuid, {
+        last_rank_sync_at: now,
+        last_solo_lp: null,
+        last_solo_tier: null,
+        last_solo_rank: null,
+        last_solo_wins: null,
+        last_solo_losses: null,
+        last_solo_match_id: null,
+        last_error: null,
+      })
+    ]).then(([snapResult]) => {
+      if (snapResult.error) throw snapResult.error
     })
 
     return null
   }
 
-  for (const e of entries) {
-    if (e.queueType !== QUEUE_SOLO && e.queueType !== QUEUE_FLEX) continue
+  const solo = pickSolo(entries)
 
-    const { error } = await supabase.from('player_rank_snapshot').upsert(
-      {
-        puuid,
-        queue_type: e.queueType,
-        tier: e.tier,
-        rank: e.rank,
-        league_points: e.leaguePoints,
-        wins: e.wins,
-        losses: e.losses,
-        fetched_at: now,
-      },
-      { onConflict: 'puuid,queue_type' }
-    )
+  const upserts = entries
+    .filter((e) => e.queueType === QUEUE_SOLO || e.queueType === QUEUE_FLEX)
+    .map((e) => ({
+      puuid,
+      queue_type: e.queueType,
+      tier: e.tier,
+      rank: e.rank,
+      league_points: e.leaguePoints,
+      wins: e.wins,
+      losses: e.losses,
+      fetched_at: now,
+    }))
+
+  if (upserts.length > 0) {
+    const { error } = await supabase
+      .from('player_rank_snapshot')
+      .upsert(upserts, { onConflict: 'puuid,queue_type' })
     if (error) throw error
   }
 
   await upsertRiotState(puuid, { last_rank_sync_at: now, last_error: null })
 
-  const solo = pickSolo(entries)
   if (!solo) return null
 
   return {
@@ -271,17 +274,11 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
   }
 }
 
-/**
- * Ranked-only match ingest.
- * Returns the full ids list + which ones were newly inserted.
- */
 async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
   const params = new URLSearchParams({ queue: '420', count: '10' })
   if (RANKED_SEASON_START) {
     const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
-    if (Number.isNaN(seasonStartMs)) {
-      console.warn('[season] invalid RANKED_SEASON_START for match filter:', RANKED_SEASON_START)
-    } else {
+    if (!Number.isNaN(seasonStartMs)) {
       params.set('startTime', Math.floor(seasonStartMs / 1000).toString())
     }
   }
@@ -302,61 +299,57 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
   const existingSet = new Set((existing ?? []).map((r) => r.match_id))
   const newIds = ids.filter((id) => !existingSet.has(id))
 
+  const matchUpserts = []
+  const participantUpserts = []
+
   for (const matchId of newIds) {
     const match = await riotFetch<any>(`${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`)
 
     const info = match.info
     const meta = match.metadata
 
-    const gameEnd = Number(info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000))
-    const queueId = Number(info.queueId ?? 0)
-    const durationS = Number(info.gameDuration ?? 0)
+    matchUpserts.push({
+      match_id: meta.matchId,
+      queue_id: Number(info.queueId ?? 0),
+      game_end_ts: Number(info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000)),
+      game_duration_s: Number(info.gameDuration ?? 0),
+    })
 
-    // upsert match row
-    {
-      const { error } = await supabase.from('matches').upsert(
-        {
-          match_id: meta.matchId,
-          queue_id: queueId,
-          game_end_ts: gameEnd,
-          game_duration_s: durationS,
-        },
-        { onConflict: 'match_id' }
-      )
-      if (error) throw error
-    }
-
-    // upsert participant row for this puuid
     const part = (info.participants as any[]).find((x) => x.puuid === puuid)
     if (part) {
-      const cs = Number((part.totalMinionsKilled ?? 0) + (part.neutralMinionsKilled ?? 0))
-      const { error } = await supabase.from('match_participants').upsert(
-        {
-          match_id: meta.matchId,
-          puuid,
-          champion_id: Number(part.championId ?? 0),
-          kills: Number(part.kills ?? 0),
-          deaths: Number(part.deaths ?? 0),
-          assists: Number(part.assists ?? 0),
-          cs,
-          win: Boolean(part.win),
-        },
-        { onConflict: 'match_id,puuid' }
-      )
-      if (error) throw error
+      participantUpserts.push({
+        match_id: meta.matchId,
+        puuid,
+        champion_id: Number(part.championId ?? 0),
+        kills: Number(part.kills ?? 0),
+        deaths: Number(part.deaths ?? 0),
+        assists: Number(part.assists ?? 0),
+        cs: Number((part.totalMinionsKilled ?? 0) + (part.neutralMinionsKilled ?? 0)),
+        win: Boolean(part.win),
+      })
     }
 
-    // small pacing
     await sleep(150)
+  }
+
+  if (matchUpserts.length > 0) {
+    const { error } = await supabase
+      .from('matches')
+      .upsert(matchUpserts, { onConflict: 'match_id' })
+    if (error) throw error
+  }
+
+  if (participantUpserts.length > 0) {
+    const { error } = await supabase
+      .from('match_participants')
+      .upsert(participantUpserts, { onConflict: 'match_id,puuid' })
+    if (error) throw error
   }
 
   await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
   return { ids, newIds }
 }
 
-/**
- * LP history: always useful for a line graph.
- */
 async function insertLpHistory(puuid: string, snap: SoloSnapshot) {
   const { error } = await supabase.from('player_lp_history').insert({
     puuid,
@@ -371,15 +364,10 @@ async function insertLpHistory(puuid: string, snap: SoloSnapshot) {
   if (error) throw error
 }
 
-/**
- * Per-game LP events:
- * We ONLY attribute when there is EXACTLY ONE new ranked match between checks
- * and wins+losses increased by exactly 1.
- */
 async function maybeInsertPerGameLpEvent(opts: {
   puuid: string
   snap: SoloSnapshot
-  ids: string[] // newest -> oldest
+  ids: string[]
   state: any | undefined
 }) {
   const { puuid, snap, ids, state } = opts
@@ -391,22 +379,14 @@ async function maybeInsertPerGameLpEvent(opts: {
   const lastTier = state?.last_solo_tier ? String(state.last_solo_tier) : null
   const lastRank = state?.last_solo_rank ? String(state.last_solo_rank) : null
 
-  // find new matches since lastMatch (ids are newest-first)
   let newSince: string[] = []
-  if (ids.length) {
-    if (!lastMatch) {
-      // first time: don't pretend we know per-game deltas
-      newSince = []
-    } else {
-      const idx = ids.indexOf(lastMatch)
-      newSince = idx === -1 ? ids.slice(0, 1) : ids.slice(0, idx) // if missing, treat as 1 unknown newest
-    }
+  if (ids.length && lastMatch) {
+    const idx = ids.indexOf(lastMatch)
+    newSince = idx === -1 ? ids.slice(0, 1) : ids.slice(0, idx)
   }
 
-  // always update last seen match id to newest (so we progress)
   const newest = ids[0] ?? null
 
-  // if we don't have a baseline, just store baseline and move on
   if (lastLp === null || lastW === null || lastL === null) {
     await upsertRiotState(puuid, {
       last_solo_lp: snap.lp,
@@ -422,7 +402,6 @@ async function maybeInsertPerGameLpEvent(opts: {
 
   const gamesDelta = (snap.wins + snap.losses) - (lastW + lastL)
 
-  // only attribute if exactly 1 new game occurred AND we can point to exactly 1 new match
   if (gamesDelta === 1 && newSince.length === 1) {
     const matchId = newSince[0]
     const lastStep = rankStepIndex(lastTier, lastRank)
@@ -452,15 +431,11 @@ async function maybeInsertPerGameLpEvent(opts: {
       note: stepDelta > 0 ? 'PROMOTED' : stepDelta < 0 ? 'DEMOTED' : null,
     })
 
-    // ignore unique constraint duplicates (reruns)
     if (error && !String(error.message ?? '').toLowerCase().includes('duplicate')) {
       throw error
     }
 
     console.log('[lp_event]', puuid.slice(0, 12), matchId.slice(0, 10), 'delta', lpDelta)
-  } else {
-    // we still update the rolling baseline; we just can't attribute per match reliably
-    // (could be multiple games, dodges, decay, etc.)
   }
 
   await upsertRiotState(puuid, {
@@ -474,13 +449,7 @@ async function maybeInsertPerGameLpEvent(opts: {
   })
 }
 
-/**
- * Top 5 champs (ranked-only in practice because you only ingest queue=420)
- */
 async function computeTopChamps(puuid: string) {
-  const SAMPLE_SIZE = 200
-
-  // (cast to any to allow ordering by referenced table without TS drama)
   const q = supabase
     .from('match_participants')
     .select('champion_id, win, matches!inner(game_end_ts)')
@@ -488,7 +457,7 @@ async function computeTopChamps(puuid: string) {
 
   const { data, error } = await q
     .order('game_end_ts', { referencedTable: 'matches', ascending: false })
-    .limit(SAMPLE_SIZE)
+    .limit(200)
 
   if (error) throw error
 
@@ -498,12 +467,10 @@ async function computeTopChamps(puuid: string) {
   for (const r of rows) {
     const champ = Number(r.champion_id)
     if (!champ) continue
-    const win = Boolean(r.win)
-    const ts = Number(r.matches?.game_end_ts ?? 0)
     const cur = agg.get(champ) ?? { games: 0, wins: 0, last: 0 }
     cur.games += 1
-    cur.wins += win ? 1 : 0
-    cur.last = Math.max(cur.last, ts)
+    cur.wins += r.win ? 1 : 0
+    cur.last = Math.max(cur.last, Number(r.matches?.game_end_ts ?? 0))
     agg.set(champ, cur)
   }
 
@@ -532,7 +499,6 @@ async function computeTopChamps(puuid: string) {
 async function fetchAndUpsertRankCutoffsIfDue() {
   const QUEUE = QUEUE_SOLO
 
-  // check last fetched_at
   const { data: lastRow, error: lastErr } = await supabase
     .from('rank_cutoffs')
     .select('fetched_at')
@@ -556,8 +522,7 @@ async function fetchAndUpsertRankCutoffsIfDue() {
 
   function cutoff(entries: Entry[], slots: number, floorLp: number): number {
     const eligible = entries
-      .filter((e) => !e.inactive)
-      .filter((e) => (e.leaguePoints ?? 0) >= floorLp)
+      .filter((e) => !e.inactive && (e.leaguePoints ?? 0) >= floorLp)
       .sort((a, b) => (b.leaguePoints ?? 0) - (a.leaguePoints ?? 0))
 
     return eligible.length >= slots ? eligible[slots - 1].leaguePoints : floorLp
@@ -574,13 +539,11 @@ async function fetchAndUpsertRankCutoffsIfDue() {
     const challenger_lp = cutoff(all, 300, 500)
     const grandmaster_lp = cutoff(all, 1000, 200)
 
-    const cutoffs = [
-      { queue_type: QUEUE, tier: 'CHALLENGER', cutoff_lp: challenger_lp },
-      { queue_type: QUEUE, tier: 'GRANDMASTER', cutoff_lp: grandmaster_lp },
-    ]
-
     const { error } = await supabase.from('rank_cutoffs').upsert(
-      cutoffs.map((c) => ({ ...c, fetched_at: new Date().toISOString() })),
+      [
+        { queue_type: QUEUE, tier: 'CHALLENGER', cutoff_lp: challenger_lp, fetched_at: new Date().toISOString() },
+        { queue_type: QUEUE, tier: 'GRANDMASTER', cutoff_lp: grandmaster_lp, fetched_at: new Date().toISOString() },
+      ],
       { onConflict: 'queue_type,tier' }
     )
     if (error) throw error
@@ -605,23 +568,17 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
   console.log('[player] refresh', puuid.slice(0, 12))
 
   try {
-    // summoner basics can be expensive; if you want, you can gate this by time later
     await syncSummonerBasics(puuid)
 
     const { ids } = await syncMatchesRankedOnly(puuid)
 
-    // Always fetch rank after match sync so LP history stays usable
     const soloSnap = await syncRankByPuuid(puuid)
 
     if (soloSnap) {
-      // 1) always insert LP history point (line graph)
       await insertLpHistory(puuid, soloSnap)
-
-      // 2) attempt per-game attribution (only when exactly 1 new match occurred)
       await maybeInsertPerGameLpEvent({ puuid, snap: soloSnap, ids, state })
     }
 
-    // keep top champs filled
     const missingTop = !(await hasTopChamps(puuid))
     if (missingTop) await computeTopChamps(puuid)
 
@@ -635,7 +592,6 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
 async function main() {
   await resetSeasonDataIfNeeded()
 
-  // hourly cutoffs
   await fetchAndUpsertRankCutoffsIfDue()
 
   const { data: lbs, error: lbErr } = await supabase.from('leaderboard_players').select('puuid')
@@ -657,18 +613,15 @@ async function main() {
   if (stErr) throw stErr
   const stateMap = new Map<string, any>((states ?? []).map((s: any) => [s.puuid, s]))
 
-  // pick the stalest first (simple scheduling)
   const ordered = [...puuids].sort((a, b) => {
     const ta = stateMap.get(a)?.last_poll_at ? new Date(stateMap.get(a).last_poll_at).getTime() : 0
     const tb = stateMap.get(b)?.last_poll_at ? new Date(stateMap.get(b).last_poll_at).getTime() : 0
     return ta - tb
   })
 
-  // One pass: refresh everyone sequentially with pacing.
-  // If you want true "every 10s per player", you need a long-running worker or multiple workers.
   for (const puuid of ordered) {
     await refreshOnePlayer(puuid, stateMap.get(puuid))
-    await sleep(250) // pacing between players to reduce burst rate-limit risk
+    await sleep(250)
   }
 
   console.log('Done.')

@@ -1,12 +1,7 @@
-/**
- * Format milliseconds to relative time using Intl.RelativeTimeFormat
- * @param fromMs - timestamp in milliseconds
- * @param nowMs - current time in milliseconds (defaults to Date.now())
- */
+const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
+
 export function timeAgo(fromMs: number, nowMs = Date.now()) {
   const diffSec = Math.floor((nowMs - fromMs) / 1000)
-  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-
   const abs = Math.abs(diffSec)
 
   if (abs < 60) return rtf.format(-diffSec, 'second')

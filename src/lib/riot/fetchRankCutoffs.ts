@@ -35,31 +35,25 @@ export async function fetchRankCutoffs(apiKey: string) {
   const queues = ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR']
   const cutoffs: Array<{ queue_type: string; tier: string; cutoff_lp: number }> = []
 
-  for (const queue of queues) {
-    try {
-      // Fetch Challenger
-      const challenger = await riotFetch<LeagueList>(
-        `${NA1}/lol/league/v4/challengerleagues/by-queue/${queue}`,
-        apiKey
-      )
-      if (challenger.entries && challenger.entries.length > 0) {
-        const minLP = Math.min(...challenger.entries.map((e) => e.leaguePoints))
-        cutoffs.push({ queue_type: queue, tier: 'CHALLENGER', cutoff_lp: minLP })
-        console.log(`[cutoffs] ${queue} CHALLENGER cutoff: ${minLP} LP`)
-      }
+  const results = await Promise.allSettled(
+    queues.flatMap((queue) => [
+      riotFetch<LeagueList>(`${NA1}/lol/league/v4/challengerleagues/by-queue/${queue}`, apiKey)
+        .then((data) => ({ queue, tier: 'CHALLENGER' as const, data })),
+      riotFetch<LeagueList>(`${NA1}/lol/league/v4/grandmasterleagues/by-queue/${queue}`, apiKey)
+        .then((data) => ({ queue, tier: 'GRANDMASTER' as const, data })),
+    ])
+  )
 
-      // Fetch Grandmaster
-      const grandmaster = await riotFetch<LeagueList>(
-        `${NA1}/lol/league/v4/grandmasterleagues/by-queue/${queue}`,
-        apiKey
-      )
-      if (grandmaster.entries && grandmaster.entries.length > 0) {
-        const minLP = Math.min(...grandmaster.entries.map((e) => e.leaguePoints))
-        cutoffs.push({ queue_type: queue, tier: 'GRANDMASTER', cutoff_lp: minLP })
-        console.log(`[cutoffs] ${queue} GRANDMASTER cutoff: ${minLP} LP`)
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const { queue, tier, data } = result.value
+      if (data.entries && data.entries.length > 0) {
+        const minLP = Math.min(...data.entries.map((e) => e.leaguePoints))
+        cutoffs.push({ queue_type: queue, tier, cutoff_lp: minLP })
+        console.log(`[cutoffs] ${queue} ${tier} cutoff: ${minLP} LP`)
       }
-    } catch (e) {
-      console.error(`[cutoffs] Error fetching for ${queue}:`, e)
+    } else {
+      console.error(`[cutoffs] Error fetching:`, result.reason)
     }
   }
 

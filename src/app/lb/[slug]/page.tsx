@@ -46,6 +46,28 @@ interface Game {
   lpNote?: string | null
 }
 
+// --- Constants ---
+
+// Optimization: Move static object out of function scope to prevent reallocation on every call
+const REGION_MAP: Record<string, string> = {
+  NA1: 'na',
+  EUW1: 'euw',
+  EUN1: 'eune',
+  KR: 'kr',
+  JP1: 'jp',
+  BR1: 'br',
+  LA1: 'lan',
+  LA2: 'las',
+  OC1: 'oce',
+  TR1: 'tr',
+  RU: 'ru',
+  PH2: 'ph',
+  SG2: 'sg',
+  TH2: 'th',
+  TW2: 'tw',
+  VN2: 'vn',
+}
+
 // --- Helpers ---
 
 function getRankIconSrc(tier?: string | null) {
@@ -88,25 +110,8 @@ function getOpggUrl(player: Player) {
   const gn = (player.game_name ?? '').trim()
   const tl = (player.tag_line ?? '').trim()
   if (!gn || !tl) return null
-  const regionMap: Record<string, string> = {
-    NA1: 'na',
-    EUW1: 'euw',
-    EUN1: 'eune',
-    KR: 'kr',
-    JP1: 'jp',
-    BR1: 'br',
-    LA1: 'lan',
-    LA2: 'las',
-    OC1: 'oce',
-    TR1: 'tr',
-    RU: 'ru',
-    PH2: 'ph',
-    SG2: 'sg',
-    TH2: 'th',
-    TW2: 'tw',
-    VN2: 'vn',
-  }
-  const region = regionMap[tl.toUpperCase()] ?? 'na'
+  
+  const region = REGION_MAP[tl.toUpperCase()] ?? 'na'
   const riotId = `${gn}-${tl}`
   return `https://op.gg/lol/summoners/${region}/${encodeURIComponent(riotId)}`
 }
@@ -146,7 +151,6 @@ function PodiumCard({
   champMap: any
   ddVersion: string
 }) {
-  const isFirst = rank === 1
   const rankIcon = getRankIconSrc(rankData?.tier)
   const opggUrl = getOpggUrl(player)
 
@@ -695,25 +699,52 @@ export default async function LeaderboardDetail({
     supabase.from('player_top_champions').select('*').in('puuid', puuids),
   ])
 
-  const stateBy = new Map((statesRaw ?? []).map((s) => [s.puuid, s]))
-  const rankBy = new Map()
-  const ranksList = (() => {
-    const list = ranksRaw ?? []
-    const seasonStartRaw = process.env.RANKED_SEASON_START
-    if (!seasonStartRaw) return list
-    const seasonStartMs = new Date(seasonStartRaw).getTime()
-    if (Number.isNaN(seasonStartMs)) return list
-    return list.filter((rank) => {
-      if (!rank?.fetched_at) return false
-      return new Date(rank.fetched_at).getTime() >= seasonStartMs
-    })
-  })()
+  // Optimization: Process states and find max update time in one pass
+  const stateBy = new Map<string, any>()
+  let maxLastUpdatedTs = 0
+  let lastUpdatedIso: string | null = null
+  
+  if (statesRaw) {
+    for (const s of statesRaw) {
+      stateBy.set(s.puuid, s)
+      if (s.last_rank_sync_at) {
+        const ts = new Date(s.last_rank_sync_at).getTime()
+        if (ts > maxLastUpdatedTs) {
+          maxLastUpdatedTs = ts
+          lastUpdatedIso = s.last_rank_sync_at
+        }
+      }
+    }
+  }
 
-  puuids.forEach((pid) => {
-    const solo = ranksList.find((r) => r.puuid === pid && r.queue_type === 'RANKED_SOLO_5x5')
-    const flex = ranksList.find((r) => r.puuid === pid && r.queue_type === 'RANKED_FLEX_SR')
-    rankBy.set(pid, solo ?? flex ?? null)
-  })
+  // Optimization: Process ranks in one pass, respecting season start and type preference
+  const rankBy = new Map<string, any>()
+  const seasonStartRaw = process.env.RANKED_SEASON_START
+  const seasonStartMs = seasonStartRaw ? new Date(seasonStartRaw).getTime() : 0
+  
+  if (ranksRaw) {
+    // Intermediate map to hold both queues before selection
+    const queuesByPuuid = new Map<string, { solo: any; flex: any }>()
+    
+    for (const r of ranksRaw) {
+      if (r.fetched_at && (!seasonStartMs || new Date(r.fetched_at).getTime() >= seasonStartMs)) {
+        let entry = queuesByPuuid.get(r.puuid)
+        if (!entry) {
+          entry = { solo: null, flex: null }
+          queuesByPuuid.set(r.puuid, entry)
+        }
+        
+        if (r.queue_type === 'RANKED_SOLO_5x5') entry.solo = r
+        else if (r.queue_type === 'RANKED_FLEX_SR') entry.flex = r
+      }
+    }
+
+    // Assign final rank
+    for (const pid of puuids) {
+      const entry = queuesByPuuid.get(pid)
+      rankBy.set(pid, entry?.solo ?? entry?.flex ?? null)
+    }
+  }
 
   const playersSorted = [...players].sort((a, b) => {
     const rankA = rankBy.get(a.puuid)
@@ -721,13 +752,19 @@ export default async function LeaderboardDetail({
     return compareRanks(rankA, rankB)
   })
 
+  // Optimization: Efficient map construction for champs
   const champsBy = new Map<string, any[]>()
-  ;(champsRaw ?? []).forEach((c) => {
-    const arr = champsBy.get(c.puuid) || []
-    arr.push(c)
-    champsBy.set(c.puuid, arr)
-  })
-  for (const [pid, arr] of champsBy.entries()) {
+  if (champsRaw) {
+    for (const c of champsRaw) {
+      let arr = champsBy.get(c.puuid)
+      if (!arr) {
+        arr = []
+        champsBy.set(c.puuid, arr)
+      }
+      arr.push(c)
+    }
+  }
+  for (const arr of champsBy.values()) {
     arr.sort((a, b) => b.games - a.games)
   }
 
@@ -737,7 +774,13 @@ export default async function LeaderboardDetail({
     .select('queue_type, tier, cutoff_lp')
     .in('tier', ['GRANDMASTER', 'CHALLENGER'])
 
-  const cutoffsMap = new Map((cutsRaw ?? []).map((c) => [`${c.queue_type}::${c.tier}`, c.cutoff_lp]))
+  const cutoffsMap = new Map<string, number>()
+  if (cutsRaw) {
+    for (const c of cutsRaw) {
+      cutoffsMap.set(`${c.queue_type}::${c.tier}`, c.cutoff_lp)
+    }
+  }
+
   const cutoffs = [
     { key: 'RANKED_SOLO_5x5::CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
     { key: 'RANKED_SOLO_5x5::GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
@@ -751,24 +794,43 @@ export default async function LeaderboardDetail({
 
   // Latest Games
   const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 })
-  const latestMatchIds = Array.from(new Set((latestRaw ?? []).map((row: any) => row.match_id).filter(Boolean)))
+  
+  // Optimization: Map directly to Set to avoid intermediate array creation if possible, 
+  // but here we need array for the .in() query. Filter only once.
+  const latestMatchIds: string[] = []
+  const seenMatchIds = new Set<string>()
+  if (latestRaw) {
+    for (const row of latestRaw) {
+      if (row.match_id && !seenMatchIds.has(row.match_id)) {
+        seenMatchIds.add(row.match_id)
+        latestMatchIds.push(row.match_id)
+      }
+    }
+  }
+
+  // FIX: Collect PUUIDs from the games themselves so we get LP data even if the player isn't in the Top 50 loaded above
+  const gamePuuids = (latestRaw ?? []).map((row: any) => row.puuid).filter(Boolean)
+  const allRelevantPuuids = Array.from(new Set([...puuids, ...gamePuuids]))
+
   const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
 
-  if (latestMatchIds.length > 0 && puuids.length > 0) {
+  if (latestMatchIds.length > 0 && allRelevantPuuids.length > 0) {
     const { data: lpEventsRaw } = await supabase
       .from('player_lp_events')
       .select('match_id, puuid, lp_delta, note')
       .in('match_id', latestMatchIds)
-      .in('puuid', puuids)
+      .in('puuid', allRelevantPuuids)
 
-    ;(lpEventsRaw ?? []).forEach((row) => {
-      if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
-        lpByMatchAndPlayer.set(`${row.match_id}-${row.puuid}`, {
-          delta: row.lp_delta,
-          note: row.note ?? null,
-        })
+    if (lpEventsRaw) {
+      for (const row of lpEventsRaw) {
+        if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
+          lpByMatchAndPlayer.set(`${row.match_id}-${row.puuid}`, {
+            delta: row.lp_delta,
+            note: row.note ?? null,
+          })
+        }
       }
-    })
+    }
   }
 
   const latestGames: Game[] = (latestRaw ?? []).map((row: any) => {
@@ -791,8 +853,11 @@ export default async function LeaderboardDetail({
     }
   })
 
-  const lastUpdatedIso = puuids.map((p) => stateBy.get(p)?.last_rank_sync_at).sort().at(-1) || null
-  const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
+  // Optimization: Efficient map construction for players
+  const playersByPuuid = new Map<string, Player>()
+  for (const p of players) {
+    playersByPuuid.set(p.puuid, p)
+  }
 
   const top3 = playersSorted.slice(0, 3)
   const rest = playersSorted.slice(3)

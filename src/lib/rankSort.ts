@@ -1,7 +1,3 @@
-/**
- * Rank sorting utilities
- */
-
 const TIER_WEIGHT = {
   CHALLENGER: 10,
   GRANDMASTER: 9,
@@ -30,10 +26,6 @@ export type RankSnapshot = {
   league_points?: number | null
 }
 
-/**
- * Generate sort key for rank comparison
- * Higher values = better rank
- */
 export function rankSortKey(r: RankSnapshot | undefined): [number, number, number] {
   if (!r) return [0, 0, 0]
 
@@ -44,24 +36,15 @@ export function rankSortKey(r: RankSnapshot | undefined): [number, number, numbe
   return [tier, division, lp]
 }
 
-/**
- * Compare two ranks for sorting (descending: best rank first)
- */
 export function compareRanks(a: RankSnapshot | undefined, b: RankSnapshot | undefined): number {
   const keyA = rankSortKey(a)
   const keyB = rankSortKey(b)
 
-  // Compare tier
   if (keyB[0] !== keyA[0]) return keyB[0] - keyA[0]
-  // Compare division
   if (keyB[1] !== keyA[1]) return keyB[1] - keyA[1]
-  // Compare LP
   return keyB[2] - keyA[2]
 }
 
-/**
- * Convert a rank snapshot into a sortable numeric score.
- */
 export function rankScore(r: RankSnapshot | undefined): number {
   const [tier, division, lp] = rankSortKey(r)
   const isApex = APEX_TIERS.has(r?.tier?.toUpperCase?.() ?? '')

@@ -10,11 +10,11 @@ let cache: { map: ChampMap; at: number } | null = null
 
 export async function getChampionMap(ddVersion: string): Promise<ChampMap> {
   // cache for 24h in server runtime
-  if (cache && Date.now() - cache.at < 24 * 60 * 60 * 1000) return cache.map
+  if (cache && Date.now() - cache.at < 86400000) return cache.map
 
   const res = await fetch(
     `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/data/en_US/champion.json`,
-    { next: { revalidate: 86400 } } // Next.js cache hint
+    { next: { revalidate: 86400 } }
   )
   if (!res.ok) throw new Error(`Failed to fetch champion.json: ${res.status}`)
 
@@ -23,8 +23,7 @@ export async function getChampionMap(ddVersion: string): Promise<ChampMap> {
 
   const map: ChampMap = {}
   for (const champ of Object.values(data)) {
-    const numId = Number(champ.key)
-    map[numId] = { id: champ.id, name: champ.name }
+    map[+champ.key] = { id: champ.id, name: champ.name }
   }
 
   cache = { map, at: Date.now() }

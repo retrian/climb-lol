@@ -22,7 +22,7 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // Recommended by Supabase SSR docs: validates JWT + refreshes cookies when needed
-  await supabase.auth.getClaims()
+  await supabase.auth.getSession()
+  
   return response
 }

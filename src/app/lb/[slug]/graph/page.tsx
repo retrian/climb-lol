@@ -137,7 +137,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .limit(50)
 
   const players = playersRaw ?? []
-  const puuids = players.map((p) => p.puuid).filter(Boolean)
+  const puuids = players.map((p) => p.puuid)
 
   const { data: cutoffsRaw } = await supabase
     .from('rank_cutoffs')
@@ -145,21 +145,17 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .in('tier', ['GRANDMASTER', 'CHALLENGER'])
 
   const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
-  const cutoffs = {
-    grandmaster: Number(cutoffsByTier.get('GRANDMASTER') ?? 200),
-    challenger: Number(cutoffsByTier.get('CHALLENGER') ?? 500),
-  }
-
+  
   const cutoffsDisplay = [
     { key: 'GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
     { key: 'CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
   ]
     .map((item) => ({
       label: item.label,
-      lp: Number(cutoffsByTier.get(item.key)),
+      lp: cutoffsByTier.get(item.key),
       icon: item.icon,
     }))
-    .filter((item) => !Number.isNaN(item.lp))
+    .filter((item) => item.lp !== undefined)
 
   if (puuids.length === 0) {
     return (
@@ -204,6 +200,11 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     name: displayRiotId(player),
     profileIconUrl: profileIconUrl(stateBy.get(player.puuid)?.profile_icon_id ?? null),
   }))
+
+  const cutoffs = {
+    grandmaster: cutoffsByTier.get('GRANDMASTER') ?? 200,
+    challenger: cutoffsByTier.get('CHALLENGER') ?? 500,
+  }
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">

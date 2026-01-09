@@ -8,17 +8,19 @@ export async function updateBanner(formData: FormData) {
   const bannerUrl = String(formData.get('banner_url') ?? '').trim()
 
   const supabase = await createClient()
-  const { data: auth } = await supabase.auth.getUser()
+
+  const [{ data: auth }, { data: lb, error: lbErr }] = await Promise.all([
+    supabase.auth.getUser(),
+    supabase
+      .from('leaderboards')
+      .select('id')
+      .limit(1)
+      .maybeSingle()
+  ])
+
   const user = auth.user
   if (!user) redirect('/sign-in')
-
-  // find the user's single leaderboard
-  const { data: lb, error: lbErr } = await supabase
-    .from('leaderboards')
-    .select('id')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
+  
   if (lbErr || !lb) redirect('/dashboard')
 
   const { error: upErr } = await supabase
@@ -28,11 +30,10 @@ export async function updateBanner(formData: FormData) {
       updated_at: new Date().toISOString(),
     })
     .eq('id', lb.id)
-    .eq('user_id', user.id)
 
   if (upErr) {
-    // you can console.error(upErr) if you want, but redirect is fine for now
-    redirect('/dashboard?edit=1')
+    console.error('[updateBanner] Error:', upErr.message)
+    redirect('/dashboard?edit=1&error=update_failed')
   }
 
   revalidatePath('/dashboard')

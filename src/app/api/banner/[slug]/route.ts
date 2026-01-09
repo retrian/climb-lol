@@ -1,12 +1,8 @@
 import { NextResponse } from 'next/server'
-import { createClient as createSb } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 
-const SUPABASE_URL = process.env.SUPABASE_URL!
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const BUCKET = 'leaderboard-banners'
-
-type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
@@ -22,8 +18,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
     return NextResponse.json({ url: null })
   }
 
+  // OPTIMIZATION: Early return for PRIVATE before auth check
+  const isPrivate = lb.visibility === 'PRIVATE'
+
   // auth for PRIVATE
-  if ((lb.visibility as Visibility) === 'PRIVATE') {
+  if (isPrivate) {
     const { data: auth } = await supabase.auth.getUser()
     const user = auth.user
     if (!user || user.id !== lb.user_id) {
@@ -31,9 +30,8 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
     }
   }
 
-  const admin = createSb(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: { persistSession: false },
-  })
+  // OPTIMIZATION: Use existing service client instead of creating new one
+  const admin = createServiceClient()
 
   const { data, error } = await admin.storage
     .from(BUCKET)
@@ -43,12 +41,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
 
   const res = NextResponse.json({
     url: data.signedUrl,
-    // optional: helps you bust client caches if you add ?v=
     updatedAt: lb.banner_updated_at ?? null,
   })
 
-  // Cache public/unlisted responses at the edge a bit
-  if (lb.visibility !== 'PRIVATE') {
+  // Cache public/unlisted responses at the edge
+  if (!isPrivate) {
     res.headers.set('Cache-Control', 'public, s-maxage=300, stale-while-revalidate=3600')
   }
 

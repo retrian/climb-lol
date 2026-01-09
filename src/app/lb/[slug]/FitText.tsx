@@ -33,13 +33,11 @@ export default function FitText({ text, className, minScale = 0.75, title }: Fit
 
       if (!available || !needed || !baseSize) return
 
-      if (needed > available) {
-        const scale = Math.max(minScale, available / needed)
-        const nextSize = Math.floor(baseSize * scale)
-        setFontSize((prev) => (prev === nextSize ? prev : nextSize))
-      } else {
-        setFontSize((prev) => (prev === null ? prev : null))
-      }
+      const nextSize = needed > available 
+        ? Math.floor(baseSize * Math.max(minScale, available / needed))
+        : null
+
+      setFontSize((prev) => prev === nextSize ? prev : nextSize)
     }
 
     const observer = new ResizeObserver(() => {
