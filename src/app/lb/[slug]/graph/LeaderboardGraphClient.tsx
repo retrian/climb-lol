@@ -25,119 +25,23 @@ type RankCutoffs = {
 }
 
 type NormalizedPoint = LpPoint & {
-  score: number
+  ladderLp: number
   ts: number
 }
 
-type FilteredPoint = NormalizedPoint
+type TooltipState = {
+  point: NormalizedPoint
+  index: number
+  x: number
+  y: number
+}
 
-// ✅ remove 30d, keep 14d
 const TIME_OPTIONS = [
-  { id: '14d', label: '14d', ms: 14 * 24 * 60 * 60 * 1000 },
+  { id: '30d', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
   { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
   { id: '24h', label: '24h', ms: 24 * 60 * 60 * 1000 },
-  { id: '12h', label: '12h', ms: 12 * 60 * 60 * 1000 },
-  { id: '6h', label: '6h', ms: 6 * 60 * 60 * 1000 },
 ]
 
-// ✅ summaries should match
-const RANGE_SUMMARIES = [
-  { id: 'day', label: '24h', ms: 24 * 60 * 60 * 1000 },
-  { id: 'week', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
-  { id: 'twoWeeks', label: '14d', ms: 14 * 24 * 60 * 60 * 1000 },
-]
-
-const ZOOM_LEVELS = [1, 2, 3, 4]
-
-const TIER_LABELS = [
-  'CHALLENGER',
-  'GRANDMASTER',
-  'MASTER',
-  'DIAMOND',
-  'EMERALD',
-  'PLATINUM',
-  'GOLD',
-  'SILVER',
-  'BRONZE',
-  'IRON',
-]
-
-const TIER_WEIGHT: Record<string, number> = {
-  CHALLENGER: 10,
-  GRANDMASTER: 9,
-  MASTER: 8,
-  DIAMOND: 7,
-  EMERALD: 6,
-  PLATINUM: 5,
-  GOLD: 4,
-  SILVER: 3,
-  BRONZE: 2,
-  IRON: 1,
-}
-
-const DIVISION_WEIGHT: Record<string, number> = {
-  I: 4,
-  II: 3,
-  III: 2,
-  IV: 1,
-}
-
-const SCORE_STEPS = {
-  tier: 1_000_000,
-  division: 50_000,
-  lp: 1_000,
-}
-
-function rankScoreWithCutoffs(
-  point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>,
-  cutoffs: RankCutoffs
-) {
-  const tier = point.tier?.toUpperCase?.() ?? ''
-  const division = point.rank?.toUpperCase?.() ?? ''
-  const lp = point.lp ?? 0
-
-  const tierWeight = TIER_WEIGHT[tier] ?? 0
-  const divisionWeight = DIVISION_WEIGHT[division] ?? 0
-
-  if (tier === 'MASTER') {
-    const cappedLp = Math.min(lp, Math.max(0, cutoffs.grandmaster - 1))
-    return tierWeight * SCORE_STEPS.tier + cappedLp * SCORE_STEPS.lp
-  }
-
-  if (tier === 'GRANDMASTER') {
-    return TIER_WEIGHT.MASTER * SCORE_STEPS.tier + (cutoffs.grandmaster + lp) * SCORE_STEPS.lp
-  }
-
-  if (tier === 'CHALLENGER') {
-    return TIER_WEIGHT.MASTER * SCORE_STEPS.tier + (cutoffs.challenger + lp) * SCORE_STEPS.lp
-  }
-
-  return tierWeight * SCORE_STEPS.tier + divisionWeight * SCORE_STEPS.division + lp * SCORE_STEPS.lp
-}
-
-function colorFromString(value: string) {
-  let hash = 0
-  for (let i = 0; i < value.length; i += 1) {
-    hash = (hash << 5) - hash + value.charCodeAt(i)
-    hash |= 0
-  }
-  const hue = Math.abs(hash) % 360
-  return `hsl(${hue} 70% 50%)`
-}
-
-function formatDelta(delta: number) {
-  const rounded = Math.round(delta)
-  if (rounded === 0) return '0'
-  return `${rounded > 0 ? '+' : ''}${rounded}`
-}
-
-/**
- * ✅ Ladder LP (what you want for "Rank delta"):
- * - Each division is 0–100 LP
- * - Each tier below Master is 4 divisions (400 LP)
- * - Master+ continues from Diamond I 100
- * - GM/Chall sit above Master using cutoffs
- */
 const TIER_ORDER_LOW_TO_HIGH = [
   'IRON',
   'BRONZE',
@@ -153,6 +57,21 @@ const TIER_ORDER_LOW_TO_HIGH = [
 
 const DIV_ORDER_LOW_TO_HIGH = ['IV', 'III', 'II', 'I'] as const
 
+function formatDelta(delta: number) {
+  const rounded = Math.round(delta)
+  if (rounded === 0) return '0'
+  return `${rounded > 0 ? '+' : ''}${rounded}`
+}
+
+function titleCase(value: string) {
+  return value[0] + value.slice(1).toLowerCase()
+}
+
+function baseMasterLadder() {
+  const diamondIndex = TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')
+  return diamondIndex * 400 + 3 * 100 + 100
+}
+
 function ladderLpWithCutoffs(
   point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>,
   cutoffs: RankCutoffs
@@ -164,20 +83,15 @@ function ladderLpWithCutoffs(
   const tierIndex = TIER_ORDER_LOW_TO_HIGH.indexOf(tier as any)
   if (tierIndex === -1) return lp
 
-  // Base for tiers below Master: tierIndex * 400
-  // Division offset: IV=0, III=100, II=200, I=300
   const divIndex = DIV_ORDER_LOW_TO_HIGH.indexOf(div as any)
 
-  // Everything below Master
   if (tierIndex <= TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')) {
     const base = tierIndex * 400
     const divOffset = divIndex === -1 ? 0 : divIndex * 100
     return base + divOffset + lp
   }
 
-  // Base at Diamond I 100 (end of Diamond ladder)
-  const diamondIndex = TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')
-  const baseMaster = diamondIndex * 400 + 3 * 100 + 100 // Diamond I (divIndex=3) at 100
+  const baseMaster = baseMasterLadder()
 
   if (tier === 'MASTER') {
     return baseMaster + lp
@@ -194,10 +108,89 @@ function ladderLpWithCutoffs(
   return baseMaster + lp
 }
 
-type TooltipState = {
-  puuid: string
-  x: number
-  y: number
+function ladderLpLabel(value: number, cutoffs: RankCutoffs) {
+  const baseMaster = baseMasterLadder()
+  if (value < baseMaster) {
+    const tierIndex = Math.max(0, Math.floor(value / 400))
+    const remainder = value - tierIndex * 400
+    const divisionIndex = Math.max(0, Math.min(3, Math.floor(remainder / 100)))
+    const tier = TIER_ORDER_LOW_TO_HIGH[tierIndex]
+    const division = DIV_ORDER_LOW_TO_HIGH[divisionIndex]
+    return `${titleCase(tier)} ${division}`
+  }
+
+  const masterCap = baseMaster + (cutoffs.grandmaster ?? 0)
+  const grandmasterCap = baseMaster + (cutoffs.challenger ?? 0)
+
+  if (value < masterCap) {
+    return `Master ${Math.max(0, Math.round(value - baseMaster))} LP`
+  }
+
+  if (value < grandmasterCap) {
+    return `Grandmaster ${Math.max(0, Math.round(value - masterCap))} LP`
+  }
+
+  return `Challenger ${Math.max(0, Math.round(value - grandmasterCap))} LP`
+}
+
+function buildLadderTicks(minValue: number, maxValue: number, cutoffs: RankCutoffs) {
+  const ticks: Array<{ value: number; label: string }> = []
+  const baseMaster = baseMasterLadder()
+  const min = Math.floor(minValue)
+  const max = Math.ceil(maxValue)
+
+  const diamondIndex = TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')
+  for (let tierIndex = 0; tierIndex <= diamondIndex; tierIndex += 1) {
+    for (let divIndex = 0; divIndex < DIV_ORDER_LOW_TO_HIGH.length; divIndex += 1) {
+      const value = tierIndex * 400 + divIndex * 100
+      if (value < min || value > max) continue
+      ticks.push({
+        value,
+        label: `${titleCase(TIER_ORDER_LOW_TO_HIGH[tierIndex])} ${DIV_ORDER_LOW_TO_HIGH[divIndex]}`,
+      })
+    }
+  }
+
+  const masterCap = baseMaster + (cutoffs.grandmaster ?? 0)
+  const grandmasterCap = baseMaster + (cutoffs.challenger ?? 0)
+
+  const pushRange = (start: number, end: number, label: string) => {
+    const startValue = Math.ceil(start / 50) * 50
+    for (let value = startValue; value <= end; value += 50) {
+      if (value < min || value > max) continue
+      ticks.push({ value, label: `${label} ${value - start} LP` })
+    }
+  }
+
+  if (max >= baseMaster) {
+    pushRange(baseMaster, Math.min(masterCap, max), 'Master')
+    pushRange(masterCap, Math.min(grandmasterCap, max), 'Grandmaster')
+    if (max > grandmasterCap) {
+      pushRange(grandmasterCap, max, 'Challenger')
+    }
+  }
+
+  const unique = new Map<number, string>()
+  for (const tick of ticks) {
+    if (!unique.has(tick.value)) unique.set(tick.value, tick.label)
+  }
+
+  return Array.from(unique.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.value - b.value)
+}
+
+function buildSmoothPath(points: Array<{ x: number; y: number }>) {
+  if (points.length === 0) return ''
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
+  const commands = [`M ${points[0].x} ${points[0].y}`]
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const current = points[i]
+    const next = points[i + 1]
+    const midX = (current.x + next.x) / 2
+    commands.push(`C ${midX} ${current.y}, ${midX} ${next.y}, ${next.x} ${next.y}`)
+  }
+  return commands.join(' ')
 }
 
 export default function LeaderboardGraphClient({
@@ -211,15 +204,17 @@ export default function LeaderboardGraphClient({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [timeRange, setTimeRange] = useState(TIME_OPTIONS[0].id)
-  const [zoom, setZoom] = useState(1)
+  const [selectedPuuid, setSelectedPuuid] = useState(players[0]?.puuid ?? '')
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+
+  useEffect(() => {
+    if (!selectedPuuid && players[0]?.puuid) {
+      setSelectedPuuid(players[0].puuid)
+    }
+  }, [players, selectedPuuid])
 
   const playersByPuuid = useMemo(() => {
     return new Map(players.map((p) => [p.puuid, p]))
-  }, [players])
-
-  const colorByPuuid = useMemo(() => {
-    return new Map(players.map((p) => [p.puuid, colorFromString(p.puuid)]))
   }, [players])
 
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
@@ -229,63 +224,16 @@ export default function LeaderboardGraphClient({
         if (Number.isNaN(ts)) return null
         return {
           ...p,
-          score: rankScoreWithCutoffs(p, cutoffs),
+          ladderLp: ladderLpWithCutoffs(p, cutoffs),
           ts,
         }
       })
       .filter((p): p is NormalizedPoint => p !== null)
   }, [cutoffs, points])
 
-  const { availability, pointsByPlayer } = useMemo(() => {
+  const pointsByPlayer = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
     for (const point of normalizedPoints) {
-      const list = byPlayer.get(point.puuid)
-      if (list) list.push(point)
-      else byPlayer.set(point.puuid, [point])
-    }
-
-    const timeAvailability = new Map<string, boolean>()
-    const now = Date.now()
-    for (const option of TIME_OPTIONS) {
-      const cutoff = now - option.ms
-      let hasEnough = false
-      for (const list of byPlayer.values()) {
-        if (list.filter((p) => p.ts >= cutoff).length >= 2) {
-          hasEnough = true
-          break
-        }
-      }
-      timeAvailability.set(option.id, hasEnough)
-    }
-
-    return { availability: { timeAvailability }, pointsByPlayer: byPlayer }
-  }, [normalizedPoints])
-
-  useEffect(() => {
-    if (!availability.timeAvailability.get(timeRange)) {
-      const fallback = TIME_OPTIONS.find((option) => availability.timeAvailability.get(option.id))
-      if (fallback) setTimeRange(fallback.id)
-    }
-  }, [availability, timeRange])
-
-  const filteredPoints = useMemo<FilteredPoint[]>(() => {
-    const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
-    const cutoff = Date.now() - option.ms
-    return normalizedPoints.filter((p) => p.ts >= cutoff)
-  }, [timeRange, normalizedPoints])
-
-  const { series } = useMemo(() => {
-    let zPoints = filteredPoints
-    if (filteredPoints.length > 0 && zoom !== 1) {
-      const xValues = filteredPoints.map((p) => p.ts)
-      const minX = Math.min(...xValues)
-      const maxX = Math.max(...xValues)
-      const windowStart = maxX - (maxX - minX) / zoom
-      zPoints = filteredPoints.filter((p) => p.ts >= windowStart)
-    }
-
-    const byPlayer = new Map<string, FilteredPoint[]>()
-    for (const point of zPoints) {
       const list = byPlayer.get(point.puuid)
       if (list) list.push(point)
       else byPlayer.set(point.puuid, [point])
@@ -293,158 +241,165 @@ export default function LeaderboardGraphClient({
     for (const list of byPlayer.values()) {
       list.sort((a, b) => a.ts - b.ts)
     }
+    return byPlayer
+  }, [normalizedPoints])
 
-    return { series: byPlayer }
-  }, [filteredPoints, zoom])
+  const selectedPoints = useMemo(() => {
+    return selectedPuuid ? pointsByPlayer.get(selectedPuuid) ?? [] : []
+  }, [pointsByPlayer, selectedPuuid])
 
-  // ✅ FIXED: use ladder LP delta (so Emerald I 55 -> Diamond IV 15 = +60)
-  const rangeStats = useMemo(() => {
+  const availability = useMemo(() => {
+    const availabilityMap = new Map<string, boolean>()
     const now = Date.now()
-    return RANGE_SUMMARIES.map((range) => {
-      const cutoff = now - range.ms
-      let bestGain: { puuid: string; delta: number; start: NormalizedPoint; end: NormalizedPoint } | null = null
-      let bestLoss: { puuid: string; delta: number; start: NormalizedPoint; end: NormalizedPoint } | null = null
+    for (const option of TIME_OPTIONS) {
+      const cutoff = now - option.ms
+      const hasEnough = selectedPoints.filter((p) => p.ts >= cutoff).length >= 2
+      availabilityMap.set(option.id, hasEnough)
+    }
+    return availabilityMap
+  }, [selectedPoints])
 
-      for (const [puuid, list] of pointsByPlayer.entries()) {
-        const windowed = list.filter((p) => p.ts >= cutoff)
-        if (windowed.length < 2) continue
-        windowed.sort((a, b) => a.ts - b.ts)
+  useEffect(() => {
+    if (!availability.get(timeRange)) {
+      const fallback = TIME_OPTIONS.find((option) => availability.get(option.id))
+      if (fallback) setTimeRange(fallback.id)
+    }
+  }, [availability, timeRange])
 
-        const start = windowed[0]
-        const end = windowed[windowed.length - 1]
-
-        const startL = ladderLpWithCutoffs(start, cutoffs)
-        const endL = ladderLpWithCutoffs(end, cutoffs)
-        const delta = endL - startL
-
-        if (!bestGain || delta > bestGain.delta) bestGain = { puuid, delta, start, end }
-        if (!bestLoss || delta < bestLoss.delta) bestLoss = { puuid, delta, start, end }
-      }
-
-      return { range, bestGain, bestLoss }
-    })
-  }, [pointsByPlayer, cutoffs])
+  const filteredPoints = useMemo<NormalizedPoint[]>(() => {
+    const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
+    const cutoff = Date.now() - option.ms
+    return selectedPoints.filter((p) => p.ts >= cutoff)
+  }, [timeRange, selectedPoints])
 
   const chart = useMemo(() => {
-    const allPoints = [...series.values()].flat()
-    if (allPoints.length === 0) return null
-
-    const scores = allPoints.map((p) => p.score)
-    const minScore = Math.min(...scores)
-    const maxScore = Math.max(...scores)
-    const xValues = allPoints.map((p) => p.ts)
-    const minX = Math.min(...xValues)
-    const maxX = Math.max(...xValues)
-
+    if (filteredPoints.length === 0) return null
+    const ladderValues = filteredPoints.map((p) => p.ladderLp)
+    const min = Math.min(...ladderValues)
+    const max = Math.max(...ladderValues)
     return {
-      minScore,
-      maxScore,
-      scoreRange: maxScore - minScore || 1,
-      minX,
-      maxX,
-      xRange: maxX - minX || 1,
+      min,
+      max,
+      range: max - min || 1,
     }
-  }, [series])
+  }, [filteredPoints])
 
   const width = 960
   const height = 420
-  const padding = { top: 30, right: 30, bottom: 50, left: 70 }
+  const padding = { top: 40, right: 30, bottom: 50, left: 110 }
   const innerWidth = width - padding.left - padding.right
   const innerHeight = height - padding.top - padding.bottom
 
-  const axisLabels = useMemo(() => {
+  const matchCount = filteredPoints.length
+  const plotPoints = useMemo(() => {
     if (!chart) return []
-    return TIER_LABELS.map((tier) => {
-      const score = rankScoreWithCutoffs({ tier, rank: 'IV', lp: 0 }, cutoffs)
-      if (score < chart.minScore || score > chart.maxScore) return null
-      const y = padding.top + innerHeight - ((score - chart.minScore) / chart.scoreRange) * innerHeight
-      return { tier, y }
-    }).filter((l): l is { tier: string; y: number } => l !== null)
-  }, [chart, cutoffs, innerHeight, padding.top])
+    return filteredPoints.map((point, index) => {
+      const x =
+        matchCount <= 1
+          ? padding.left + innerWidth / 2
+          : padding.left + (index / (matchCount - 1)) * innerWidth
+      const y = padding.top + innerHeight - ((point.ladderLp - chart.min) / chart.range) * innerHeight
+      return { x, y, point, index }
+    })
+  }, [chart, filteredPoints, innerHeight, innerWidth, matchCount, padding.left, padding.top])
+
+  const ladderTicks = useMemo(() => {
+    if (!chart) return []
+    return buildLadderTicks(chart.min, chart.max, cutoffs)
+  }, [chart, cutoffs])
 
   const xTicks = useMemo(() => {
-    if (!chart) return []
-    const count = 5
-    const step = chart.xRange / (count - 1)
-    const rangeMs = chart.xRange
+    if (matchCount === 0) return []
+    const count = Math.min(6, Math.max(2, matchCount))
+    const step = (matchCount - 1) / (count - 1)
     return Array.from({ length: count }, (_, idx) => {
-      const value = chart.minX + step * idx
-      const date = new Date(value)
-      let label = date.toLocaleDateString()
-      if (rangeMs <= 12 * 60 * 60 * 1000) {
-        label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-      } else if (rangeMs <= 3 * 24 * 60 * 60 * 1000) {
-        label =
-          date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
-          ' ' +
-          date.toLocaleTimeString([], { hour: 'numeric' })
-      } else if (rangeMs <= 10 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { weekday: 'short' })
-      } else if (rangeMs <= 14 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-      } else {
-        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-      }
-      const x = padding.left + ((value - chart.minX) / chart.xRange) * innerWidth
-      return { x, label }
+      const rawValue = Math.round(1 + step * idx)
+      const value = Math.min(matchCount, Math.max(1, rawValue))
+      const x =
+        matchCount <= 1
+          ? padding.left + innerWidth / 2
+          : padding.left + ((value - 1) / (matchCount - 1)) * innerWidth
+      return { x, label: value }
     })
-  }, [chart, innerWidth, padding.left])
+  }, [innerWidth, matchCount, padding.left])
 
-  const handleHover = (puuid: string, clientX: number, clientY: number) => {
+  const linePath = useMemo(() => buildSmoothPath(plotPoints), [plotPoints])
+  const areaPath = useMemo(() => {
+    if (plotPoints.length === 0) return ''
+    const baseY = padding.top + innerHeight
+    const first = plotPoints[0]
+    const last = plotPoints[plotPoints.length - 1]
+    return `${linePath} L ${last.x} ${baseY} L ${first.x} ${baseY} Z`
+  }, [plotPoints, linePath, innerHeight, padding.top])
+
+  const handleHover = (point: NormalizedPoint, index: number, clientX: number, clientY: number) => {
     const container = containerRef.current?.getBoundingClientRect()
     if (!container) return
     setTooltip({
-      puuid,
+      point,
+      index,
       x: clientX - container.left,
       y: clientY - container.top,
     })
   }
 
+  const summary = useMemo(() => {
+    if (filteredPoints.length === 0) return null
+    const first = filteredPoints[0]
+    const last = filteredPoints[filteredPoints.length - 1]
+    const delta = last.ladderLp - first.ladderLp
+    return {
+      current: formatRank(last.tier, last.rank, last.lp),
+      debut: formatRank(first.tier, first.rank, first.lp),
+      delta,
+      matches: filteredPoints.length,
+    }
+  }, [filteredPoints])
+
+  const activePlayer = playersByPuuid.get(selectedPuuid)
+  const lineColor = '#2563eb'
+
   return (
-    <div className="space-y-6">
-      <div className="rounded-3xl border border-slate-200/70 bg-white/80 p-4 shadow-sm backdrop-blur dark:border-slate-800/70 dark:bg-slate-900/70">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Filters
-            </p>
-            <p className="mt-1 text-sm font-medium text-slate-600 dark:text-slate-300">
-              Choose a window to compare rank movement.
-            </p>
-          </div>
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold text-slate-900">LP Evolution by Player</h2>
+        <p className="text-sm text-slate-500">LP history match by match</p>
+      </div>
+
+      <div className="mt-6">
+        <div className="flex flex-wrap items-center gap-3">
+          {players.map((player) => {
+            const isActive = player.puuid === selectedPuuid
+            return (
+              <button
+                key={player.puuid}
+                type="button"
+                onClick={() => setSelectedPuuid(player.puuid)}
+                className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
+                  isActive
+                    ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                }`}
+              >
+                {player.name}
+              </button>
+            )
+          })}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-3">
-          <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Zoom</span>
-          <div className="flex items-center gap-2">
-            <input
-              type="range"
-              min={1}
-              max={ZOOM_LEVELS[ZOOM_LEVELS.length - 1]}
-              step={1}
-              value={zoom}
-              onChange={(event) => setZoom(Number(event.target.value))}
-              className="h-2 w-32 cursor-pointer accent-slate-900 dark:accent-white"
-            />
-            <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">{zoom}x</span>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           {TIME_OPTIONS.map((option) => (
             <button
               key={option.id}
               type="button"
               onClick={() => setTimeRange(option.id)}
-              disabled={!availability.timeAvailability.get(option.id)}
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+              disabled={!availability.get(option.id)}
+              className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
                 timeRange === option.id
-                  ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
               } ${
-                availability.timeAvailability.get(option.id)
-                  ? ''
-                  : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
+                availability.get(option.id) ? '' : 'cursor-not-allowed opacity-40 hover:border-slate-200'
               }`}
             >
               {option.label}
@@ -455,42 +410,42 @@ export default function LeaderboardGraphClient({
 
       <div
         ref={containerRef}
-        className="relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-lg dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
+        className="relative mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4"
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_55%)] dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_60%)]" />
         {chart ? (
           <>
-            <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+            <svg viewBox={`0 0 ${width} ${height}`} className="h-auto w-full">
               <rect
                 x={padding.left}
                 y={padding.top}
                 width={innerWidth}
                 height={innerHeight}
-                className="fill-white/70 dark:fill-slate-950/70"
                 rx={16}
+                className="fill-white"
               />
 
-              {axisLabels.map((label) => (
-                <g key={label.tier}>
-                  <line
-                    x1={padding.left}
-                    x2={width - padding.right}
-                    y1={label.y}
-                    y2={label.y}
-                    stroke="currentColor"
-                    className="text-slate-200 dark:text-slate-800"
-                    strokeDasharray="4 6"
-                  />
-                  <text
-                    x={padding.left - 12}
-                    y={label.y + 4}
-                    textAnchor="end"
-                    className="fill-slate-400 text-[10px] font-semibold uppercase tracking-wide"
-                  >
-                    {label.tier[0] + label.tier.slice(1).toLowerCase()}
-                  </text>
-                </g>
-              ))}
+              {ladderTicks.map((tick) => {
+                const y = padding.top + innerHeight - ((tick.value - chart.min) / chart.range) * innerHeight
+                return (
+                  <g key={`${tick.label}-${tick.value}`}>
+                    <line
+                      x1={padding.left}
+                      x2={width - padding.right}
+                      y1={y}
+                      y2={y}
+                      className="stroke-slate-200"
+                    />
+                    <text
+                      x={padding.left - 12}
+                      y={y + 4}
+                      textAnchor="end"
+                      className="fill-slate-500 text-[10px] font-semibold"
+                    >
+                      {tick.label}
+                    </text>
+                  </g>
+                )
+              })}
 
               {xTicks.map((tick, idx) => (
                 <g key={`${tick.label}-${idx}`}>
@@ -499,9 +454,7 @@ export default function LeaderboardGraphClient({
                     x2={tick.x}
                     y1={padding.top}
                     y2={padding.top + innerHeight}
-                    stroke="currentColor"
-                    className="text-slate-200/70 dark:text-slate-800/70"
-                    strokeDasharray="2 8"
+                    className="stroke-slate-100"
                   />
                   <text
                     x={tick.x}
@@ -514,179 +467,89 @@ export default function LeaderboardGraphClient({
                 </g>
               ))}
 
-              {[...series.entries()].map(([puuid, list]) => {
-                if (list.length === 0) return null
-                const color = colorByPuuid.get(puuid) ?? 'hsl(210 80% 50%)'
-                const path = list
-                  .map((point, idx) => {
-                    const x = padding.left + ((point.ts - chart.minX) / chart.xRange) * innerWidth
-                    const y =
-                      padding.top +
-                      innerHeight -
-                      ((point.score - chart.minScore) / chart.scoreRange) * innerHeight
-                    return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`
-                  })
-                  .join(' ')
+              {areaPath ? <path d={areaPath} fill={lineColor} opacity={0.12} /> : null}
+              {linePath ? <path d={linePath} fill="none" stroke={lineColor} strokeWidth={2.5} /> : null}
 
-                const lastPoint = list[list.length - 1]
-                const lastX = padding.left + ((lastPoint.ts - chart.minX) / chart.xRange) * innerWidth
-                const lastY =
-                  padding.top + innerHeight - ((lastPoint.score - chart.minScore) / chart.scoreRange) * innerHeight
-
-                return (
-                  <g key={puuid}>
-                    <path d={path} fill="none" stroke={color} strokeWidth={2.75} opacity={0.9} />
-                    <circle
-                      cx={lastX}
-                      cy={lastY}
-                      r={5}
-                      fill={color}
-                      stroke="white"
-                      strokeWidth={2}
-                      onMouseEnter={(event) => handleHover(puuid, event.clientX, event.clientY)}
-                      onMouseMove={(event) => handleHover(puuid, event.clientX, event.clientY)}
-                      onMouseLeave={() => setTooltip(null)}
-                      className="cursor-pointer"
-                    />
-                  </g>
-                )
-              })}
+              {plotPoints.map((plot) => (
+                <circle
+                  key={`point-${plot.index}`}
+                  cx={plot.x}
+                  cy={plot.y}
+                  r={6}
+                  fill={lineColor}
+                  onMouseEnter={(event) => handleHover(plot.point, plot.index, event.clientX, event.clientY)}
+                  onMouseMove={(event) => handleHover(plot.point, plot.index, event.clientX, event.clientY)}
+                  onMouseLeave={() => setTooltip(null)}
+                  className="cursor-pointer"
+                />
+              ))}
             </svg>
 
-            <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-600 dark:text-slate-300">
-              {[...series.keys()].map((puuid) => {
-                const player = playersByPuuid.get(puuid)
-                if (!player) return null
-                return (
-                  <div
-                    key={puuid}
-                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-                  >
-                    <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colorByPuuid.get(puuid) }} />
-                    <span className="font-semibold">{player.name}</span>
-                  </div>
-                )
-              })}
+            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+              <span>Match index</span>
+              <span>{activePlayer?.name ?? 'Player'} selection</span>
             </div>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500">
             No ranking history yet for this range.
           </div>
         )}
 
         {tooltip && (
           <div
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900"
-            style={{ left: tooltip.x, top: tooltip.y - 10 }}
+            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-lg"
+            style={{ left: tooltip.x, top: tooltip.y - 12 }}
           >
-            {(() => {
-              const player = playersByPuuid.get(tooltip.puuid)
-              const seriesPoints = series.get(tooltip.puuid) ?? []
-              const lastPoint = seriesPoints[seriesPoints.length - 1]
-              return (
-                <div className="flex items-center gap-2">
-                  {player?.profileIconUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={player.profileIconUrl} alt="" className="h-8 w-8 rounded-full border border-slate-200" />
-                  ) : (
-                    <div className="h-8 w-8 rounded-full bg-slate-200" />
-                  )}
-                  <div>
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">{player?.name ?? 'Player'}</div>
-                    {lastPoint ? (
-                      <div className="text-[11px] text-slate-500 dark:text-slate-300">
-                        {formatRank(lastPoint.tier, lastPoint.rank, lastPoint.lp)}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-              )
-            })()}
+            <div className="font-semibold text-slate-900">Match {tooltip.index + 1}</div>
+            <div>{formatRank(tooltip.point.tier, tooltip.point.rank, tooltip.point.lp)}</div>
+            <div>
+              LP change{' '}
+              {(() => {
+                const prev = filteredPoints[tooltip.index - 1]
+                if (!prev) return '0'
+                return formatDelta(tooltip.point.ladderLp - prev.ladderLp)
+              })()}
+            </div>
+            {typeof tooltip.point.wins === 'number' && typeof tooltip.point.losses === 'number' ? (
+              <div>
+                Record {tooltip.point.wins}W-{tooltip.point.losses}L
+              </div>
+            ) : null}
           </div>
         )}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-3">
-        {rangeStats.map(({ range, bestGain, bestLoss }) => (
-          <div
-            key={range.id}
-            className="rounded-2xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-sm dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
-          >
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                {range.label}
-              </h3>
-              <span className="text-[11px] font-semibold text-slate-400 dark:text-slate-500">Rank delta</span>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-emerald-500">Most gained</div>
-                {bestGain ? (
-                  <div className="mt-2 flex items-center gap-3">
-                    {playersByPuuid.get(bestGain.puuid)?.profileIconUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={playersByPuuid.get(bestGain.puuid)?.profileIconUrl ?? ''}
-                        alt=""
-                        className="h-9 w-9 rounded-full border border-slate-200"
-                      />
-                    ) : (
-                      <div className="h-9 w-9 rounded-full bg-slate-200" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        {playersByPuuid.get(bestGain.puuid)?.name ?? 'Player'}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-300">
-                        {formatRank(bestGain.start.tier, bestGain.start.rank, bestGain.start.lp)} →{' '}
-                        {formatRank(bestGain.end.tier, bestGain.end.rank, bestGain.end.lp)}
-                      </div>
-                    </div>
-                    <div className="ml-auto text-sm font-bold text-emerald-600 dark:text-emerald-300">
-                      {formatDelta(bestGain.delta)}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Insufficient data</div>
-                )}
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5">
+        <div className="grid gap-6 text-center sm:grid-cols-2 lg:grid-cols-4">
+          {[
+            { label: 'Current LP', value: summary?.current ?? '—' },
+            { label: 'LP debut', value: summary?.debut ?? '—' },
+            {
+              label: 'Progression',
+              value: summary ? `${summary.delta >= 0 ? '+' : ''}${Math.round(summary.delta)} LP` : '—',
+              highlight: summary ? summary.delta >= 0 : undefined,
+            },
+            { label: 'Matches', value: summary?.matches.toString() ?? '—' },
+          ].map((item) => (
+            <div key={item.label}>
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
+                {item.label}
               </div>
-
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-rose-500">Most lost</div>
-                {bestLoss ? (
-                  <div className="mt-2 flex items-center gap-3">
-                    {playersByPuuid.get(bestLoss.puuid)?.profileIconUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={playersByPuuid.get(bestLoss.puuid)?.profileIconUrl ?? ''}
-                        alt=""
-                        className="h-9 w-9 rounded-full border border-slate-200"
-                      />
-                    ) : (
-                      <div className="h-9 w-9 rounded-full bg-slate-200" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        {playersByPuuid.get(bestLoss.puuid)?.name ?? 'Player'}
-                      </div>
-                      <div className="text-[11px] text-slate-500 dark:text-slate-300">
-                        {formatRank(bestLoss.start.tier, bestLoss.start.rank, bestLoss.start.lp)} →{' '}
-                        {formatRank(bestLoss.end.tier, bestLoss.end.rank, bestLoss.end.lp)}
-                      </div>
-                    </div>
-                    <div className="ml-auto text-sm font-bold text-rose-600 dark:text-rose-300">
-                      {formatDelta(bestLoss.delta)}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mt-2 text-xs text-slate-400 dark:text-slate-500">Insufficient data</div>
-                )}
+              <div
+                className={`mt-2 text-lg font-bold ${
+                  item.label === 'Progression'
+                    ? item.highlight
+                      ? 'text-emerald-600'
+                      : 'text-rose-600'
+                    : 'text-slate-900'
+                }`}
+              >
+                {item.value}
               </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
     </div>
   )
