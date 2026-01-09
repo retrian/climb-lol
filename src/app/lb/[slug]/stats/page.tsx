@@ -232,8 +232,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         .in('match_id', matchIds)
     : { data: [] as MatchRow[] }
 
-  const seasonStartRaw = process.env.RANKED_SEASON_START
-  const seasonStartMs = seasonStartRaw ? new Date(seasonStartRaw).getTime() : 0
+  const seasonStartMs = new Date('2025-01-08T20:00:00.000Z').getTime()
 
   const matchById = new Map<string, { durationS: number; endTs: number | null }>()
   for (const row of matchesRaw ?? []) {
