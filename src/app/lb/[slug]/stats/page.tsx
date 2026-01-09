@@ -623,9 +623,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
             <div className="mt-4 space-y-4">
               {[
-                { title: 'Most Total Kills', data: topKills, key: 'kills' },
-                { title: 'Most Total Deaths', data: topDeaths, key: 'deaths' },
-                { title: 'Most Total Assists', data: topAssists, key: 'assists' },
+                { title: 'Most Total Kills', data: topKills, value: (row: typeof topKills[number]) => row.kills },
+                { title: 'Most Total Deaths', data: topDeaths, value: (row: typeof topDeaths[number]) => row.deaths },
+                { title: 'Most Total Assists', data: topAssists, value: (row: typeof topAssists[number]) => row.assists },
               ].map((block) => (
                 <div key={block.title}>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
@@ -641,7 +641,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                             {idx + 1}. {row.name}
                           </span>
                           <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                            {row[block.key as keyof typeof row]}
+                            {block.value(row)}
                           </span>
                         </li>
                       ))}
