@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
+import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
@@ -117,12 +118,6 @@ function getOpggUrl(player: Player) {
   return `https://op.gg/lol/summoners/${region}/${encodeURIComponent(riotId)}`
 }
 
-function formatDuration(durationS?: number) {
-  if (!durationS) return ''
-  const m = Math.floor(durationS / 60)
-  const s = durationS % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
 
 function computeEndType({
   gameEndedInEarlySurrender,
@@ -155,12 +150,6 @@ function computeEndType({
   return 'NORMAL'
 }
 
-function getKdaColor(kda: number) {
-  if (kda >= 5) return 'text-amber-600 font-bold dark:text-amber-400'
-  if (kda >= 4) return 'text-blue-600 font-bold dark:text-blue-400'
-  if (kda >= 3) return 'text-emerald-600 font-bold dark:text-emerald-400'
-  return 'text-slate-600 font-semibold dark:text-slate-300'
-}
 
 // --- Components ---
 
@@ -574,7 +563,7 @@ function LatestGamesFeed({
         const kdaValue = g.d > 0 ? (g.k + g.a) / g.d : 99
         const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
         const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
-        const duration = formatDuration(g.durationS)
+        const duration = formatMatchDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
         const isRemake = g.endType === 'REMAKE'
@@ -930,6 +919,8 @@ export default async function LeaderboardDetail({
           bannerUrl={lb.banner_url}
           actionHref={`/lb/${slug}/graph`}
           actionLabel="View graph"
+          secondaryActionHref={`/lb/${slug}/stats`}
+          secondaryActionLabel="View stats"
         />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
@@ -1042,6 +1033,8 @@ function TeamHeaderCard({
   bannerUrl,
   actionHref,
   actionLabel,
+  secondaryActionHref,
+  secondaryActionLabel,
 }: {
   name: string
   description?: string | null
@@ -1051,6 +1044,8 @@ function TeamHeaderCard({
   bannerUrl: string | null
   actionHref: string
   actionLabel: string
+  secondaryActionHref?: string
+  secondaryActionLabel?: string
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
@@ -1079,16 +1074,29 @@ function TeamHeaderCard({
               {visibility}
             </span>
             {actionHref && actionLabel && (
-              <Link
-                href={actionHref}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
-                </svg>
-                {actionLabel}
-              </Link>
+              <>
+                <Link
+                  href={actionHref}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
+                  </svg>
+                  {actionLabel}
+                </Link>
+                {secondaryActionHref && secondaryActionLabel && (
+                  <Link
+                    href={secondaryActionHref}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    {secondaryActionLabel}
+                  </Link>
+                )}
+              </>
             )}
           </div>
 
