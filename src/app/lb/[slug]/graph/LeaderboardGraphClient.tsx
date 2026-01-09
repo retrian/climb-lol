@@ -281,7 +281,6 @@ export default function LeaderboardGraphClient({
       .map((p) => {
         const ts = new Date(p.fetched_at).getTime()
         if (Number.isNaN(ts)) return null
-        if (!p.match_id) return null
         return {
           ...p,
           score: ladderLpWithCutoffs(p, cutoffs),
@@ -358,9 +357,11 @@ export default function LeaderboardGraphClient({
     const enriched = new Map<string, SeriesPoint[]>()
     for (const [puuid, list] of visibleSeries.entries()) {
       const sorted = [...list].sort((a, b) => a.ts - b.ts)
-      const points: SeriesPoint[] = sorted.map((point, index) => {
-        const previous = index > 0 ? sorted[index - 1] : null
-        const delta = previous ? ladderLpWithCutoffs(point, cutoffs) - ladderLpWithCutoffs(previous, cutoffs) : null
+      const points: SeriesPoint[] = []
+      let lastIncluded: NormalizedPoint | null = null
+
+      for (const point of sorted) {
+        const previous = lastIncluded
         const winDelta =
           previous && typeof point.wins === 'number' && typeof previous.wins === 'number'
             ? point.wins - previous.wins
@@ -382,13 +383,25 @@ export default function LeaderboardGraphClient({
                   : null
               : null
 
-        return {
+        const hasGame =
+          !!point.match_id ||
+          point.lp_delta !== null ||
+          (winDelta !== null && winDelta > 0) ||
+          (lossDelta !== null && lossDelta > 0)
+
+        if (!hasGame) continue
+
+        const delta = previous ? ladderLpWithCutoffs(point, cutoffs) - ladderLpWithCutoffs(previous, cutoffs) : null
+        const matchIndex = points.length + 1
+        points.push({
           ...point,
-          matchIndex: index + 1,
+          matchIndex,
           delta,
           result,
-        }
-      })
+        })
+        lastIncluded = point
+      }
+
       enriched.set(puuid, points)
     }
     return enriched
