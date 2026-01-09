@@ -396,8 +396,28 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
   const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
 
+  const participantsByMatch = new Map<string, MatchParticipant[]>()
+  for (const row of participants) {
+    const matchParticipants = participantsByMatch.get(row.match_id)
+    if (matchParticipants) {
+      matchParticipants.push(row)
+    } else {
+      participantsByMatch.set(row.match_id, [row])
+    }
+  }
+
   const longestMatches = Array.from(matchById.entries())
-    .map(([matchId, meta]) => ({ matchId, durationS: meta.durationS, endTs: meta.endTs }))
+    .map(([matchId, meta]) => {
+      const matchParticipants = participantsByMatch.get(matchId) ?? []
+      const representative = matchParticipants[0]
+      const player = representative ? playersByPuuid.get(representative.puuid) : null
+      return {
+        matchId,
+        durationS: meta.durationS,
+        endTs: meta.endTs,
+        playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
+      }
+    })
     .filter((match) => match.durationS > 0)
     .sort((a, b) => b.durationS - a.durationS)
     .slice(0, 5)
@@ -464,15 +484,20 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             </h2>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="border-b border-slate-100 px-6 py-4 dark:border-slate-800">
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Unique Champions
+          <details className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-slate-100 px-6 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Unique Champions
+                </div>
+                <div className="text-2xl font-black text-slate-900 dark:text-slate-100">
+                  {championLeaderboard.length}
+                </div>
               </div>
-              <div className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                {championLeaderboard.length}
-              </div>
-            </div>
+              <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                Toggle
+              </span>
+            </summary>
 
             {noGames ? (
               <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">No champion data yet.</div>
@@ -569,7 +594,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 })}
               </div>
             )}
-          </div>
+          </details>
         </section>
 
         <section className="grid gap-6 lg:grid-cols-2">
@@ -737,13 +762,13 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                     {longestMatches.map((row, idx) => (
                       <li key={row.matchId} className="flex items-center justify-between">
                         <span className="text-slate-700 dark:text-slate-200">
-                          {idx + 1}. Match {row.matchId.slice(-6)}
+                          {idx + 1}. {row.playerName}
                           {row.endTs ? (
                             <span className="text-slate-400"> • {timeAgo(row.endTs)}</span>
                           ) : null}
                         </span>
                         <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                          {formatDaysHours(row.durationS)}
+                          {Math.round(row.durationS / 60)} min
                         </span>
                       </li>
                     ))}
