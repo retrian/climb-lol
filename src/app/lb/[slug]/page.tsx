@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
+import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
@@ -117,12 +118,6 @@ function getOpggUrl(player: Player) {
   return `https://op.gg/lol/summoners/${region}/${encodeURIComponent(riotId)}`
 }
 
-function formatDuration(durationS?: number) {
-  if (!durationS) return ''
-  const m = Math.floor(durationS / 60)
-  const s = durationS % 60
-  return `${m}:${s.toString().padStart(2, '0')}`
-}
 
 function computeEndType({
   gameEndedInEarlySurrender,
@@ -155,12 +150,6 @@ function computeEndType({
   return 'NORMAL'
 }
 
-function getKdaColor(kda: number) {
-  if (kda >= 5) return 'text-amber-600 font-bold dark:text-amber-400'
-  if (kda >= 4) return 'text-blue-600 font-bold dark:text-blue-400'
-  if (kda >= 3) return 'text-emerald-600 font-bold dark:text-emerald-400'
-  return 'text-slate-600 font-semibold dark:text-slate-300'
-}
 
 // --- Components ---
 
@@ -574,7 +563,7 @@ function LatestGamesFeed({
         const kdaValue = g.d > 0 ? (g.k + g.a) / g.d : 99
         const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
         const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
-        const duration = formatDuration(g.durationS)
+        const duration = formatMatchDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
         const isRemake = g.endType === 'REMAKE'
