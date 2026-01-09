@@ -29,7 +29,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 })();`}
         </Script>
       </head>
-      <body className="min-h-screen bg-gray-50 text-gray-900 dark:bg-slate-950 dark:text-slate-100">
+      <body className="flex min-h-screen flex-col bg-gray-50 text-gray-900 dark:bg-slate-950 dark:text-slate-100">
         {/* Translucent navbar */}
         <header className="border-b border-gray-200 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-slate-800 dark:bg-slate-950/70 supports-[backdrop-filter]:dark:bg-slate-950/60">
           <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
@@ -50,12 +50,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               >
                 Leaderboards
               </Link>
-              <Link
-                className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
-                href="/faq"
-              >
-                FAQ
-              </Link>
               {user ? (
                 <Link
                   className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
@@ -70,9 +64,22 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </header>
 
         {/* Consistent page width/padding across ALL pages */}
-        <main className="mx-auto w-full max-w-6xl px-4">
+        <main className="mx-auto w-full max-w-6xl flex-1 px-4">
           {children}
         </main>
+        <footer className="border-t border-gray-200 py-6 text-sm text-gray-600 dark:border-slate-800 dark:text-slate-300">
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between">
+            <span>© {new Date().getFullYear()} CWF.LOL</span>
+            <div className="flex gap-4">
+              <Link className="transition hover:text-gray-900 dark:hover:text-white" href="/faq">
+                FAQ
+              </Link>
+              <Link className="transition hover:text-gray-900 dark:hover:text-white" href="/changelog">
+                Changelog
+              </Link>
+            </div>
+          </div>
+        </footer>
       </body>
     </html>
   )
