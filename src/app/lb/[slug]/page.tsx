@@ -551,14 +551,16 @@ function LatestGamesFeed({
         const lpHoverLabel =
           lpChange !== null ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` : 'LP'
 
+        const resultBorderClasses = isRemake
+          ? 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
+          : g.win
+            ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
+            : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
+
         return (
           <div
             key={`${g.matchId}-${g.puuid}`}
-            className={`group flex flex-col gap-2 rounded-xl border-l-4 bg-white p-3 shadow-sm hover:shadow-md transition-all duration-200 dark:bg-slate-900 ${
-              g.win
-                ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
-                : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
-            }`}
+            className={`group flex flex-col gap-2 rounded-xl border-l-4 bg-white p-3 shadow-sm hover:shadow-md transition-all duration-200 dark:bg-slate-900 ${resultBorderClasses}`}
           >
             <div className="flex items-center gap-3">
               <div className="h-11 w-11 shrink-0">
@@ -631,9 +633,9 @@ function LatestGamesFeed({
                   ) : (
                     <span
                       title={lpTitle}
-                      className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-[10px] font-semibold text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
+                      className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
                     >
-                      -
+                      - LP
                     </span>
                   )}
                 </div>
