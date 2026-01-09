@@ -17,6 +17,15 @@ type LpPoint = {
   wins: number | null
   losses: number | null
   fetched_at: string
+  match_id?: string | null
+  champion_name?: string | null
+  champion_id?: number | null
+  kills?: number | null
+  deaths?: number | null
+  assists?: number | null
+  win?: boolean | null
+  lp_delta?: number | null
+  global_rank?: number | null
 }
 
 type RankCutoffs = {
@@ -30,6 +39,12 @@ type NormalizedPoint = LpPoint & {
 }
 
 type FilteredPoint = NormalizedPoint
+
+type SeriesPoint = FilteredPoint & {
+  matchIndex: number
+  delta: number | null
+  result: 'Win' | 'Loss' | null
+}
 
 // ✅ remove 30d, keep 14d
 const TIME_OPTIONS = [
@@ -196,6 +211,7 @@ function ladderLpWithCutoffs(
 
 type TooltipState = {
   puuid: string
+  point: SeriesPoint
   x: number
   y: number
 }
@@ -237,7 +253,7 @@ export default function LeaderboardGraphClient({
         if (Number.isNaN(ts)) return null
         return {
           ...p,
-          score: rankScoreWithCutoffs(p, cutoffs),
+          score: ladderLpWithCutoffs(p, cutoffs),
           ts,
         }
       })
@@ -307,6 +323,52 @@ export default function LeaderboardGraphClient({
     return filtered
   }, [series, visiblePuuids])
 
+  const seriesWithMeta = useMemo(() => {
+    const enriched = new Map<string, SeriesPoint[]>()
+    for (const [puuid, list] of visibleSeries.entries()) {
+      const sorted = [...list].sort((a, b) => a.ts - b.ts)
+      const points = sorted.map((point, index) => {
+        const previous = index > 0 ? sorted[index - 1] : null
+        const delta = previous ? ladderLpWithCutoffs(point, cutoffs) - ladderLpWithCutoffs(previous, cutoffs) : null
+        const winDelta =
+          previous && typeof point.wins === 'number' && typeof previous.wins === 'number'
+            ? point.wins - previous.wins
+            : null
+        const lossDelta =
+          previous && typeof point.losses === 'number' && typeof previous.losses === 'number'
+            ? point.losses - previous.losses
+            : null
+        const result =
+          point.win !== null && point.win !== undefined
+            ? point.win
+              ? 'Win'
+              : 'Loss'
+            : winDelta !== null || lossDelta !== null
+              ? winDelta && winDelta > 0
+                ? 'Win'
+                : 'Loss'
+              : null
+
+        return {
+          ...point,
+          matchIndex: index + 1,
+          delta,
+          result,
+        }
+      })
+      enriched.set(puuid, points)
+    }
+    return enriched
+  }, [visibleSeries, cutoffs])
+
+  const renderableSeries = useMemo(() => {
+    const filtered = new Map<string, SeriesPoint[]>()
+    for (const [puuid, list] of seriesWithMeta.entries()) {
+      if (list.length >= 2) filtered.set(puuid, list)
+    }
+    return filtered
+  }, [seriesWithMeta])
+
   const filteredPlayers = useMemo(() => {
     const query = legendFilter.trim().toLowerCase()
     if (!query) return players
@@ -359,25 +421,22 @@ export default function LeaderboardGraphClient({
   }, [pointsByPlayer, cutoffs])
 
   const chart = useMemo(() => {
-    const allPoints = [...visibleSeries.values()].flat()
+    const allPoints = [...renderableSeries.values()].flat()
     if (allPoints.length === 0) return null
 
     const scores = allPoints.map((p) => p.score)
     const minScore = Math.min(...scores)
     const maxScore = Math.max(...scores)
-    const xValues = allPoints.map((p) => p.ts)
-    const minX = Math.min(...xValues)
-    const maxX = Math.max(...xValues)
+    const maxMatch = Math.max(...allPoints.map((p) => p.matchIndex))
 
     return {
       minScore,
       maxScore,
       scoreRange: maxScore - minScore || 1,
-      minX,
-      maxX,
-      xRange: maxX - minX || 1,
+      maxMatch,
+      matchRange: Math.max(maxMatch - 1, 1),
     }
-  }, [visibleSeries])
+  }, [renderableSeries])
 
   const width = 960
   const height = 420
@@ -387,47 +446,49 @@ export default function LeaderboardGraphClient({
 
   const axisLabels = useMemo(() => {
     if (!chart) return []
-    return TIER_LABELS.map((tier) => {
-      const score = rankScoreWithCutoffs({ tier, rank: 'IV', lp: 0 }, cutoffs)
-      if (score < chart.minScore || score > chart.maxScore) return null
+    const labels: Array<{ label: string; y: number }> = []
+    const divisions = ['I', 'II', 'III', 'IV']
+    for (const tier of TIER_ORDER_LOW_TO_HIGH) {
+      if (tier === 'MASTER' || tier === 'GRANDMASTER' || tier === 'CHALLENGER') continue
+      for (const division of divisions) {
+        const score = ladderLpWithCutoffs({ tier, rank: division, lp: 0 }, cutoffs)
+        if (score < chart.minScore || score > chart.maxScore) continue
+        const y = padding.top + innerHeight - ((score - chart.minScore) / chart.scoreRange) * innerHeight
+        labels.push({ label: `${tier[0] + tier.slice(1).toLowerCase()} ${division}`, y })
+      }
+    }
+
+    const masterBase = ladderLpWithCutoffs({ tier: 'MASTER', rank: 'I', lp: 0 }, cutoffs)
+    const maxMasterLp = Math.max(chart.maxScore - masterBase, 0)
+    const masterSteps = Math.min(Math.ceil(maxMasterLp / 50), 12)
+    for (let step = 0; step <= masterSteps; step += 1) {
+      const lp = step * 50
+      const score = masterBase + lp
+      if (score < chart.minScore || score > chart.maxScore) continue
       const y = padding.top + innerHeight - ((score - chart.minScore) / chart.scoreRange) * innerHeight
-      return { tier, y }
-    }).filter((l): l is { tier: string; y: number } => l !== null)
+      labels.push({ label: `Master ${lp} LP`, y })
+    }
+
+    return labels.sort((a, b) => a.y - b.y)
   }, [chart, cutoffs, innerHeight, padding.top])
 
   const xTicks = useMemo(() => {
     if (!chart) return []
-    const count = 5
-    const step = chart.xRange / (count - 1)
-    const rangeMs = chart.xRange
+    const count = Math.min(6, chart.maxMatch)
+    const step = chart.matchRange / Math.max(count - 1, 1)
     return Array.from({ length: count }, (_, idx) => {
-      const value = chart.minX + step * idx
-      const date = new Date(value)
-      let label = date.toLocaleDateString()
-      if (rangeMs <= 12 * 60 * 60 * 1000) {
-        label = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-      } else if (rangeMs <= 3 * 24 * 60 * 60 * 1000) {
-        label =
-          date.toLocaleDateString([], { month: 'short', day: 'numeric' }) +
-          ' ' +
-          date.toLocaleTimeString([], { hour: 'numeric' })
-      } else if (rangeMs <= 10 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { weekday: 'short' })
-      } else if (rangeMs <= 14 * 24 * 60 * 60 * 1000) {
-        label = date.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })
-      } else {
-        label = date.toLocaleDateString([], { month: 'short', day: 'numeric' })
-      }
-      const x = padding.left + ((value - chart.minX) / chart.xRange) * innerWidth
-      return { x, label }
+      const value = Math.round(1 + step * idx)
+      const x = padding.left + ((value - 1) / chart.matchRange) * innerWidth
+      return { x, label: `Match ${value}` }
     })
   }, [chart, innerWidth, padding.left])
 
-  const handleHover = (puuid: string, clientX: number, clientY: number) => {
+  const handleHover = (puuid: string, point: SeriesPoint, clientX: number, clientY: number) => {
     const container = containerRef.current?.getBoundingClientRect()
     if (!container) return
     setTooltip({
       puuid,
+      point,
       x: clientX - container.left,
       y: clientY - container.top,
     })
@@ -489,74 +550,16 @@ export default function LeaderboardGraphClient({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-            Players
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={showAllPlayers}
-              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white"
-            >
-              Show all
-            </button>
-            <button
-              type="button"
-              onClick={hideAllPlayers}
-              className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white"
-            >
-              Hide all
-            </button>
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <input
-            type="search"
-            value={legendFilter}
-            onChange={(event) => setLegendFilter(event.target.value)}
-            placeholder="Search players..."
-            className="w-full max-w-xs rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 placeholder:text-slate-400 shadow-sm focus:border-blue-400 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
-          />
-          <span className="text-[11px] font-semibold text-slate-400">
-            {visiblePuuids.size}/{players.length} visible
-          </span>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-600 dark:text-slate-300">
-          {filteredPlayers.map((player) => {
-            const isActive = visiblePuuids.has(player.puuid)
-            const color = colorByPuuid.get(player.puuid) ?? 'hsl(210 80% 50%)'
-            return (
-              <button
-                key={player.puuid}
-                type="button"
-                onClick={() => togglePlayerVisibility(player.puuid)}
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 shadow-sm transition ${
-                  isActive
-                    ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
-                    : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400 dark:hover:text-slate-200'
-                }`}
-              >
-                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
-                <span className="font-semibold">{player.name}</span>
-              </button>
-            )
-          })}
-          {filteredPlayers.length === 0 ? (
-            <div className="text-xs text-slate-400">No players match your search.</div>
-          ) : null}
-        </div>
-      </div>
-
       <div
         ref={containerRef}
-        className="relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-white to-slate-50 p-4 shadow-lg dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-950"
+        className="relative overflow-hidden rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-950 via-slate-950 to-slate-900 p-4 shadow-2xl"
       >
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.08),_transparent_55%)] dark:bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.12),_transparent_60%)]" />
-        {chart ? (
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(34,197,94,0.14),_transparent_60%)]" />
+        {visiblePuuids.size === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950 px-6 py-16 text-center text-sm text-slate-400">
+            No players selected.
+          </div>
+        ) : chart ? (
           <>
             <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
               <rect
@@ -564,19 +567,19 @@ export default function LeaderboardGraphClient({
                 y={padding.top}
                 width={innerWidth}
                 height={innerHeight}
-                className="fill-white/70 dark:fill-slate-950/70"
+                className="fill-slate-950/80"
                 rx={16}
               />
 
               {axisLabels.map((label) => (
-                <g key={label.tier}>
+                <g key={label.label}>
                   <line
                     x1={padding.left}
                     x2={width - padding.right}
                     y1={label.y}
                     y2={label.y}
                     stroke="currentColor"
-                    className="text-slate-200 dark:text-slate-800"
+                    className="text-slate-800"
                     strokeDasharray="4 6"
                   />
                   <text
@@ -585,7 +588,7 @@ export default function LeaderboardGraphClient({
                     textAnchor="end"
                     className="fill-slate-400 text-[10px] font-semibold uppercase tracking-wide"
                   >
-                    {label.tier[0] + label.tier.slice(1).toLowerCase()}
+                    {label.label}
                   </text>
                 </g>
               ))}
@@ -598,7 +601,7 @@ export default function LeaderboardGraphClient({
                     y1={padding.top}
                     y2={padding.top + innerHeight}
                     stroke="currentColor"
-                    className="text-slate-200/70 dark:text-slate-800/70"
+                    className="text-slate-800/70"
                     strokeDasharray="2 8"
                   />
                   <text
@@ -606,18 +609,19 @@ export default function LeaderboardGraphClient({
                     y={height - 16}
                     textAnchor="middle"
                     className="fill-slate-400 text-[10px] font-semibold"
+                    transform={`rotate(-35 ${tick.x} ${height - 16})`}
                   >
                     {tick.label}
                   </text>
                 </g>
               ))}
 
-              {[...visibleSeries.entries()].map(([puuid, list]) => {
-                if (list.length === 0) return null
-                const color = colorByPuuid.get(puuid) ?? 'hsl(210 80% 50%)'
+              {[...renderableSeries.entries()].map(([puuid, list]) => {
+                if (list.length < 2) return null
+                const color = colorByPuuid.get(puuid) ?? 'hsl(145 80% 45%)'
                 const path = list
                   .map((point, idx) => {
-                    const x = padding.left + ((point.ts - chart.minX) / chart.xRange) * innerWidth
+                    const x = padding.left + ((point.matchIndex - 1) / chart.matchRange) * innerWidth
                     const y =
                       padding.top +
                       innerHeight -
@@ -626,67 +630,178 @@ export default function LeaderboardGraphClient({
                   })
                   .join(' ')
 
-                const lastPoint = list[list.length - 1]
-                const lastX = padding.left + ((lastPoint.ts - chart.minX) / chart.xRange) * innerWidth
-                const lastY =
-                  padding.top + innerHeight - ((lastPoint.score - chart.minScore) / chart.scoreRange) * innerHeight
+                const areaPath = `${path} L ${padding.left + innerWidth} ${padding.top + innerHeight} L ${
+                  padding.left
+                } ${padding.top + innerHeight} Z`
 
                 return (
                   <g key={puuid}>
-                    <path d={path} fill="none" stroke={color} strokeWidth={2.75} opacity={0.9} />
-                    <circle
-                      cx={lastX}
-                      cy={lastY}
-                      r={5}
-                      fill={color}
-                      stroke="white"
-                      strokeWidth={2}
-                      onMouseEnter={(event) => handleHover(puuid, event.clientX, event.clientY)}
-                      onMouseMove={(event) => handleHover(puuid, event.clientX, event.clientY)}
-                      onMouseLeave={() => setTooltip(null)}
-                      className="cursor-pointer"
+                    <path d={areaPath} fill={color} opacity={0.12} />
+                    <path
+                      d={path}
+                      fill="none"
+                      stroke={color}
+                      strokeWidth={2.8}
+                      opacity={0.95}
+                      style={{ filter: `drop-shadow(0 0 6px ${color})` }}
                     />
+                    {list.map((point) => {
+                      const x = padding.left + ((point.matchIndex - 1) / chart.matchRange) * innerWidth
+                      const y =
+                        padding.top +
+                        innerHeight -
+                        ((point.score - chart.minScore) / chart.scoreRange) * innerHeight
+                      return (
+                        <circle
+                          key={`${puuid}-${point.matchIndex}`}
+                          cx={x}
+                          cy={y}
+                          r={4.5}
+                          fill="white"
+                          stroke={color}
+                          strokeWidth={2}
+                          onMouseEnter={(event) => handleHover(puuid, point, event.clientX, event.clientY)}
+                          onMouseMove={(event) => handleHover(puuid, point, event.clientX, event.clientY)}
+                          onMouseLeave={() => setTooltip(null)}
+                          className="cursor-pointer"
+                          style={{ filter: `drop-shadow(0 0 4px ${color})` }}
+                        />
+                      )
+                    })}
                   </g>
                 )
               })}
             </svg>
           </>
         ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
-            No data for this range.
+          <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950 px-6 py-16 text-center text-sm text-slate-400">
+            Insufficient data for this range.
           </div>
         )}
 
         {tooltip && (
           <div
-            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-xl dark:border-slate-700 dark:bg-slate-900"
+            className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-emerald-400/40 bg-slate-950/95 px-3 py-2 text-xs text-white shadow-[0_0_18px_rgba(16,185,129,0.25)]"
             style={{ left: tooltip.x, top: tooltip.y - 10 }}
           >
             {(() => {
               const player = playersByPuuid.get(tooltip.puuid)
-              const seriesPoints = visibleSeries.get(tooltip.puuid) ?? []
-              const lastPoint = seriesPoints[seriesPoints.length - 1]
+              const tooltipPoint = tooltip.point
+              const deltaValue =
+                tooltipPoint.lp_delta !== null && tooltipPoint.lp_delta !== undefined
+                  ? tooltipPoint.lp_delta
+                  : tooltipPoint.delta
+              const deltaLabel =
+                deltaValue !== null && deltaValue !== undefined
+                  ? ` (${deltaValue > 0 ? '+' : ''}${deltaValue})`
+                  : ''
+              const championLabel = tooltipPoint.champion_name ?? 'Unknown Champion'
+              const kdaLabel =
+                tooltipPoint.kills !== null &&
+                tooltipPoint.kills !== undefined &&
+                tooltipPoint.deaths !== null &&
+                tooltipPoint.deaths !== undefined &&
+                tooltipPoint.assists !== null &&
+                tooltipPoint.assists !== undefined
+                  ? `${tooltipPoint.kills}/${tooltipPoint.deaths}/${tooltipPoint.assists} KDA`
+                  : 'KDA unavailable'
+              const globalRank =
+                tooltipPoint.global_rank !== null && tooltipPoint.global_rank !== undefined
+                  ? ` [Global: ${tooltipPoint.global_rank}]`
+                  : ''
+              const resultLabel =
+                tooltipPoint.result === 'Win' ? 'Win' : tooltipPoint.result === 'Loss' ? 'Loss' : 'Result'
               return (
-                <div className="flex items-center gap-2">
-                  {player?.profileIconUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={player.profileIconUrl} alt="" className="h-8 w-8 rounded-full border border-slate-200" />
-                  ) : (
-                    <div className="h-8 w-8 rounded-full bg-slate-200" />
-                  )}
-                  <div>
-                    <div className="font-semibold text-slate-900 dark:text-slate-100">{player?.name ?? 'Player'}</div>
-                    {lastPoint ? (
-                      <div className="text-[11px] text-slate-500 dark:text-slate-300">
-                        {formatRank(lastPoint.tier, lastPoint.rank, lastPoint.lp)}
-                      </div>
-                    ) : null}
+                <div className="space-y-1">
+                  <div className="text-[10px] font-semibold uppercase tracking-widest text-emerald-300">
+                    Match {tooltipPoint.matchIndex}
                   </div>
+                  <div className="text-xs font-semibold text-white">
+                    {formatRank(tooltipPoint.tier, tooltipPoint.rank, tooltipPoint.lp)}
+                    {deltaLabel}
+                    {globalRank}
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-emerald-200">
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        tooltipPoint.result === 'Win'
+                          ? 'bg-emerald-400'
+                          : tooltipPoint.result === 'Loss'
+                            ? 'bg-rose-400'
+                            : 'bg-slate-500'
+                      }`}
+                    />
+                    <span>
+                      {championLabel} · {resultLabel}
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-300">{kdaLabel}</div>
+                  <div className="text-[11px] text-slate-400">{player?.name ?? 'Player'}</div>
                 </div>
               )
             })()}
           </div>
         )}
+      </div>
+
+      <div className="rounded-2xl border border-slate-800 bg-slate-950 p-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">Players</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={showAllPlayers}
+              className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-emerald-400 hover:text-emerald-200"
+            >
+              Show all
+            </button>
+            <button
+              type="button"
+              onClick={hideAllPlayers}
+              className="rounded-full border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-slate-500"
+            >
+              Hide all
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={legendFilter}
+            onChange={(event) => setLegendFilter(event.target.value)}
+            placeholder="Search players..."
+            className="w-full max-w-xs rounded-2xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 placeholder:text-slate-500 shadow-sm focus:border-emerald-400 focus:outline-none"
+          />
+          <span className="text-[11px] font-semibold text-slate-400">
+            {visiblePuuids.size}/{players.length} visible
+          </span>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2 text-xs text-slate-300">
+          {filteredPlayers.map((player) => {
+            const isActive = visiblePuuids.has(player.puuid)
+            const color = colorByPuuid.get(player.puuid) ?? 'hsl(145 80% 45%)'
+            return (
+              <button
+                key={player.puuid}
+                type="button"
+                onClick={() => togglePlayerVisibility(player.puuid)}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 shadow-sm transition ${
+                  isActive
+                    ? 'border-emerald-400/70 bg-emerald-500/10 text-emerald-100'
+                    : 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                }`}
+              >
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+                <span className="font-semibold">{player.name}</span>
+              </button>
+            )
+          })}
+          {filteredPlayers.length === 0 ? (
+            <div className="text-xs text-slate-500">No players match your search.</div>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid gap-4 lg:grid-cols-3">
