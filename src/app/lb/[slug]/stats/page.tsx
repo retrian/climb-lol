@@ -42,6 +42,15 @@ type StatTotals = {
   durationS: number
 }
 
+type StatCardRow = {
+  key: string
+  name: string
+  iconUrl: string | null
+  value: string | number
+  subLabel?: string | null
+  valueClass?: string
+}
+
 function displayRiotId(player: Player) {
   const gn = (player.game_name ?? '').trim()
   if (gn) return gn
@@ -567,10 +576,11 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         </section>
 
         <section className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-          {[
+          {(
+            [
             {
               title: 'Most Total Kills',
-              data: topKills.map((row) => ({
+              data: topKills.map<StatCardRow>((row) => ({
                 key: row.puuid,
                 name: row.name,
                 iconUrl: row.iconUrl,
@@ -579,7 +589,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Most Total Deaths',
-              data: topDeaths.map((row) => ({
+              data: topDeaths.map<StatCardRow>((row) => ({
                 key: row.puuid,
                 name: row.name,
                 iconUrl: row.iconUrl,
@@ -588,7 +598,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Most Total Assists',
-              data: topAssists.map((row) => ({
+              data: topAssists.map<StatCardRow>((row) => ({
                 key: row.puuid,
                 name: row.name,
                 iconUrl: row.iconUrl,
@@ -597,7 +607,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Most Kills in One Game',
-              data: topKillsSingle.map((row) => {
+              data: topKillsSingle.map<StatCardRow>((row) => {
                 const player = playersByPuuid.get(row.puuid)
                 return {
                   key: `${row.match_id}-${row.puuid}`,
@@ -610,7 +620,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Most Deaths in One Game',
-              data: topDeathsSingle.map((row) => {
+              data: topDeathsSingle.map<StatCardRow>((row) => {
                 const player = playersByPuuid.get(row.puuid)
                 return {
                   key: `${row.match_id}-${row.puuid}`,
@@ -623,7 +633,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Most Assists in One Game',
-              data: topAssistsSingle.map((row) => {
+              data: topAssistsSingle.map<StatCardRow>((row) => {
                 const player = playersByPuuid.get(row.puuid)
                 return {
                   key: `${row.match_id}-${row.puuid}`,
@@ -636,7 +646,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Longest Single Match',
-              data: longestMatches.map((row) => ({
+              data: longestMatches.map<StatCardRow>((row) => ({
                 key: row.matchId,
                 name: row.playerName,
                 iconUrl: row.playerIconUrl,
@@ -646,7 +656,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Total Time Played',
-              data: topTotalTime.map((row) => ({
+              data: topTotalTime.map<StatCardRow>((row) => ({
                 key: row.puuid,
                 name: row.name,
                 iconUrl: row.iconUrl,
@@ -655,7 +665,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Highest Winrate',
-              data: topWinratePlayers.map((row) => ({
+              data: topWinratePlayers.map<StatCardRow>((row) => ({
                 key: row.puuid,
                 name: row.name,
                 iconUrl: row.iconUrl,
@@ -664,7 +674,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               title: 'Highest Average KDA',
-              data: topKdaPlayers.map((row) => ({
+              data: topKdaPlayers.map<StatCardRow>((row) => ({
                 key: row.puuid,
                 name: row.name,
                 iconUrl: row.iconUrl,
@@ -672,7 +682,8 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 valueClass: getKdaColor(row.kda.value),
               })),
             },
-          ].map((card, cardIdx) => (
+          ] satisfies Array<{ title: string; data: StatCardRow[] }>
+          ).map((card, cardIdx) => (
             <div
               key={card.title}
               className={`rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${
