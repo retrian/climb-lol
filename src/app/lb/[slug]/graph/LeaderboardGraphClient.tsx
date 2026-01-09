@@ -27,20 +27,14 @@ type RankCutoffs = {
 type NormalizedPoint = LpPoint & {
   ladderLp: number
   ts: number
+  totalGames: number
 }
 
 type TooltipState = {
   point: NormalizedPoint
-  index: number
   x: number
   y: number
 }
-
-const TIME_OPTIONS = [
-  { id: '30d', label: '30d', ms: 30 * 24 * 60 * 60 * 1000 },
-  { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
-  { id: '24h', label: '24h', ms: 24 * 60 * 60 * 1000 },
-]
 
 const TIER_ORDER_LOW_TO_HIGH = [
   'IRON',
@@ -106,31 +100,6 @@ function ladderLpWithCutoffs(
   }
 
   return baseMaster + lp
-}
-
-function ladderLpLabel(value: number, cutoffs: RankCutoffs) {
-  const baseMaster = baseMasterLadder()
-  if (value < baseMaster) {
-    const tierIndex = Math.max(0, Math.floor(value / 400))
-    const remainder = value - tierIndex * 400
-    const divisionIndex = Math.max(0, Math.min(3, Math.floor(remainder / 100)))
-    const tier = TIER_ORDER_LOW_TO_HIGH[tierIndex]
-    const division = DIV_ORDER_LOW_TO_HIGH[divisionIndex]
-    return `${titleCase(tier)} ${division}`
-  }
-
-  const masterCap = baseMaster + (cutoffs.grandmaster ?? 0)
-  const grandmasterCap = baseMaster + (cutoffs.challenger ?? 0)
-
-  if (value < masterCap) {
-    return `Master ${Math.max(0, Math.round(value - baseMaster))} LP`
-  }
-
-  if (value < grandmasterCap) {
-    return `Grandmaster ${Math.max(0, Math.round(value - masterCap))} LP`
-  }
-
-  return `Challenger ${Math.max(0, Math.round(value - grandmasterCap))} LP`
 }
 
 function buildLadderTicks(minValue: number, maxValue: number, cutoffs: RankCutoffs) {
@@ -203,7 +172,6 @@ export default function LeaderboardGraphClient({
   cutoffs: RankCutoffs
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const [timeRange, setTimeRange] = useState(TIME_OPTIONS[0].id)
   const [selectedPuuid, setSelectedPuuid] = useState(players[0]?.puuid ?? '')
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
 
@@ -226,57 +194,83 @@ export default function LeaderboardGraphClient({
           ...p,
           ladderLp: ladderLpWithCutoffs(p, cutoffs),
           ts,
+          // ✅ Total games is simply wins + losses
+          totalGames: (p.wins ?? 0) + (p.losses ?? 0),
         }
       })
       .filter((p): p is NormalizedPoint => p !== null)
   }, [cutoffs, points])
 
+  // Deduplicate points: only keep points where totalGames changed (or LP changed if counts missing)
   const pointsByPlayer = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
+    
+    // Group
+    const rawGroups = new Map<string, NormalizedPoint[]>()
     for (const point of normalizedPoints) {
-      const list = byPlayer.get(point.puuid)
+      const list = rawGroups.get(point.puuid)
       if (list) list.push(point)
-      else byPlayer.set(point.puuid, [point])
+      else rawGroups.set(point.puuid, [point])
     }
-    for (const list of byPlayer.values()) {
+
+    // Sort & Dedup
+    for (const [puuid, list] of rawGroups.entries()) {
       list.sort((a, b) => a.ts - b.ts)
+      
+      const processed: NormalizedPoint[] = []
+      let lastPoint: NormalizedPoint | null = null
+
+      for (const point of list) {
+        if (!lastPoint) {
+          processed.push(point)
+          lastPoint = point
+          continue
+        }
+
+        const hasCounts = 
+          typeof point.wins === 'number' && typeof lastPoint.wins === 'number'
+
+        let isUpdate = false
+        
+        if (hasCounts) {
+           // Update if total games increased
+           if (point.totalGames > lastPoint.totalGames) {
+             isUpdate = true
+           }
+        } else {
+           // Fallback if no W/L data
+           if (point.ladderLp !== lastPoint.ladderLp) {
+             isUpdate = true
+           }
+        }
+
+        if (isUpdate) {
+            processed.push(point)
+            lastPoint = point
+        }
+      }
+      byPlayer.set(puuid, processed)
     }
     return byPlayer
   }, [normalizedPoints])
 
-  const selectedPoints = useMemo(() => {
+  const filteredPoints = useMemo(() => {
     return selectedPuuid ? pointsByPlayer.get(selectedPuuid) ?? [] : []
   }, [pointsByPlayer, selectedPuuid])
-
-  const availability = useMemo(() => {
-    const availabilityMap = new Map<string, boolean>()
-    const now = Date.now()
-    for (const option of TIME_OPTIONS) {
-      const cutoff = now - option.ms
-      const hasEnough = selectedPoints.filter((p) => p.ts >= cutoff).length >= 2
-      availabilityMap.set(option.id, hasEnough)
-    }
-    return availabilityMap
-  }, [selectedPoints])
-
-  useEffect(() => {
-    if (!availability.get(timeRange)) {
-      const fallback = TIME_OPTIONS.find((option) => availability.get(option.id))
-      if (fallback) setTimeRange(fallback.id)
-    }
-  }, [availability, timeRange])
-
-  const filteredPoints = useMemo<NormalizedPoint[]>(() => {
-    const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
-    const cutoff = Date.now() - option.ms
-    return selectedPoints.filter((p) => p.ts >= cutoff)
-  }, [timeRange, selectedPoints])
 
   const chart = useMemo(() => {
     if (filteredPoints.length === 0) return null
     const ladderValues = filteredPoints.map((p) => p.ladderLp)
-    const min = Math.min(...ladderValues)
-    const max = Math.max(...ladderValues)
+    const rawMin = Math.min(...ladderValues)
+    const rawMax = Math.max(...ladderValues)
+
+    const baseMaster = baseMasterLadder()
+    const bottomPadding = rawMin >= baseMaster ? 20 : 100
+    const topPadding = rawMax >= baseMaster ? 20 : 100
+
+    const min = rawMin - bottomPadding
+    const max = rawMax + topPadding
+
     return {
       min,
       max,
@@ -290,18 +284,24 @@ export default function LeaderboardGraphClient({
   const innerWidth = width - padding.left - padding.right
   const innerHeight = height - padding.top - padding.bottom
 
-  const matchCount = filteredPoints.length
+  // ✅ Match Range: strictly based on the total games of the first and last point
+  const firstMatch = filteredPoints.length > 0 ? filteredPoints[0].totalGames : 1
+  const lastMatch = filteredPoints.length > 0 ? filteredPoints[filteredPoints.length - 1].totalGames : 1
+  // Ensure we have at least a range of 1 to avoid divide by zero
+  const matchRange = Math.max(lastMatch - firstMatch, 1)
+
   const plotPoints = useMemo(() => {
-    if (!chart) return []
-    return filteredPoints.map((point, index) => {
-      const x =
-        matchCount <= 1
-          ? padding.left + innerWidth / 2
-          : padding.left + (index / (matchCount - 1)) * innerWidth
+    if (!chart || filteredPoints.length === 0) return []
+    return filteredPoints.map((point) => {
+      // ✅ X is plotted based on actual Total Games count
+      // This handles "skipped" matches perfectly
+      const normalizedX = (point.totalGames - firstMatch) / matchRange
+      const x = padding.left + normalizedX * innerWidth
+          
       const y = padding.top + innerHeight - ((point.ladderLp - chart.min) / chart.range) * innerHeight
-      return { x, y, point, index }
+      return { x, y, point }
     })
-  }, [chart, filteredPoints, innerHeight, innerWidth, matchCount, padding.left, padding.top])
+  }, [chart, filteredPoints, innerHeight, innerWidth, firstMatch, matchRange, padding.left, padding.top])
 
   const ladderTicks = useMemo(() => {
     if (!chart) return []
@@ -309,19 +309,22 @@ export default function LeaderboardGraphClient({
   }, [chart, cutoffs])
 
   const xTicks = useMemo(() => {
-    if (matchCount === 0) return []
-    const count = Math.min(6, Math.max(2, matchCount))
-    const step = (matchCount - 1) / (count - 1)
-    return Array.from({ length: count }, (_, idx) => {
-      const rawValue = Math.round(1 + step * idx)
-      const value = Math.min(matchCount, Math.max(1, rawValue))
-      const x =
-        matchCount <= 1
-          ? padding.left + innerWidth / 2
-          : padding.left + ((value - 1) / (matchCount - 1)) * innerWidth
-      return { x, label: value }
+    if (filteredPoints.length === 0) return []
+    
+    // Create ticks from firstMatch to lastMatch
+    const tickCount = Math.min(6, matchRange + 1)
+    const step = matchRange / (tickCount - 1 || 1)
+    
+    return Array.from({ length: tickCount }, (_, idx) => {
+      const value = Math.round(firstMatch + step * idx)
+      // Clamp to ensure we don't go out of bounds due to rounding
+      const clampedValue = Math.min(lastMatch, Math.max(firstMatch, value))
+      const normalizedX = (clampedValue - firstMatch) / matchRange
+      const x = padding.left + normalizedX * innerWidth
+      
+      return { x, label: clampedValue }
     })
-  }, [innerWidth, matchCount, padding.left])
+  }, [filteredPoints.length, firstMatch, lastMatch, matchRange, innerWidth, padding.left])
 
   const linePath = useMemo(() => buildSmoothPath(plotPoints), [plotPoints])
   const areaPath = useMemo(() => {
@@ -332,12 +335,11 @@ export default function LeaderboardGraphClient({
     return `${linePath} L ${last.x} ${baseY} L ${first.x} ${baseY} Z`
   }, [plotPoints, linePath, innerHeight, padding.top])
 
-  const handleHover = (point: NormalizedPoint, index: number, clientX: number, clientY: number) => {
+  const handleHover = (point: NormalizedPoint, clientX: number, clientY: number) => {
     const container = containerRef.current?.getBoundingClientRect()
     if (!container) return
     setTooltip({
       point,
-      index,
       x: clientX - container.left,
       y: clientY - container.top,
     })
@@ -352,7 +354,8 @@ export default function LeaderboardGraphClient({
       current: formatRank(last.tier, last.rank, last.lp),
       debut: formatRank(first.tier, first.rank, first.lp),
       delta,
-      matches: filteredPoints.length,
+      // ✅ Matches is now exactly Wins + Losses
+      matches: last.totalGames,
     }
   }, [filteredPoints])
 
@@ -362,8 +365,8 @@ export default function LeaderboardGraphClient({
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="space-y-1">
-        <h2 className="text-2xl font-semibold text-slate-900">LP Evolution by Player</h2>
-        <p className="text-sm text-slate-500">LP history match by match</p>
+        <h2 className="text-2xl font-semibold text-slate-900">LP Graph by Player</h2>
+        <p className="text-sm text-slate-500">LP history by match</p>
       </div>
 
       <div className="mt-6">
@@ -385,26 +388,6 @@ export default function LeaderboardGraphClient({
               </button>
             )
           })}
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          {TIME_OPTIONS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => setTimeRange(option.id)}
-              disabled={!availability.get(option.id)}
-              className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
-                timeRange === option.id
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
-              } ${
-                availability.get(option.id) ? '' : 'cursor-not-allowed opacity-40 hover:border-slate-200'
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
         </div>
       </div>
 
@@ -470,15 +453,15 @@ export default function LeaderboardGraphClient({
               {areaPath ? <path d={areaPath} fill={lineColor} opacity={0.12} /> : null}
               {linePath ? <path d={linePath} fill="none" stroke={lineColor} strokeWidth={2.5} /> : null}
 
-              {plotPoints.map((plot) => (
+              {plotPoints.map((plot, idx) => (
                 <circle
-                  key={`point-${plot.index}`}
+                  key={`point-${idx}`}
                   cx={plot.x}
                   cy={plot.y}
                   r={6}
                   fill={lineColor}
-                  onMouseEnter={(event) => handleHover(plot.point, plot.index, event.clientX, event.clientY)}
-                  onMouseMove={(event) => handleHover(plot.point, plot.index, event.clientX, event.clientY)}
+                  onMouseEnter={(event) => handleHover(plot.point, event.clientX, event.clientY)}
+                  onMouseMove={(event) => handleHover(plot.point, event.clientX, event.clientY)}
                   onMouseLeave={() => setTooltip(null)}
                   className="cursor-pointer"
                 />
@@ -492,7 +475,7 @@ export default function LeaderboardGraphClient({
           </>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500">
-            No ranking history yet for this range.
+            No ranking history available.
           </div>
         )}
 
@@ -501,12 +484,13 @@ export default function LeaderboardGraphClient({
             className="pointer-events-none absolute z-10 -translate-x-1/2 -translate-y-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-lg"
             style={{ left: tooltip.x, top: tooltip.y - 12 }}
           >
-            <div className="font-semibold text-slate-900">Match {tooltip.index + 1}</div>
+            <div className="font-semibold text-slate-900">Match {tooltip.point.totalGames}</div>
             <div>{formatRank(tooltip.point.tier, tooltip.point.rank, tooltip.point.lp)}</div>
             <div>
               LP change{' '}
               {(() => {
-                const prev = filteredPoints[tooltip.index - 1]
+                const index = filteredPoints.indexOf(tooltip.point)
+                const prev = filteredPoints[index - 1]
                 if (!prev) return '0'
                 return formatDelta(tooltip.point.ladderLp - prev.ladderLp)
               })()}
