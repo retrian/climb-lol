@@ -919,25 +919,9 @@ export default async function LeaderboardDetail({
           bannerUrl={lb.banner_url}
           actionHref={`/lb/${slug}/graph`}
           actionLabel="View graph"
+          secondaryActionHref={`/lb/${slug}/stats`}
+          secondaryActionLabel="View stats"
         />
-
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-slate-900/10 bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white shadow-sm dark:border-slate-700 dark:bg-slate-100 dark:text-slate-900">
-            Leaderboard
-          </span>
-          <Link
-            href={`/lb/${slug}/graph`}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-500"
-          >
-            Graph
-          </Link>
-          <Link
-            href={`/lb/${slug}/stats`}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-500"
-          >
-            Stats
-          </Link>
-        </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
           {/* Left Sidebar: Activity */}
@@ -1049,6 +1033,8 @@ function TeamHeaderCard({
   bannerUrl,
   actionHref,
   actionLabel,
+  secondaryActionHref,
+  secondaryActionLabel,
 }: {
   name: string
   description?: string | null
@@ -1058,6 +1044,8 @@ function TeamHeaderCard({
   bannerUrl: string | null
   actionHref: string
   actionLabel: string
+  secondaryActionHref?: string
+  secondaryActionLabel?: string
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
@@ -1086,16 +1074,29 @@ function TeamHeaderCard({
               {visibility}
             </span>
             {actionHref && actionLabel && (
-              <Link
-                href={actionHref}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
-                </svg>
-                {actionLabel}
-              </Link>
+              <>
+                <Link
+                  href={actionHref}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
+                  </svg>
+                  {actionLabel}
+                </Link>
+                {secondaryActionHref && secondaryActionLabel && (
+                  <Link
+                    href={secondaryActionHref}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                    {secondaryActionLabel}
+                  </Link>
+                )}
+              </>
             )}
           </div>
 

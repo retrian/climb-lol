@@ -225,14 +225,15 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id).filter(Boolean)))
 
+  const seasonStartMs = new Date('2025-01-08T20:00:00.000Z').getTime()
+
   const { data: matchesRaw } = matchIds.length
     ? await supabase
         .from('matches')
         .select('match_id, game_duration_s, game_end_ts')
         .in('match_id', matchIds)
+        .gte('game_end_ts', seasonStartMs)
     : { data: [] as MatchRow[] }
-
-  const seasonStartMs = new Date('2025-01-08T20:00:00.000Z').getTime()
 
   const matchById = new Map<string, { durationS: number; endTs: number | null }>()
   for (const row of matchesRaw ?? []) {
