@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { formatRank } from '@/lib/rankFormat'
 
 type PlayerSummary = {
@@ -261,13 +261,6 @@ export default function LeaderboardGraphClient({
     return { availability: { timeAvailability }, pointsByPlayer: byPlayer }
   }, [normalizedPoints])
 
-  useEffect(() => {
-    if (!availability.timeAvailability.get(timeRange)) {
-      const fallback = TIME_OPTIONS.find((option) => availability.timeAvailability.get(option.id))
-      if (fallback) setTimeRange(fallback.id)
-    }
-  }, [availability, timeRange])
-
   const filteredPoints = useMemo<FilteredPoint[]>(() => {
     const option = TIME_OPTIONS.find((o) => o.id === timeRange) ?? TIME_OPTIONS[0]
     const cutoff = Date.now() - option.ms
@@ -431,25 +424,28 @@ export default function LeaderboardGraphClient({
         </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
-          {TIME_OPTIONS.map((option) => (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => setTimeRange(option.id)}
-              disabled={!availability.timeAvailability.get(option.id)}
-              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                timeRange === option.id
-                  ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
-                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
-              } ${
-                availability.timeAvailability.get(option.id)
-                  ? ''
-                  : 'cursor-not-allowed opacity-40 hover:border-slate-200 hover:text-slate-600 dark:hover:text-slate-300'
-              }`}
-            >
-              {option.label}
-            </button>
-          ))}
+          {TIME_OPTIONS.map((option) => {
+            const hasData = availability.timeAvailability.get(option.id)
+            return (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setTimeRange(option.id)}
+                className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                  timeRange === option.id
+                    ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-500/20 dark:text-blue-200'
+                    : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-white'
+                } ${hasData ? '' : 'opacity-60'}`}
+              >
+                <span>{option.label}</span>
+                {!hasData ? (
+                  <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+                    No data
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -571,7 +567,7 @@ export default function LeaderboardGraphClient({
           </>
         ) : (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
-            No ranking history yet for this range.
+            No data for this range.
           </div>
         )}
 
