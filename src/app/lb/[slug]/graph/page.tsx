@@ -1,7 +1,5 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { getChampionMap } from '@/lib/champions'
-import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import Link from 'next/link'
 
@@ -188,17 +186,13 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const latestPatch = await getLatestDdragonVersion()
-  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-  const champMap = await getChampionMap(ddVersion)
-
-  const seasonStartIso = '2026-01-08T20:00:00.000Z'
+  const seasonStartIso = '2025-01-08T20:00:00.000Z'
   const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000
   const seasonStartMs = new Date(seasonStartIso).getTime()
   const minDate = new Date(Math.max(ninetyDaysAgo, seasonStartMs)).toISOString()
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
-    .select('puuid, tier, rank, lp, wins, losses, fetched_at, match_id, champion_id, kills, deaths, assists, win, lp_delta, global_rank')
+    .select('puuid, tier, rank, lp, wins, losses, fetched_at')
     .in('puuid', puuids)
     .eq('queue_type', 'RANKED_SOLO_5x5')
     .gte('fetched_at', minDate)
@@ -215,15 +209,6 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     challenger: cutoffsByTier.get('CHALLENGER') ?? 500,
   }
 
-  const historyWithChampions = (historyRaw ?? []).map((row) => {
-    const championId = typeof row.champion_id === 'number' ? row.champion_id : null
-    const championName = championId !== null ? champMap[championId]?.name ?? null : null
-    return {
-      ...row,
-      champion_name: championName,
-    }
-  })
-
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
@@ -238,7 +223,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           actionLabel="Back to leaderboard"
         />
 
-        <LeaderboardGraphClient players={playerSummaries} points={historyWithChampions} cutoffs={cutoffs} />
+        <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} cutoffs={cutoffs} />
       </div>
     </main>
   )
