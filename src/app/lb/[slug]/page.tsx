@@ -44,6 +44,7 @@ interface Game {
   queueId?: number
   lpChange?: number | null
   lpNote?: string | null
+  endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
 // --- Constants ---
@@ -121,6 +122,37 @@ function formatDuration(durationS?: number) {
   const m = Math.floor(durationS / 60)
   const s = durationS % 60
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function computeEndType({
+  gameEndedInEarlySurrender,
+  gameEndedInSurrender,
+  gameDurationS,
+  lpChange,
+}: {
+  gameEndedInEarlySurrender?: boolean | null
+  gameEndedInSurrender?: boolean | null
+  gameDurationS?: number
+  lpChange?: number | null
+}): 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' {
+  const normalizedLpChange = typeof lpChange === 'number' && Number.isFinite(lpChange) ? lpChange : null
+
+  if (gameEndedInEarlySurrender === true) {
+    if (typeof gameDurationS === 'number') {
+      return gameDurationS <= 210 ? 'REMAKE' : 'EARLY_SURRENDER'
+    }
+    if (normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
+    return 'REMAKE'
+  }
+
+  if (gameEndedInSurrender === true) return 'SURRENDER'
+
+  if (typeof gameDurationS === 'number') {
+    if (gameDurationS <= 210 && (normalizedLpChange === null || normalizedLpChange === 0)) return 'REMAKE'
+    if (gameDurationS <= 300 && normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
+  }
+
+  return 'NORMAL'
 }
 
 function getKdaColor(kda: number) {
@@ -545,7 +577,7 @@ function LatestGamesFeed({
         const duration = formatDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
-        const isRemake = lpNote?.includes('REMAKE') ?? false
+        const isRemake = g.endType === 'REMAKE'
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
         const lpHoverLabel =
@@ -847,6 +879,14 @@ export default async function LeaderboardDetail({
 
   const latestGames: Game[] = (latestRaw ?? []).map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
+    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+    const durationS = row.game_duration_s ?? row.gameDuration
+    const endType = computeEndType({
+      gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
+      gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
+      gameDurationS: durationS,
+      lpChange,
+    })
 
     return {
       matchId: row.match_id,
@@ -858,10 +898,11 @@ export default async function LeaderboardDetail({
       a: row.assists ?? 0,
       cs: row.cs ?? 0,
       endTs: row.game_end_ts,
-      durationS: row.game_duration_s,
+      durationS,
       queueId: row.queue_id,
-      lpChange: row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null,
+      lpChange,
       lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+      endType,
     }
   })
 
