@@ -603,6 +603,8 @@ function LatestGamesFeed({
         const isRemake = g.endType === 'REMAKE'
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
+        const lpHoverLabel =
+          lpChange !== null ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` : 'LP'
         const resultBorderClasses = isRemake
           ? 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
           : g.win
@@ -661,19 +663,22 @@ function LatestGamesFeed({
                               : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                         }`}
                       >
-                        {lpNote === 'PROMOTED' || lpNote === 'DEMOTED' ? (
-                          <span className="inline-flex items-center gap-1">
-                            <span className="text-[11px] leading-none">
-                              {lpNote === 'PROMOTED' ? '▲' : '▼'}
+                        <span className="group-hover:hidden">
+                          {lpNote === 'PROMOTED' || lpNote === 'DEMOTED' ? (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="text-[11px] leading-none">
+                                {lpNote === 'PROMOTED' ? '▲' : '▼'}
+                              </span>
+                              {rankIcon && (
+                                <img src={rankIcon} alt="" className="h-3 w-3 object-contain" />
+                              )}
+                              <span>{rankLabel}</span>
                             </span>
-                            {rankIcon && (
-                              <img src={rankIcon} alt="" className="h-3 w-3 object-contain" />
-                            )}
-                            <span>{rankLabel}</span>
-                          </span>
-                        ) : (
-                          lpNote
-                        )}
+                          ) : (
+                            lpNote
+                          )}
+                        </span>
+                        <span className="hidden group-hover:inline">{lpHoverLabel}</span>
                       </span>
                     ) : (
                       <span
