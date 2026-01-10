@@ -5,8 +5,7 @@ import Link from 'next/link'
 
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
   const gn = (player.game_name ?? '').trim()
-  const tl = (player.tag_line ?? '').trim()
-  if (gn && tl) return `${gn}#${tl}`
+  if (gn) return gn
   return player.puuid
 }
 
@@ -25,6 +24,8 @@ function TeamHeaderCard({
   bannerUrl,
   actionHref,
   actionLabel,
+  secondaryActionHref,
+  secondaryActionLabel,
 }: {
   name: string
   description?: string | null
@@ -34,6 +35,8 @@ function TeamHeaderCard({
   bannerUrl: string | null
   actionHref: string
   actionLabel: string
+  secondaryActionHref?: string
+  secondaryActionLabel?: string
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
@@ -67,6 +70,18 @@ function TeamHeaderCard({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
                 </svg>
                 {actionLabel}
+              </Link>
+            )}
+            {secondaryActionHref && secondaryActionLabel && (
+              <Link
+                href={secondaryActionHref}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16l4-4 4 4" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 8l4 4 4-4" />
+                </svg>
+                {secondaryActionLabel}
               </Link>
             )}
           </div>
@@ -170,6 +185,8 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
             bannerUrl={lb.banner_url}
             actionHref={`/lb/${slug}`}
             actionLabel="Back to leaderboard"
+            secondaryActionHref={`/lb/${slug}/stats`}
+            secondaryActionLabel="View stats"
           />
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
             No players found for this leaderboard yet.
@@ -218,6 +235,8 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           bannerUrl={lb.banner_url}
           actionHref={`/lb/${slug}`}
           actionLabel="Back to leaderboard"
+          secondaryActionHref={`/lb/${slug}/stats`}
+          secondaryActionLabel="View stats"
         />
 
         <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} cutoffs={cutoffs} />
