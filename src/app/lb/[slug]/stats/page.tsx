@@ -424,6 +424,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     kdaLabel: champ.kda.label,
     kdaValue: champ.kda.value,
     avgCs: champ.avgCs,
+    players: champ.players,
   }))
 
   const playerLeaderboard = Array.from(playersTotals.entries()).map(([puuid, stats]) => {
