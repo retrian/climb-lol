@@ -449,6 +449,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topKillsSingle = [...participants].sort((a, b) => b.kills - a.kills).slice(0, 3)
   const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
   const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
+  const topCsSingle = [...participants].sort((a, b) => b.cs - a.cs).slice(0, 3)
 
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   for (const row of participants) {
@@ -634,6 +635,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 { title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills' },
                 { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
                 { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
+                { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
               ].map((block) => (
                 <div key={block.title}>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
