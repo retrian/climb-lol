@@ -77,6 +77,35 @@ function getRankIconSrc(tier?: string | null) {
   return `/images/${tier.toUpperCase()}_SMALL.jpg`
 }
 
+function formatTierShort(tier?: string | null, division?: string | null) {
+  if (!tier) return 'UR'
+  const normalizedTier = tier.toUpperCase()
+  const tierMap: Record<string, string> = {
+    IRON: 'I',
+    BRONZE: 'B',
+    SILVER: 'S',
+    GOLD: 'G',
+    PLATINUM: 'P',
+    EMERALD: 'E',
+    DIAMOND: 'D',
+    MASTER: 'M',
+    GRANDMASTER: 'GM',
+    CHALLENGER: 'C',
+  }
+  const tierShort = tierMap[normalizedTier] ?? normalizedTier[0] ?? 'U'
+  if (['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(normalizedTier)) return tierShort
+
+  const divisionMap: Record<string, string> = {
+    I: '1',
+    II: '2',
+    III: '3',
+    IV: '4',
+  }
+  const normalizedDivision = division?.toUpperCase() ?? ''
+  const divisionShort = divisionMap[normalizedDivision] ?? normalizedDivision
+  return divisionShort ? `${tierShort}${divisionShort}` : tierShort
+}
+
 function syncTimeAgo(iso?: string | null) {
   if (!iso) return 'never'
   return timeAgo(new Date(iso).getTime())
@@ -529,11 +558,13 @@ function LatestGamesFeed({
   playersByPuuid,
   champMap,
   ddVersion,
+  rankByPuuid,
 }: {
   games: Game[]
   playersByPuuid: Map<string, Player>
   champMap: any
   ddVersion: string
+  rankByPuuid: Map<string, any>
 }) {
   if (games.length === 0) {
     return (
@@ -566,12 +597,14 @@ function LatestGamesFeed({
         const duration = formatMatchDuration(g.durationS)
         const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
         const lpNote = g.lpNote?.toUpperCase() ?? null
+        const rankData = rankByPuuid.get(g.puuid)
+        const rankIcon = getRankIconSrc(rankData?.tier)
+        const rankLabel = formatTierShort(rankData?.tier, rankData?.rank)
         const isRemake = g.endType === 'REMAKE'
         const lpTitle =
           lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
         const lpHoverLabel =
           lpChange !== null ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` : 'LP'
-
         const resultBorderClasses = isRemake
           ? 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
           : g.win
@@ -630,7 +663,21 @@ function LatestGamesFeed({
                               : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                         }`}
                       >
-                        <span className="group-hover:hidden">{lpNote}</span>
+                        <span className="group-hover:hidden">
+                          {lpNote === 'PROMOTED' || lpNote === 'DEMOTED' ? (
+                            <span className="inline-flex items-center gap-1">
+                              <span className="text-[11px] leading-none">
+                                {lpNote === 'PROMOTED' ? '▲' : '▼'}
+                              </span>
+                              {rankIcon && (
+                                <img src={rankIcon} alt="" className="h-3 w-3 object-contain" />
+                              )}
+                              <span>{rankLabel}</span>
+                            </span>
+                          ) : (
+                            lpNote
+                          )}
+                        </span>
                         <span className="hidden group-hover:inline">{lpHoverLabel}</span>
                       </span>
                     ) : (
@@ -947,7 +994,13 @@ export default async function LeaderboardDetail({
                 Latest Activity
               </h3>
             </div>
-            <LatestGamesFeed games={latestGames} playersByPuuid={playersByPuuid} champMap={champMap} ddVersion={ddVersion} />
+            <LatestGamesFeed
+              games={latestGames}
+              playersByPuuid={playersByPuuid}
+              champMap={champMap}
+              ddVersion={ddVersion}
+              rankByPuuid={rankBy}
+            />
           </aside>
 
           {/* Right Content */}
