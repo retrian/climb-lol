@@ -548,8 +548,12 @@ export default function MatchDetailsModal({
       }
       condensed.push(event)
     }
-    return condensed
+    return condensed.filter((event) => event.timestamp <= 15 * 60 * 1000).slice(0, 12)
   }, [focusedTimeline.items])
+
+  const skillOrder = useMemo(() => {
+    return focusedTimeline.skills.slice(0, 18)
+  }, [focusedTimeline.skills])
 
   const modalContent = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 md:p-8">
@@ -643,7 +647,7 @@ export default function MatchDetailsModal({
           {error ? <span className="text-xs text-amber-300">Some details unavailable.</span> : null}
         </div>
 
-        <div className="flex-1 overflow-hidden px-4 py-6 md:px-6">
+        <div className="flex-1 overflow-hidden px-4 py-4 md:px-6 md:py-4">
           {loadingMatch ? (
             <div className="space-y-4">
               <div className="h-24 rounded-2xl bg-slate-900/60 animate-pulse" />
@@ -654,7 +658,7 @@ export default function MatchDetailsModal({
               {activeTab === 'overview' ? (
                 <div className="space-y-3">
                   {focusedParticipant ? (
-                    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-2 text-xs text-slate-300">
+                    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/40 px-3 py-2 text-[11px] text-slate-300">
                       {(() => {
                         const champData =
                           staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId]
@@ -667,7 +671,7 @@ export default function MatchDetailsModal({
                           <img
                             src={getChampionIconUrl(ddragonVersion, champImage)}
                             alt=""
-                            className="h-8 w-8 rounded-lg border border-slate-800"
+                          className="h-7 w-7 rounded-lg border border-slate-800"
                             onError={handleImageError}
                           />
                         )
@@ -706,7 +710,7 @@ export default function MatchDetailsModal({
                                   src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
                                   alt={spell1.name}
                                   title={spell1.name}
-                                  className="h-6 w-6 rounded"
+                                  className="h-5 w-5 rounded"
                                   onError={handleImageError}
                                 />
                               ) : null}
@@ -716,7 +720,7 @@ export default function MatchDetailsModal({
                                   src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
                                   alt={spell2.name}
                                   title={spell2.name}
-                                  className="h-6 w-6 rounded"
+                                  className="h-5 w-5 rounded"
                                   onError={handleImageError}
                                 />
                               ) : null}
@@ -726,7 +730,7 @@ export default function MatchDetailsModal({
                                   src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.keystone.icon}`}
                                   alt={focusedRunes.keystone.name}
                                   title={focusedRunes.keystone.name}
-                                  className="h-6 w-6 rounded-full"
+                                  className="h-5 w-5 rounded-full"
                                   onError={handleImageError}
                                 />
                               ) : null}
@@ -747,11 +751,11 @@ export default function MatchDetailsModal({
                                 src={src}
                                 alt={item?.name ?? ''}
                                 title={item?.name ?? ''}
-                                className="h-6 w-6 rounded"
+                                className="h-5 w-5 rounded"
                                 onError={handleImageError}
                               />
                             ) : (
-                              <div key={`${itemId}-${idx}`} className="h-6 w-6 rounded bg-slate-800" />
+                              <div key={`${itemId}-${idx}`} className="h-5 w-5 rounded bg-slate-800" />
                             )
                           })}
                       </div>
@@ -764,10 +768,10 @@ export default function MatchDetailsModal({
                     ].map((team) => (
                       <div key={team.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-2">
                         <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">
-                          <span>{team.label}</span>
+                          <span>{team.label.toUpperCase()} TEAM</span>
                           <span>
-                            {(team.teamId === 100 ? teamTotals.blue.kills : teamTotals.red.kills).toLocaleString()} K ·{' '}
-                            {(team.teamId === 100 ? teamTotals.blue.gold : teamTotals.red.gold).toLocaleString()} G
+                            {(team.teamId === 100 ? teamTotals.blue.kills : teamTotals.red.kills).toLocaleString()}K /{' '}
+                            {(team.teamId === 100 ? teamTotals.blue.gold : teamTotals.red.gold).toLocaleString()}G
                           </span>
                         </div>
                         <div className="mt-2 grid gap-1">
@@ -799,7 +803,7 @@ export default function MatchDetailsModal({
                             return (
                               <div
                                 key={player.puuid}
-                                className={`grid items-center gap-2 rounded-xl border border-slate-800/60 bg-slate-950/40 px-2 py-1.5 md:grid-cols-[170px_80px_1fr_60px_60px_140px] ${
+                                className={`grid items-center gap-2 rounded-xl border border-slate-800/60 bg-slate-950/40 px-2 py-1 md:grid-cols-[155px_70px_1fr_55px_55px_125px] ${
                                   focusedPuuid === player.puuid ? 'ring-1 ring-amber-400/60' : ''
                                 }`}
                               >
@@ -809,14 +813,14 @@ export default function MatchDetailsModal({
                                     <img
                                       src={champSrc}
                                       alt=""
-                                      className="h-8 w-8 rounded-lg border border-slate-800"
+                                      className="h-7 w-7 rounded-lg border border-slate-800"
                                       onError={handleImageError}
                                     />
                                   ) : (
-                                    <div className="h-8 w-8 rounded-lg border border-slate-800 bg-slate-800" />
+                                    <div className="h-7 w-7 rounded-lg border border-slate-800 bg-slate-800" />
                                   )}
                                   <div className="min-w-0">
-                                    <div className="truncate text-[11px] font-semibold text-white">
+                                    <div className="truncate text-[10px] font-semibold text-white">
                                       {accounts[player.puuid]
                                         ? `${accounts[player.puuid].gameName}#${accounts[player.puuid].tagLine}`
                                         : player.riotIdGameName
@@ -864,11 +868,11 @@ export default function MatchDetailsModal({
                                         src={src}
                                         alt={item?.name ?? ''}
                                         title={item?.name ?? ''}
-                                        className="h-5 w-5 rounded"
+                                        className="h-[22px] w-[22px] rounded"
                                         onError={handleImageError}
                                       />
                                     ) : (
-                                      <div key={`${player.puuid}-item-${idx}`} className="h-5 w-5 rounded bg-slate-800" />
+                                      <div key={`${player.puuid}-item-${idx}`} className="h-[22px] w-[22px] rounded bg-slate-800" />
                                     )
                                   })}
                                   {player.item6 ? (
@@ -881,11 +885,11 @@ export default function MatchDetailsModal({
                                           src={src}
                                           alt={item?.name ?? ''}
                                           title={item?.name ?? ''}
-                                          className="h-5 w-5 rounded border border-slate-700"
+                                          className="h-[22px] w-[22px] rounded border border-slate-700"
                                           onError={handleImageError}
                                         />
                                       ) : (
-                                        <div className="h-5 w-5 rounded bg-slate-800" />
+                                        <div className="h-[22px] w-[22px] rounded bg-slate-800" />
                                       )
                                     })()
                                   ) : null}
@@ -895,11 +899,11 @@ export default function MatchDetailsModal({
                                       src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
                                       alt={spell1.name}
                                       title={spell1.name}
-                                      className="h-5 w-5 rounded"
+                                      className="h-[22px] w-[22px] rounded"
                                       onError={handleImageError}
                                     />
                                   ) : (
-                                    <div className="h-5 w-5 rounded bg-slate-800" />
+                                    <div className="h-[22px] w-[22px] rounded bg-slate-800" />
                                   )}
                                   {spell2?.image?.full ? (
                                     // eslint-disable-next-line @next/next/no-img-element
@@ -907,11 +911,11 @@ export default function MatchDetailsModal({
                                       src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
                                       alt={spell2.name}
                                       title={spell2.name}
-                                      className="h-5 w-5 rounded"
+                                      className="h-[22px] w-[22px] rounded"
                                       onError={handleImageError}
                                     />
                                   ) : (
-                                    <div className="h-5 w-5 rounded bg-slate-800" />
+                                    <div className="h-[22px] w-[22px] rounded bg-slate-800" />
                                   )}
                                   {keystone?.icon ? (
                                     // eslint-disable-next-line @next/next/no-img-element
@@ -919,11 +923,11 @@ export default function MatchDetailsModal({
                                       src={`https://ddragon.leagueoflegends.com/cdn/img/${keystone.icon}`}
                                       alt={keystone.name}
                                       title={keystone.name}
-                                      className="h-5 w-5 rounded-full"
+                                      className="h-[22px] w-[22px] rounded-full"
                                       onError={handleImageError}
                                     />
                                   ) : (
-                                    <div className="h-5 w-5 rounded-full bg-slate-800" />
+                                    <div className="h-[22px] w-[22px] rounded-full bg-slate-800" />
                                   )}
                                 </div>
                               </div>
@@ -933,20 +937,16 @@ export default function MatchDetailsModal({
                       </div>
                     ))}
                   </div>
-                  <div className="text-[11px] text-slate-500">
-                    Player names and ranks use Account-V1, Summoner-V4, and League-V4. Icons use Data Dragon.
-                  </div>
                 </div>
               ) : null}
 
               {activeTab === 'team-analysis' ? (
-                <div className="max-h-full overflow-y-auto pr-1">
-                  <div className="space-y-6">
-                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                     <span>Team analysis</span>
                     <span>Match-V5 /lol/match/v5/matches</span>
                   </div>
-                  <div className="grid gap-4 md:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-2">
                     {[
                       { label: 'Champion Kills', key: 'kills' },
                       { label: 'Gold', key: 'gold' },
@@ -991,22 +991,22 @@ export default function MatchDetailsModal({
                         1,
                       )
                       return (
-                        <div key={block.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                          <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
+                        <div key={block.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                          <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">
                             <span>{block.label}</span>
                             <span>
                               {blueTotal.toLocaleString()} / {redTotal.toLocaleString()}
                             </span>
                           </div>
-                          <div className="mt-3 flex items-center gap-2">
-                            <div className="h-2 flex-1 rounded-full bg-slate-800">
-                              <div className="h-2 rounded-full bg-blue-500" style={{ width: `${(blueTotal / total) * 100}%` }} />
+                          <div className="mt-2 flex items-center gap-2">
+                            <div className="h-1.5 flex-1 rounded-full bg-slate-800">
+                              <div className="h-1.5 rounded-full bg-blue-500" style={{ width: `${(blueTotal / total) * 100}%` }} />
                             </div>
-                            <div className="h-2 flex-1 rounded-full bg-slate-800">
-                              <div className="h-2 rounded-full bg-rose-500" style={{ width: `${(redTotal / total) * 100}%` }} />
+                            <div className="h-1.5 flex-1 rounded-full bg-slate-800">
+                              <div className="h-1.5 rounded-full bg-rose-500" style={{ width: `${(redTotal / total) * 100}%` }} />
                             </div>
                           </div>
-                          <div className="mt-3 grid gap-3 text-xs text-slate-400 md:grid-cols-2">
+                          <div className="mt-2 grid gap-2 text-[11px] text-slate-400 md:grid-cols-2">
                             <div className="space-y-1">
                               {teams.blue.map((player) => {
                                 const value =
@@ -1031,13 +1031,13 @@ export default function MatchDetailsModal({
                                       <img
                                         src={champSrc}
                                         alt=""
-                                        className="h-5 w-5 rounded-md border border-slate-800"
+                                        className="h-[18px] w-[18px] rounded-md border border-slate-800"
                                         onError={handleImageError}
                                       />
                                     ) : (
-                                      <div className="h-5 w-5 rounded-md border border-slate-800 bg-slate-800" />
+                                      <div className="h-[18px] w-[18px] rounded-md border border-slate-800 bg-slate-800" />
                                     )}
-                                    <span className="w-12 text-[11px] text-slate-300">{value}</span>
+                                    <span className="w-10 text-[10px] text-slate-300">{value}</span>
                                     <div className="h-1 w-full rounded-full bg-slate-800">
                                       <div className="h-1 rounded-full bg-blue-500" style={{ width: `${(value / blueMax) * 100}%` }} />
                                     </div>
@@ -1069,13 +1069,13 @@ export default function MatchDetailsModal({
                                       <img
                                         src={champSrc}
                                         alt=""
-                                        className="h-5 w-5 rounded-md border border-slate-800"
+                                        className="h-[18px] w-[18px] rounded-md border border-slate-800"
                                         onError={handleImageError}
                                       />
                                     ) : (
-                                      <div className="h-5 w-5 rounded-md border border-slate-800 bg-slate-800" />
+                                      <div className="h-[18px] w-[18px] rounded-md border border-slate-800 bg-slate-800" />
                                     )}
-                                    <span className="w-12 text-[11px] text-slate-300">{value}</span>
+                                    <span className="w-10 text-[10px] text-slate-300">{value}</span>
                                     <div className="h-1 w-full rounded-full bg-slate-800">
                                       <div className="h-1 rounded-full bg-rose-500" style={{ width: `${(value / redMax) * 100}%` }} />
                                     </div>
@@ -1088,13 +1088,11 @@ export default function MatchDetailsModal({
                       )
                     })}
                   </div>
-                  </div>
                 </div>
               ) : null}
 
               {activeTab === 'build' ? (
-                <div className="max-h-full overflow-y-auto pr-1">
-                  <div className="space-y-6">
+                <div className="space-y-4">
                   <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
                     <span>Build</span>
                     <span>Match-V5 + Timeline-V5</span>
@@ -1104,15 +1102,15 @@ export default function MatchDetailsModal({
                       Focused player not found for this match.
                     </div>
                   ) : (
-                    <div className="space-y-4">
-                      <div className="grid gap-4 lg:grid-cols-3">
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Final build</div>
-                          <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="space-y-3">
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Final build</div>
+                          <div className="mt-2 flex flex-wrap gap-2">
                             {[focusedParticipant.item0, focusedParticipant.item1, focusedParticipant.item2, focusedParticipant.item3, focusedParticipant.item4, focusedParticipant.item5].map(
                               (itemId, idx) => {
                                 if (!itemId) {
-                                  return <div key={`${itemId}-${idx}`} className="h-9 w-9 rounded border border-slate-800/80" />
+                                  return <div key={`${itemId}-${idx}`} className="h-8 w-8 rounded border border-slate-800/80" />
                                 }
                                 const item = staticData.items[String(itemId)]
                                 const src = itemId ? getItemIconUrl(ddragonVersion, itemId) : null
@@ -1123,11 +1121,11 @@ export default function MatchDetailsModal({
                                     src={src}
                                     alt={item?.name ?? ''}
                                     title={item?.name ?? ''}
-                                    className="h-9 w-9 rounded"
+                                    className="h-8 w-8 rounded"
                                     onError={handleImageError}
                                   />
                                 ) : (
-                                  <div key={`${itemId}-${idx}`} className="h-9 w-9 rounded border border-slate-800/80" />
+                                  <div key={`${itemId}-${idx}`} className="h-8 w-8 rounded border border-slate-800/80" />
                                 )
                               },
                             )}
@@ -1143,30 +1141,30 @@ export default function MatchDetailsModal({
                                     src={src}
                                     alt={item?.name ?? ''}
                                     title={item?.name ?? ''}
-                                    className="h-9 w-9 rounded border border-slate-700"
+                                    className="h-8 w-8 rounded border border-slate-700"
                                     onError={handleImageError}
                                   />
                                 ) : (
-                                  <div className="h-9 w-9 rounded bg-slate-800" />
+                                  <div className="h-8 w-8 rounded bg-slate-800" />
                                 )
                               })()
                             ) : null}
                           </div>
                         </div>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Runes</div>
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Runes</div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
                             {focusedRunes.keystone?.icon ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img
                                 src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.keystone.icon}`}
                                 alt={focusedRunes.keystone.name}
                                 title={focusedRunes.keystone.name}
-                                className="h-9 w-9 rounded-full"
+                                className="h-8 w-8 rounded-full"
                                 onError={handleImageError}
                               />
                             ) : (
-                              <div className="h-9 w-9 rounded-full bg-slate-800" />
+                              <div className="h-8 w-8 rounded-full bg-slate-800" />
                             )}
                             {focusedRunes.primaryTree?.icon ? (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -1174,11 +1172,11 @@ export default function MatchDetailsModal({
                                 src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.primaryTree.icon}`}
                                 alt={focusedRunes.primaryTree.name}
                                 title={focusedRunes.primaryTree.name}
-                                className="h-8 w-8 rounded-full"
+                                className="h-7 w-7 rounded-full"
                                 onError={handleImageError}
                               />
                             ) : (
-                              <div className="h-8 w-8 rounded-full bg-slate-800" />
+                              <div className="h-7 w-7 rounded-full bg-slate-800" />
                             )}
                             {focusedRunes.secondaryTree?.icon ? (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -1186,11 +1184,11 @@ export default function MatchDetailsModal({
                                 src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.secondaryTree.icon}`}
                                 alt={focusedRunes.secondaryTree.name}
                                 title={focusedRunes.secondaryTree.name}
-                                className="h-8 w-8 rounded-full"
+                                className="h-7 w-7 rounded-full"
                                 onError={handleImageError}
                               />
                             ) : (
-                              <div className="h-8 w-8 rounded-full bg-slate-800" />
+                              <div className="h-7 w-7 rounded-full bg-slate-800" />
                             )}
                             {focusedRunes.highlights.map((rune) => (
                               // eslint-disable-next-line @next/next/no-img-element
@@ -1199,12 +1197,12 @@ export default function MatchDetailsModal({
                                 src={`https://ddragon.leagueoflegends.com/cdn/img/${rune.icon}`}
                                 alt={rune.name}
                                 title={rune.name}
-                                className="h-7 w-7 rounded-full"
+                                className="h-6 w-6 rounded-full"
                                 onError={handleImageError}
                               />
                             ))}
                           </div>
-                          <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-300">
+                          <div className="mt-2 flex flex-wrap gap-2 text-[10px] text-slate-300">
                             {focusedParticipant.perks?.statPerks ? (
                               <>
                                 <span className="rounded-full border border-slate-700 px-2 py-0.5">
@@ -1220,9 +1218,9 @@ export default function MatchDetailsModal({
                             ) : null}
                           </div>
                         </div>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Summ spells + start</div>
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Summ spells + start</div>
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
                             {(() => {
                               const spells = Object.values(staticData.spells)
                               const spell1 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner1Id)
@@ -1235,11 +1233,11 @@ export default function MatchDetailsModal({
                                       src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
                                       alt={spell1.name}
                                       title={spell1.name}
-                                      className="h-9 w-9 rounded"
+                                      className="h-8 w-8 rounded"
                                       onError={handleImageError}
                                     />
                                   ) : (
-                                    <div className="h-9 w-9 rounded bg-slate-800" />
+                                    <div className="h-8 w-8 rounded bg-slate-800" />
                                   )}
                                   {spell2?.image?.full ? (
                                     // eslint-disable-next-line @next/next/no-img-element
@@ -1247,11 +1245,11 @@ export default function MatchDetailsModal({
                                       src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
                                       alt={spell2.name}
                                       title={spell2.name}
-                                      className="h-9 w-9 rounded"
+                                      className="h-8 w-8 rounded"
                                       onError={handleImageError}
                                     />
                                   ) : (
-                                    <div className="h-9 w-9 rounded bg-slate-800" />
+                                    <div className="h-8 w-8 rounded bg-slate-800" />
                                   )}
                                 </>
                               )
@@ -1279,14 +1277,14 @@ export default function MatchDetailsModal({
                           </div>
                         </div>
                       </div>
-                      <div className="grid gap-4 lg:grid-cols-2">
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Item build order</div>
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Item build order</div>
                           {loadingTimeline ? (
-                            <div className="mt-3 h-24 rounded-xl bg-slate-800/60 animate-pulse" />
+                            <div className="mt-2 h-24 rounded-xl bg-slate-800/60 animate-pulse" />
                           ) : focusedPurchaseTimeline.length ? (
-                            <ul className="mt-3 space-y-2 text-xs text-slate-300">
-                              {focusedPurchaseTimeline.slice(0, 10).map((event, idx) => {
+                            <ul className="mt-2 space-y-1 text-[11px] text-slate-300">
+                              {focusedPurchaseTimeline.map((event, idx) => {
                                 const item = staticData.items[String(event.itemId)]
                                 const src = event.itemId ? getItemIconUrl(ddragonVersion, event.itemId) : null
                                 const minutes = Math.floor(event.timestamp / 60000)
@@ -1297,9 +1295,9 @@ export default function MatchDetailsModal({
                                     <span className="flex items-center gap-2">
                                       {src ? (
                                         // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={src} alt={label} title={label} className="h-8 w-8 rounded" onError={handleImageError} />
+                                        <img src={src} alt={label} title={label} className="h-7 w-7 rounded" onError={handleImageError} />
                                       ) : (
-                                        <div className="h-8 w-8 rounded bg-slate-800" />
+                                        <div className="h-7 w-7 rounded bg-slate-800" />
                                       )}
                                       <span>{label}</span>
                                     </span>
@@ -1311,27 +1309,26 @@ export default function MatchDetailsModal({
                               })}
                             </ul>
                           ) : (
-                            <div className="mt-3 text-xs text-slate-400">No item timeline available.</div>
+                            <div className="mt-2 text-xs text-slate-400">No item timeline available.</div>
                           )}
                         </div>
-                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Skill order</div>
-                          {focusedTimeline.skills.length ? (
-                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
-                              {focusedTimeline.skills.map((event, idx) => (
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-400">Skill order</div>
+                          {skillOrder.length ? (
+                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-300">
+                              {skillOrder.map((event, idx) => (
                                 <span key={`${event.timestamp}-${idx}`} className="rounded bg-slate-800 px-2 py-1">
                                   {event.skillSlot === 1 ? 'Q' : event.skillSlot === 2 ? 'W' : event.skillSlot === 3 ? 'E' : 'R'}
                                 </span>
                               ))}
                             </div>
                           ) : (
-                            <div className="mt-3 text-xs text-slate-400">Skill order unavailable.</div>
+                            <div className="mt-2 text-xs text-slate-400">Skill order unavailable.</div>
                           )}
                         </div>
                       </div>
                     </div>
                   )}
-                  </div>
                 </div>
               ) : null}
             </>
