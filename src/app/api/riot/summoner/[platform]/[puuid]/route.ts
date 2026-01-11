@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server'
 import { getRiotApiKey } from '@/lib/riot/getRiotApiKey'
 
+interface SummonerResponse {
+  id: string
+  puuid: string
+}
+
 async function riotFetch<T>(url: string, apiKey: string): Promise<T> {
   const res = await fetch(url, {
     headers: {
@@ -22,7 +27,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ platform: 
     const { platform, puuid } = await params
     const apiKey = getRiotApiKey()
     const platformHost = `${platform.toLowerCase()}.api.riotgames.com`
-    const summoner = await riotFetch(
+    const summoner = await riotFetch<SummonerResponse>(
       `https://${platformHost}/lol/summoner/v4/summoners/by-puuid/${puuid}`,
       apiKey,
     )
