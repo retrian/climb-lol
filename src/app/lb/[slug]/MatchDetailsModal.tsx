@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 
@@ -107,7 +106,7 @@ interface StaticDataState {
   items: Record<string, any>
   spells: Record<string, any>
   runes: Array<any>
-  champions: Record<number, { id: string; name: string }>
+  champions: Record<number, { id: string; name: string; image: { full: string } }>
 }
 
 const QUEUE_LABELS: Record<number, string> = {
@@ -133,19 +132,40 @@ const SHARD_LABELS: Record<number, string> = {
   5008: 'AD',
   5009: 'AP',
 }
+const FALLBACK_ICON =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="100%" height="100%" rx="6" ry="6" fill="#1f2937"/></svg>`,
+  )
 
 function buildStaticUrl(version: string, path: string) {
   return `https://ddragon.leagueoflegends.com/cdn/${version}/${path}`
 }
 
+function getItemIconUrl(version: string, itemId: number) {
+  return `https://ddragon.leagueoflegends.com/cdn/${version}/img/item/${itemId}.png`
+}
+
+function getChampionIconUrl(version: string, imageFull: string) {
+  return `https://ddragon.leagueoflegends.com/cdn/${version}/img/champion/${imageFull}`
+}
+
+function getChampionImageFull(champion?: { image?: { full: string }; id?: string }) {
+  if (!champion) return null
+  if (champion.image?.full) return champion.image.full
+  if (champion.id) return `${champion.id}.png`
+  return null
+}
+
 function buildChampionMap(data: Record<string, any>) {
-  const map: Record<number, { id: string; name: string }> = {}
+  const map: Record<number, { id: string; name: string; image: { full: string } }> = {}
   for (const champion of Object.values(data)) {
     const key = Number((champion as { key?: string }).key)
     if (!Number.isFinite(key)) continue
     map[key] = {
       id: (champion as { id: string }).id,
       name: (champion as { name: string }).name,
+      image: (champion as { image: { full: string } }).image,
     }
   }
   return map
@@ -161,6 +181,29 @@ function getMatchPatch(gameVersion?: string | null) {
     patch = patchNum < 10 ? patchNum : Math.floor(patchNum / 100)
   }
   return `${major}.${minor}.${patch}`
+}
+
+async function resolveDdragonVersion(gameVersion: string | undefined, fallback: string) {
+  const patch = getMatchPatch(gameVersion)
+  if (!patch) return fallback
+  const [major, minor] = patch.split('.')
+  if (!major || !minor) return fallback
+  try {
+    const res = await fetch('https://ddragon.leagueoflegends.com/api/versions.json')
+    if (!res.ok) return fallback
+    const versions = (await res.json()) as string[]
+    const match = versions.find((version) => version.startsWith(`${major}.${minor}.`))
+    return match ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+function handleImageError(event: { currentTarget: HTMLImageElement }) {
+  const target = event.currentTarget
+  if (target.src !== FALLBACK_ICON) {
+    target.src = FALLBACK_ICON
+  }
 }
 
 function copyToClipboard(value: string) {
@@ -199,6 +242,7 @@ export default function MatchDetailsModal({
   const [error, setError] = useState<string | null>(null)
   const [loadingMatch, setLoadingMatch] = useState(false)
   const [loadingTimeline, setLoadingTimeline] = useState(false)
+  const [ddragonVersion, setDdragonVersion] = useState(ddVersion)
   const closeButtonRef = useRef<HTMLButtonElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
 
@@ -244,6 +288,7 @@ export default function MatchDetailsModal({
     setSummoners({})
     setError(null)
     setLoadingMatch(true)
+    setDdragonVersion(ddVersion)
 
     const load = async () => {
       try {
@@ -263,7 +308,16 @@ export default function MatchDetailsModal({
 
   useEffect(() => {
     if (!open || !match) return
-    const patch = getMatchPatch(match.info.gameVersion) ?? ddVersion
+    const loadVersion = async () => {
+      const version = await resolveDdragonVersion(match.info.gameVersion, ddVersion)
+      setDdragonVersion(version)
+    }
+    loadVersion()
+  }, [open, match, ddVersion])
+
+  useEffect(() => {
+    if (!open || !match) return
+    const patch = ddragonVersion
     const loadStatic = async () => {
       try {
         const cached = STATIC_CACHE.get(patch)
@@ -450,11 +504,6 @@ export default function MatchDetailsModal({
     return { blue: getTotals(teams.blue), red: getTotals(teams.red) }
   }, [match, teams])
 
-  const ddragonVersion = useMemo(() => {
-    if (!match) return ddVersion
-    return getMatchPatch(match.info.gameVersion) ?? ddVersion
-  }, [match, ddVersion])
-
   const focusedTimeline = useMemo(() => {
     if (!timeline || !focusedParticipant) return { items: [], skills: [] }
     const events = timeline.info.frames.flatMap((frame) => frame.events ?? [])
@@ -594,11 +643,7 @@ export default function MatchDetailsModal({
           {error ? <span className="text-xs text-amber-300">Some details unavailable.</span> : null}
         </div>
 
-        <div
-          className={`flex-1 px-4 py-6 md:px-6 ${
-            activeTab === 'overview' ? 'overflow-y-auto md:overflow-hidden' : 'overflow-y-auto'
-          }`}
-        >
+        <div className="flex-1 overflow-hidden px-4 py-6 md:px-6">
           {loadingMatch ? (
             <div className="space-y-4">
               <div className="h-24 rounded-2xl bg-slate-900/60 animate-pulse" />
@@ -607,12 +652,112 @@ export default function MatchDetailsModal({
           ) : match ? (
             <>
               {activeTab === 'overview' ? (
-                <div className="grid gap-6 lg:grid-cols-[1.3fr_0.9fr]">
-                  <section className="space-y-3">
-                    <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-                      <span>Team scoreboard</span>
-                      <span>Match-V5 /lol/match/v5/matches</span>
+                <div className="space-y-3">
+                  {focusedParticipant ? (
+                    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-2 text-xs text-slate-300">
+                      {(() => {
+                        const champData =
+                          staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId]
+                        const champImage = getChampionImageFull(champData)
+                        if (!champImage) {
+                          return <div className="h-8 w-8 rounded-lg border border-slate-800 bg-slate-800" />
+                        }
+                        return (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={getChampionIconUrl(ddragonVersion, champImage)}
+                            alt=""
+                            className="h-8 w-8 rounded-lg border border-slate-800"
+                            onError={handleImageError}
+                          />
+                        )
+                      })()}
+                      <span className="font-semibold text-white">
+                        {accounts[focusedParticipant.puuid]
+                          ? `${accounts[focusedParticipant.puuid].gameName}#${accounts[focusedParticipant.puuid].tagLine}`
+                          : focusedParticipant.riotIdGameName
+                            ? `${focusedParticipant.riotIdGameName}#${focusedParticipant.riotIdTagline}`
+                            : focusedParticipant.summonerName}
+                      </span>
+                      <span className="text-slate-500">·</span>
+                      <span>
+                        {focusedParticipant.kills}/{focusedParticipant.deaths}/{focusedParticipant.assists}
+                      </span>
+                      <span className="text-slate-500">·</span>
+                      <span>{focusedParticipant.goldEarned.toLocaleString()} Gold</span>
+                      <span className="text-slate-500">·</span>
+                      <span>
+                        {((
+                          (focusedParticipant.totalMinionsKilled + focusedParticipant.neutralMinionsKilled) /
+                          (match.info.gameDuration / 60)
+                        ).toFixed(1))}{' '}
+                        CS/min
+                      </span>
+                      <div className="flex items-center gap-1">
+                        {(() => {
+                          const spells = Object.values(staticData.spells)
+                          const spell1 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner1Id)
+                          const spell2 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner2Id)
+                          return (
+                            <>
+                              {spell1?.image?.full ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
+                                  alt={spell1.name}
+                                  title={spell1.name}
+                                  className="h-6 w-6 rounded"
+                                  onError={handleImageError}
+                                />
+                              ) : null}
+                              {spell2?.image?.full ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
+                                  alt={spell2.name}
+                                  title={spell2.name}
+                                  className="h-6 w-6 rounded"
+                                  onError={handleImageError}
+                                />
+                              ) : null}
+                              {focusedRunes.keystone?.icon ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.keystone.icon}`}
+                                  alt={focusedRunes.keystone.name}
+                                  title={focusedRunes.keystone.name}
+                                  className="h-6 w-6 rounded-full"
+                                  onError={handleImageError}
+                                />
+                              ) : null}
+                            </>
+                          )
+                        })()}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {[focusedParticipant.item0, focusedParticipant.item1, focusedParticipant.item2, focusedParticipant.item3, focusedParticipant.item4, focusedParticipant.item5, focusedParticipant.item6]
+                          .filter(Boolean)
+                          .map((itemId, idx) => {
+                            const item = staticData.items[String(itemId)]
+                            const src = itemId ? getItemIconUrl(ddragonVersion, itemId) : null
+                            return src ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                key={`${itemId}-${idx}`}
+                                src={src}
+                                alt={item?.name ?? ''}
+                                title={item?.name ?? ''}
+                                className="h-6 w-6 rounded"
+                                onError={handleImageError}
+                              />
+                            ) : (
+                              <div key={`${itemId}-${idx}`} className="h-6 w-6 rounded bg-slate-800" />
+                            )
+                          })}
+                      </div>
                     </div>
+                  ) : null}
+                  <div className="grid gap-4 md:grid-cols-2">
                     {[
                       { label: 'Blue Team', teamId: 100, roster: teams.blue },
                       { label: 'Red Team', teamId: 200, roster: teams.red },
@@ -628,7 +773,8 @@ export default function MatchDetailsModal({
                         <div className="mt-2 grid gap-1">
                           {team.roster.map((player) => {
                             const champ = staticData.champions[player.championId] ?? champMap[player.championId]
-                            const champSrc = champ ? championIconUrl(ddragonVersion, champ.id) : null
+                            const champImage = getChampionImageFull(champ)
+                            const champSrc = champImage ? getChampionIconUrl(ddragonVersion, champImage) : null
                             const cs = player.totalMinionsKilled + player.neutralMinionsKilled
                             const csPerMin = match.info.gameDuration
                               ? (cs / (match.info.gameDuration / 60)).toFixed(1)
@@ -660,7 +806,12 @@ export default function MatchDetailsModal({
                                 <div className="flex items-center gap-2">
                                   {champSrc ? (
                                     // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={champSrc} alt="" className="h-8 w-8 rounded-lg border border-slate-800" />
+                                    <img
+                                      src={champSrc}
+                                      alt=""
+                                      className="h-8 w-8 rounded-lg border border-slate-800"
+                                      onError={handleImageError}
+                                    />
                                   ) : (
                                     <div className="h-8 w-8 rounded-lg border border-slate-800 bg-slate-800" />
                                   )}
@@ -671,9 +822,6 @@ export default function MatchDetailsModal({
                                         : player.riotIdGameName
                                           ? `${player.riotIdGameName}#${player.riotIdTagline}`
                                           : player.summonerName}
-                                    </div>
-                                    <div className="text-[9px] text-slate-400">
-                                      Lv {player.champLevel} · {champ?.name ?? 'Unknown'}
                                     </div>
                                   </div>
                                 </div>
@@ -708,7 +856,7 @@ export default function MatchDetailsModal({
                                   {items.map((itemId, idx) => {
                                     if (!itemId) return null
                                     const item = staticData.items[String(itemId)]
-                                    const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                    const src = itemId ? getItemIconUrl(ddragonVersion, itemId) : null
                                     return src ? (
                                       // eslint-disable-next-line @next/next/no-img-element
                                       <img
@@ -717,6 +865,7 @@ export default function MatchDetailsModal({
                                         alt={item?.name ?? ''}
                                         title={item?.name ?? ''}
                                         className="h-5 w-5 rounded"
+                                        onError={handleImageError}
                                       />
                                     ) : (
                                       <div key={`${player.puuid}-item-${idx}`} className="h-5 w-5 rounded bg-slate-800" />
@@ -725,7 +874,7 @@ export default function MatchDetailsModal({
                                   {player.item6 ? (
                                     (() => {
                                       const item = staticData.items[String(player.item6)]
-                                      const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                      const src = player.item6 ? getItemIconUrl(ddragonVersion, player.item6) : null
                                       return src ? (
                                         // eslint-disable-next-line @next/next/no-img-element
                                         <img
@@ -733,6 +882,7 @@ export default function MatchDetailsModal({
                                           alt={item?.name ?? ''}
                                           title={item?.name ?? ''}
                                           className="h-5 w-5 rounded border border-slate-700"
+                                          onError={handleImageError}
                                         />
                                       ) : (
                                         <div className="h-5 w-5 rounded bg-slate-800" />
@@ -746,6 +896,7 @@ export default function MatchDetailsModal({
                                       alt={spell1.name}
                                       title={spell1.name}
                                       className="h-5 w-5 rounded"
+                                      onError={handleImageError}
                                     />
                                   ) : (
                                     <div className="h-5 w-5 rounded bg-slate-800" />
@@ -757,6 +908,7 @@ export default function MatchDetailsModal({
                                       alt={spell2.name}
                                       title={spell2.name}
                                       className="h-5 w-5 rounded"
+                                      onError={handleImageError}
                                     />
                                   ) : (
                                     <div className="h-5 w-5 rounded bg-slate-800" />
@@ -768,6 +920,7 @@ export default function MatchDetailsModal({
                                       alt={keystone.name}
                                       title={keystone.name}
                                       className="h-5 w-5 rounded-full"
+                                      onError={handleImageError}
                                     />
                                   ) : (
                                     <div className="h-5 w-5 rounded-full bg-slate-800" />
@@ -779,133 +932,16 @@ export default function MatchDetailsModal({
                         </div>
                       </div>
                     ))}
-                    <div className="text-[11px] text-slate-500">
-                      Player names and ranks use Account-V1, Summoner-V4, and League-V4. Icons use Data Dragon.
-                    </div>
-                  </section>
-
-                  <aside className="space-y-3">
-                    <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-                      <span>Focused player</span>
-                      <span>Summary</span>
-                    </div>
-                    {focusedParticipant ? (
-                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                        <div className="flex items-center gap-3">
-                        {staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId] ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={championIconUrl(
-                              ddragonVersion,
-                              (staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId])
-                                .id,
-                            )}
-                            alt=""
-                            className="h-11 w-11 rounded-xl border border-slate-800"
-                          />
-                          ) : (
-                            <div className="h-11 w-11 rounded-xl border border-slate-800 bg-slate-800" />
-                          )}
-                          <div>
-                            <div className="text-sm font-semibold text-white">
-                              {accounts[focusedParticipant.puuid]
-                                ? `${accounts[focusedParticipant.puuid].gameName}#${accounts[focusedParticipant.puuid].tagLine}`
-                                : focusedParticipant.riotIdGameName
-                                  ? `${focusedParticipant.riotIdGameName}#${focusedParticipant.riotIdTagline}`
-                                  : focusedParticipant.summonerName}
-                            </div>
-                            <div className="text-xs text-slate-400">
-                              {focusedParticipant.kills}/{focusedParticipant.deaths}/{focusedParticipant.assists} ·{' '}
-                              {focusedParticipant.goldEarned.toLocaleString()} Gold
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mt-3 flex flex-wrap items-center gap-2">
-                          {(() => {
-                            const spells = Object.values(staticData.spells)
-                            const spell1 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner1Id)
-                            const spell2 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner2Id)
-                            return (
-                              <>
-                                {spell1?.image?.full ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
-                                    alt={spell1.name}
-                                    title={spell1.name}
-                                    className="h-7 w-7 rounded"
-                                  />
-                                ) : null}
-                                {spell2?.image?.full ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
-                                    alt={spell2.name}
-                                    title={spell2.name}
-                                    className="h-7 w-7 rounded"
-                                  />
-                                ) : null}
-                                {focusedRunes.keystone?.icon ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.keystone.icon}`}
-                                    alt={focusedRunes.keystone.name}
-                                    title={focusedRunes.keystone.name}
-                                    className="h-7 w-7 rounded-full"
-                                  />
-                                ) : null}
-                              </>
-                            )
-                          })()}
-                        </div>
-                        <div className="mt-3 grid gap-2 text-xs text-slate-300">
-                          <div className="flex items-center justify-between">
-                            <span>Damage</span>
-                            <span>{focusedParticipant.totalDamageDealtToChampions.toLocaleString()}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>CS / min</span>
-                            <span>
-                              {(
-                                (focusedParticipant.totalMinionsKilled + focusedParticipant.neutralMinionsKilled) /
-                                (match.info.gameDuration / 60)
-                              ).toFixed(1)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>Vision</span>
-                            <span>{focusedParticipant.visionScore}</span>
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2">
-                          {[focusedParticipant.item0, focusedParticipant.item1, focusedParticipant.item2, focusedParticipant.item3, focusedParticipant.item4, focusedParticipant.item5, focusedParticipant.item6]
-                            .filter(Boolean)
-                            .map((itemId, idx) => {
-                              const item = staticData.items[String(itemId)]
-                              const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
-                              return src ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img key={`${itemId}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-7 w-7 rounded" />
-                              ) : (
-                                <div key={`${itemId}-${idx}`} className="h-7 w-7 rounded bg-slate-800" />
-                              )
-                            })}
-                        </div>
-                        <div className="mt-3 text-[11px] text-slate-500">
-                          Match-V5 /lol/match/v5/matches/{match.metadata.matchId}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-400">
-                        Focused player data unavailable.
-                      </div>
-                    )}
-                  </aside>
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Player names and ranks use Account-V1, Summoner-V4, and League-V4. Icons use Data Dragon.
+                  </div>
                 </div>
               ) : null}
 
               {activeTab === 'team-analysis' ? (
-                <div className="space-y-6">
+                <div className="max-h-full overflow-y-auto pr-1">
+                  <div className="space-y-6">
                   <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
                     <span>Team analysis</span>
                     <span>Match-V5 /lol/match/v5/matches</span>
@@ -986,12 +1022,18 @@ export default function MatchDetailsModal({
                                             ? player.totalDamageTaken
                                             : player.totalMinionsKilled + player.neutralMinionsKilled
                                 const champ = staticData.champions[player.championId] ?? champMap[player.championId]
-                                const champSrc = champ ? championIconUrl(ddragonVersion, champ.id) : null
+                                const champImage = getChampionImageFull(champ)
+                                const champSrc = champImage ? getChampionIconUrl(ddragonVersion, champImage) : null
                                 return (
                                   <div key={`${block.label}-blue-${player.puuid}`} className="flex items-center gap-2">
                                     {champSrc ? (
                                       // eslint-disable-next-line @next/next/no-img-element
-                                      <img src={champSrc} alt="" className="h-5 w-5 rounded-md border border-slate-800" />
+                                      <img
+                                        src={champSrc}
+                                        alt=""
+                                        className="h-5 w-5 rounded-md border border-slate-800"
+                                        onError={handleImageError}
+                                      />
                                     ) : (
                                       <div className="h-5 w-5 rounded-md border border-slate-800 bg-slate-800" />
                                     )}
@@ -1018,12 +1060,18 @@ export default function MatchDetailsModal({
                                             ? player.totalDamageTaken
                                             : player.totalMinionsKilled + player.neutralMinionsKilled
                                 const champ = staticData.champions[player.championId] ?? champMap[player.championId]
-                                const champSrc = champ ? championIconUrl(ddragonVersion, champ.id) : null
+                                const champImage = getChampionImageFull(champ)
+                                const champSrc = champImage ? getChampionIconUrl(ddragonVersion, champImage) : null
                                 return (
                                   <div key={`${block.label}-red-${player.puuid}`} className="flex items-center gap-2">
                                     {champSrc ? (
                                       // eslint-disable-next-line @next/next/no-img-element
-                                      <img src={champSrc} alt="" className="h-5 w-5 rounded-md border border-slate-800" />
+                                      <img
+                                        src={champSrc}
+                                        alt=""
+                                        className="h-5 w-5 rounded-md border border-slate-800"
+                                        onError={handleImageError}
+                                      />
                                     ) : (
                                       <div className="h-5 w-5 rounded-md border border-slate-800 bg-slate-800" />
                                     )}
@@ -1040,11 +1088,13 @@ export default function MatchDetailsModal({
                       )
                     })}
                   </div>
+                  </div>
                 </div>
               ) : null}
 
               {activeTab === 'build' ? (
-                <div className="space-y-6">
+                <div className="max-h-full overflow-y-auto pr-1">
+                  <div className="space-y-6">
                   <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
                     <span>Build</span>
                     <span>Match-V5 + Timeline-V5</span>
@@ -1065,10 +1115,17 @@ export default function MatchDetailsModal({
                                   return <div key={`${itemId}-${idx}`} className="h-9 w-9 rounded border border-slate-800/80" />
                                 }
                                 const item = staticData.items[String(itemId)]
-                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                const src = itemId ? getItemIconUrl(ddragonVersion, itemId) : null
                                 return src ? (
                                   // eslint-disable-next-line @next/next/no-img-element
-                                  <img key={`${itemId}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-9 w-9 rounded" />
+                                  <img
+                                    key={`${itemId}-${idx}`}
+                                    src={src}
+                                    alt={item?.name ?? ''}
+                                    title={item?.name ?? ''}
+                                    className="h-9 w-9 rounded"
+                                    onError={handleImageError}
+                                  />
                                 ) : (
                                   <div key={`${itemId}-${idx}`} className="h-9 w-9 rounded border border-slate-800/80" />
                                 )
@@ -1077,10 +1134,18 @@ export default function MatchDetailsModal({
                             {focusedParticipant.item6 ? (
                               (() => {
                                 const item = staticData.items[String(focusedParticipant.item6)]
-                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                const src = focusedParticipant.item6
+                                  ? getItemIconUrl(ddragonVersion, focusedParticipant.item6)
+                                  : null
                                 return src ? (
                                   // eslint-disable-next-line @next/next/no-img-element
-                                  <img src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-9 w-9 rounded border border-slate-700" />
+                                  <img
+                                    src={src}
+                                    alt={item?.name ?? ''}
+                                    title={item?.name ?? ''}
+                                    className="h-9 w-9 rounded border border-slate-700"
+                                    onError={handleImageError}
+                                  />
                                 ) : (
                                   <div className="h-9 w-9 rounded bg-slate-800" />
                                 )
@@ -1098,6 +1163,7 @@ export default function MatchDetailsModal({
                                 alt={focusedRunes.keystone.name}
                                 title={focusedRunes.keystone.name}
                                 className="h-9 w-9 rounded-full"
+                                onError={handleImageError}
                               />
                             ) : (
                               <div className="h-9 w-9 rounded-full bg-slate-800" />
@@ -1109,6 +1175,7 @@ export default function MatchDetailsModal({
                                 alt={focusedRunes.primaryTree.name}
                                 title={focusedRunes.primaryTree.name}
                                 className="h-8 w-8 rounded-full"
+                                onError={handleImageError}
                               />
                             ) : (
                               <div className="h-8 w-8 rounded-full bg-slate-800" />
@@ -1120,6 +1187,7 @@ export default function MatchDetailsModal({
                                 alt={focusedRunes.secondaryTree.name}
                                 title={focusedRunes.secondaryTree.name}
                                 className="h-8 w-8 rounded-full"
+                                onError={handleImageError}
                               />
                             ) : (
                               <div className="h-8 w-8 rounded-full bg-slate-800" />
@@ -1132,6 +1200,7 @@ export default function MatchDetailsModal({
                                 alt={rune.name}
                                 title={rune.name}
                                 className="h-7 w-7 rounded-full"
+                                onError={handleImageError}
                               />
                             ))}
                           </div>
@@ -1167,6 +1236,7 @@ export default function MatchDetailsModal({
                                       alt={spell1.name}
                                       title={spell1.name}
                                       className="h-9 w-9 rounded"
+                                      onError={handleImageError}
                                     />
                                   ) : (
                                     <div className="h-9 w-9 rounded bg-slate-800" />
@@ -1178,6 +1248,7 @@ export default function MatchDetailsModal({
                                       alt={spell2.name}
                                       title={spell2.name}
                                       className="h-9 w-9 rounded"
+                                      onError={handleImageError}
                                     />
                                   ) : (
                                     <div className="h-9 w-9 rounded bg-slate-800" />
@@ -1190,14 +1261,21 @@ export default function MatchDetailsModal({
                               .slice(0, 3)
                               .map((event, idx) => {
                                 const item = staticData.items[String(event.itemId)]
-                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
-                                return src ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img key={`${event.timestamp}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-8 w-8 rounded" />
-                                ) : (
-                                  <div key={`${event.timestamp}-${idx}`} className="h-8 w-8 rounded bg-slate-800" />
-                                )
-                              })}
+                                const src = event.itemId ? getItemIconUrl(ddragonVersion, event.itemId) : null
+                              return src ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  key={`${event.timestamp}-${idx}`}
+                                  src={src}
+                                  alt={item?.name ?? ''}
+                                  title={item?.name ?? ''}
+                                  className="h-8 w-8 rounded"
+                                  onError={handleImageError}
+                                />
+                              ) : (
+                                <div key={`${event.timestamp}-${idx}`} className="h-8 w-8 rounded bg-slate-800" />
+                              )
+                            })}
                           </div>
                         </div>
                       </div>
@@ -1210,7 +1288,7 @@ export default function MatchDetailsModal({
                             <ul className="mt-3 space-y-2 text-xs text-slate-300">
                               {focusedPurchaseTimeline.slice(0, 10).map((event, idx) => {
                                 const item = staticData.items[String(event.itemId)]
-                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                const src = event.itemId ? getItemIconUrl(ddragonVersion, event.itemId) : null
                                 const minutes = Math.floor(event.timestamp / 60000)
                                 const seconds = Math.floor((event.timestamp % 60000) / 1000)
                                 const label = item?.name ?? `Item ${event.itemId}`
@@ -1219,7 +1297,7 @@ export default function MatchDetailsModal({
                                     <span className="flex items-center gap-2">
                                       {src ? (
                                         // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={src} alt={label} title={label} className="h-8 w-8 rounded" />
+                                        <img src={src} alt={label} title={label} className="h-8 w-8 rounded" onError={handleImageError} />
                                       ) : (
                                         <div className="h-8 w-8 rounded bg-slate-800" />
                                       )}
@@ -1253,6 +1331,7 @@ export default function MatchDetailsModal({
                       </div>
                     </div>
                   )}
+                  </div>
                 </div>
               ) : null}
             </>
