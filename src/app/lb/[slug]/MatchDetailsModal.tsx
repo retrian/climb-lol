@@ -159,7 +159,7 @@ export default function MatchDetailsModal({
   onClose: () => void
 }) {
   const [mounted, setMounted] = useState(false)
-  const [activeTab, setActiveTab] = useState<'overview' | 'build' | 'timeline'>('overview')
+  const [activeTab, setActiveTab] = useState<'overview' | 'team-analysis' | 'build'>('overview')
   const [match, setMatch] = useState<MatchResponse | null>(null)
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null)
   const [accounts, setAccounts] = useState<Record<string, AccountResponse>>({})
@@ -380,7 +380,7 @@ export default function MatchDetailsModal({
   }, [match, ddVersion])
 
   const focusedTimeline = useMemo(() => {
-    if (!timeline || !focusedParticipant) return { items: [], skills: [], timeline: [] }
+    if (!timeline || !focusedParticipant) return { items: [], skills: [] }
     const events = timeline.info.frames.flatMap((frame) => frame.events ?? [])
     const participantId = focusedParticipant.participantId
     const itemEvents = events.filter(
@@ -391,19 +391,48 @@ export default function MatchDetailsModal({
     const skillEvents = events.filter(
       (event) => event.participantId === participantId && event.type === 'SKILL_LEVEL_UP',
     )
-    const timelineEvents = events.filter(
-      (event) =>
-        event.participantId === participantId &&
-        ['ITEM_PURCHASED', 'ITEM_SOLD', 'ITEM_UNDO', 'SKILL_LEVEL_UP', 'LEVEL_UP'].includes(event.type),
-    )
-    return { items: itemEvents, skills: skillEvents, timeline: timelineEvents }
+    return { items: itemEvents, skills: skillEvents }
   }, [timeline, focusedParticipant])
+
+  const focusedRunes = useMemo(() => {
+    if (!focusedParticipant) return { keystone: null, primaryTree: null, secondaryTree: null, highlights: [] as any[] }
+    const primaryStyle = focusedParticipant.perks?.styles?.[0]
+    const secondaryStyle = focusedParticipant.perks?.styles?.[1]
+    const keystoneId = primaryStyle?.selections?.[0]?.perk
+    const highlightIds = primaryStyle?.selections?.slice(1, 3).map((sel) => sel.perk) ?? []
+    const keystone = staticData.runes
+      .flatMap((rune) => rune.slots)
+      .flatMap((slot) => slot.runes)
+      .find((rune) => rune.id === keystoneId)
+    const primaryTree = staticData.runes.find((rune) => rune.id === primaryStyle?.style)
+    const secondaryTree = staticData.runes.find((rune) => rune.id === secondaryStyle?.style)
+    const highlights = staticData.runes
+      .flatMap((rune) => rune.slots)
+      .flatMap((slot) => slot.runes)
+      .filter((rune) => highlightIds.includes(rune.id))
+    return { keystone, primaryTree, secondaryTree, highlights }
+  }, [focusedParticipant, staticData.runes])
+
+  const focusedPurchaseTimeline = useMemo(() => {
+    if (!focusedTimeline.items.length) return []
+    const sorted = [...focusedTimeline.items].sort((a, b) => a.timestamp - b.timestamp)
+    const condensed: Array<Record<string, any>> = []
+    for (const event of sorted) {
+      if (!event.itemId) continue
+      const last = condensed[condensed.length - 1]
+      if (last && last.itemId === event.itemId && event.timestamp - last.timestamp < 45000) {
+        continue
+      }
+      condensed.push(event)
+    }
+    return condensed
+  }, [focusedTimeline.items])
 
   const modalContent = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/70 backdrop-blur-sm p-4 md:p-8">
       <div
         ref={containerRef}
-        className="flex h-full max-h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-800/50 bg-slate-950 text-slate-100 shadow-2xl"
+        className="flex h-full max-h-[85vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-slate-800/50 bg-slate-950 text-slate-100 shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-labelledby="match-details-title"
@@ -470,24 +499,32 @@ export default function MatchDetailsModal({
         </header>
 
         <div className="flex flex-col gap-4 border-b border-slate-800 bg-slate-950 px-6 py-3 md:flex-row md:items-center">
-          {['overview', 'build', 'timeline'].map((tab) => (
+          {[
+            { key: 'overview', label: 'Overview' },
+            { key: 'team-analysis', label: 'Team Analysis' },
+            { key: 'build', label: 'Build' },
+          ].map((tab) => (
             <button
-              key={tab}
+              key={tab.key}
               type="button"
-              onClick={() => setActiveTab(tab as 'overview' | 'build' | 'timeline')}
+              onClick={() => setActiveTab(tab.key as 'overview' | 'team-analysis' | 'build')}
               className={`rounded-full px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.2em] ${
-                activeTab === tab
+                activeTab === tab.key
                   ? 'bg-white text-slate-900'
                   : 'border border-slate-800 text-slate-300 hover:border-slate-600'
               }`}
             >
-              {tab}
+              {tab.label}
             </button>
           ))}
           {error ? <span className="text-xs text-amber-300">Some details unavailable.</span> : null}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-6 md:px-6">
+        <div
+          className={`flex-1 px-4 py-6 md:px-6 ${
+            activeTab === 'overview' ? 'overflow-y-auto md:overflow-hidden' : 'overflow-y-auto'
+          }`}
+        >
           {loadingMatch ? (
             <div className="space-y-4">
               <div className="h-24 rounded-2xl bg-slate-900/60 animate-pulse" />
@@ -496,8 +533,8 @@ export default function MatchDetailsModal({
           ) : match ? (
             <>
               {activeTab === 'overview' ? (
-                <div className="space-y-8">
-                  <section className="space-y-4">
+                <div className="grid gap-6 lg:grid-cols-[1.3fr_0.9fr]">
+                  <section className="space-y-3">
                     <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
                       <span>Team scoreboard</span>
                       <span>Match-V5 /lol/match/v5/matches</span>
@@ -506,15 +543,15 @@ export default function MatchDetailsModal({
                       { label: 'Blue Team', teamId: 100, roster: teams.blue },
                       { label: 'Red Team', teamId: 200, roster: teams.red },
                     ].map((team) => (
-                      <div key={team.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                        <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-[0.2em] text-slate-300">
+                      <div key={team.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3">
+                        <div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-300">
                           <span>{team.label}</span>
                           <span>
-                            {team.teamId === 100 ? teamTotals.blue.kills : teamTotals.red.kills} Kills ·{' '}
-                            {(team.teamId === 100 ? teamTotals.blue.gold : teamTotals.red.gold).toLocaleString()} Gold
+                            {(team.teamId === 100 ? teamTotals.blue.kills : teamTotals.red.kills).toLocaleString()} K ·{' '}
+                            {(team.teamId === 100 ? teamTotals.blue.gold : teamTotals.red.gold).toLocaleString()} G
                           </span>
                         </div>
-                        <div className="mt-4 grid gap-3">
+                        <div className="mt-2 grid gap-1.5">
                           {team.roster.map((player) => {
                             const champ = champMap[player.championId]
                             const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
@@ -529,62 +566,51 @@ export default function MatchDetailsModal({
                               ...team.roster.map((p) => p.totalDamageDealtToChampions || 0),
                               1,
                             )
-                            const maxTaken = Math.max(...team.roster.map((p) => p.totalDamageTaken || 0), 1)
                             const items = [player.item0, player.item1, player.item2, player.item3, player.item4, player.item5]
                             const spells = Object.values(staticData.spells)
                             const spell1 = spells.find((s: any) => Number(s.key) === player.summoner1Id)
                             const spell2 = spells.find((s: any) => Number(s.key) === player.summoner2Id)
                             const keystoneId = player.perks?.styles?.[0]?.selections?.[0]?.perk
-                            const secondaryStyle = player.perks?.styles?.[1]?.style
-                            const rankTag = getRankTag(summoners[player.puuid])
                             const keystone = staticData.runes
                               .flatMap((rune) => rune.slots)
                               .flatMap((slot) => slot.runes)
                               .find((rune) => rune.id === keystoneId)
-                            const secondaryTree = staticData.runes.find((rune) => rune.id === secondaryStyle)
 
                             return (
                               <div
                                 key={player.puuid}
-                                className={`grid gap-3 rounded-xl border border-slate-800/60 bg-slate-950/40 p-3 md:grid-cols-[220px_120px_1fr_1fr_120px_120px_140px] ${
+                                className={`grid items-center gap-2 rounded-xl border border-slate-800/60 bg-slate-950/40 p-2 md:grid-cols-[190px_90px_1fr_70px_70px_150px] ${
                                   focusedPuuid === player.puuid ? 'ring-1 ring-amber-400/60' : ''
                                 }`}
                               >
-                                <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-2">
                                   {champSrc ? (
                                     // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={champSrc} alt="" className="h-10 w-10 rounded-xl border border-slate-800" />
+                                    <img src={champSrc} alt="" className="h-9 w-9 rounded-lg border border-slate-800" />
                                   ) : (
-                                    <div className="h-10 w-10 rounded-xl border border-slate-800 bg-slate-800" />
+                                    <div className="h-9 w-9 rounded-lg border border-slate-800 bg-slate-800" />
                                   )}
                                   <div className="min-w-0">
-                                    <div className="truncate text-sm font-semibold text-white">
+                                    <div className="truncate text-xs font-semibold text-white">
                                       {accounts[player.puuid]
                                         ? `${accounts[player.puuid].gameName}#${accounts[player.puuid].tagLine}`
                                         : player.riotIdGameName
                                           ? `${player.riotIdGameName}#${player.riotIdTagline}`
                                           : player.summonerName}
                                     </div>
-                                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                                      <span>
-                                        Level {player.champLevel} · {champ?.name ?? 'Unknown'}
-                                      </span>
-                                      {rankTag ? (
-                                        <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-[0.2em] text-slate-300">
-                                          {rankTag}
-                                        </span>
-                                      ) : null}
+                                    <div className="text-[10px] text-slate-400">
+                                      Lv {player.champLevel} · {champ?.name ?? 'Unknown'}
                                     </div>
                                   </div>
                                 </div>
-                                <div className="text-xs text-slate-300">
+                                <div className="text-[11px] text-slate-300">
                                   <div className="font-semibold text-white">
                                     {player.kills}/{player.deaths}/{player.assists}
                                   </div>
                                   <div className="text-slate-400">KP {kp}%</div>
                                 </div>
-                                <div className="text-xs text-slate-300">
-                                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                                <div className="text-[11px] text-slate-300">
+                                  <div className="flex items-center justify-between text-[10px] text-slate-400">
                                     <span>Dmg</span>
                                     <span>{player.totalDamageDealtToChampions.toLocaleString()}</span>
                                   </div>
@@ -594,33 +620,20 @@ export default function MatchDetailsModal({
                                       style={{ width: `${(player.totalDamageDealtToChampions / maxDamage) * 100}%` }}
                                     />
                                   </div>
-                                  <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-                                    <span>Taken</span>
-                                    <span>{player.totalDamageTaken.toLocaleString()}</span>
-                                  </div>
-                                  <div className="mt-1 h-1.5 w-full rounded-full bg-slate-800">
-                                    <div
-                                      className="h-1.5 rounded-full bg-blue-500"
-                                      style={{ width: `${(player.totalDamageTaken / maxTaken) * 100}%` }}
-                                    />
-                                  </div>
                                 </div>
-                                <div className="text-xs text-slate-300">
-                                  <div className="text-[11px] text-slate-400">CS</div>
+                                <div className="text-[11px] text-slate-300">
+                                  <div className="text-[10px] text-slate-400">CS</div>
                                   <div className="font-semibold text-white">{cs}</div>
-                                  <div className="text-[11px] text-slate-400">{csPerMin} / min</div>
+                                  <div className="text-[10px] text-slate-400">{csPerMin}</div>
                                 </div>
-                                <div className="text-xs text-slate-300">
-                                  <div className="text-[11px] text-slate-400">Vision</div>
+                                <div className="text-[11px] text-slate-300">
+                                  <div className="text-[10px] text-slate-400">Vision</div>
                                   <div className="font-semibold text-white">{player.visionScore}</div>
-                                  <div className="text-[11px] text-slate-400">
-                                    {player.wardsPlaced ?? 0}/{player.wardsKilled ?? 0} W
-                                  </div>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-1">
                                   {items.map((itemId, idx) => {
                                     if (!itemId) {
-                                      return <div key={`${player.puuid}-item-${idx}`} className="h-7 w-7 rounded bg-slate-800" />
+                                      return <div key={`${player.puuid}-item-${idx}`} className="h-6 w-6 rounded bg-slate-800" />
                                     }
                                     const item = staticData.items[String(itemId)]
                                     const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
@@ -631,10 +644,10 @@ export default function MatchDetailsModal({
                                         src={src}
                                         alt={item?.name ?? ''}
                                         title={item?.name ?? ''}
-                                        className="h-7 w-7 rounded"
+                                        className="h-6 w-6 rounded"
                                       />
                                     ) : (
-                                      <div key={`${player.puuid}-item-${idx}`} className="h-7 w-7 rounded bg-slate-800" />
+                                      <div key={`${player.puuid}-item-${idx}`} className="h-6 w-6 rounded bg-slate-800" />
                                     )
                                   })}
                                   {player.item6 ? (
@@ -647,53 +660,46 @@ export default function MatchDetailsModal({
                                           src={src}
                                           alt={item?.name ?? ''}
                                           title={item?.name ?? ''}
-                                          className="h-7 w-7 rounded border border-slate-700"
+                                          className="h-6 w-6 rounded border border-slate-700"
                                         />
                                       ) : (
-                                        <div className="h-7 w-7 rounded bg-slate-800" />
+                                        <div className="h-6 w-6 rounded bg-slate-800" />
                                       )
                                     })()
                                   ) : null}
-                                </div>
-                                <div className="flex items-center gap-2 text-xs text-slate-300">
-                                  <div className="flex items-center gap-1">
-                                    {spell1?.image?.full ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img
-                                        src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
-                                        alt={spell1.name}
-                                        title={spell1.name}
-                                        className="h-6 w-6 rounded"
-                                      />
-                                    ) : (
-                                      <div className="h-6 w-6 rounded bg-slate-800" />
-                                    )}
-                                    {spell2?.image?.full ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img
-                                        src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
-                                        alt={spell2.name}
-                                        title={spell2.name}
-                                        className="h-6 w-6 rounded"
-                                      />
-                                    ) : (
-                                      <div className="h-6 w-6 rounded bg-slate-800" />
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-1">
-                                    {keystone?.icon ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img src={`https://ddragon.leagueoflegends.com/cdn/img/${keystone.icon}`} alt={keystone.name} className="h-6 w-6 rounded-full" />
-                                    ) : (
-                                      <div className="h-6 w-6 rounded-full bg-slate-800" />
-                                    )}
-                                    {secondaryTree?.icon ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img src={`https://ddragon.leagueoflegends.com/cdn/img/${secondaryTree.icon}`} alt={secondaryTree.name} className="h-6 w-6 rounded-full" />
-                                    ) : (
-                                      <div className="h-6 w-6 rounded-full bg-slate-800" />
-                                    )}
-                                  </div>
+                                  {spell1?.image?.full ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)}
+                                      alt={spell1.name}
+                                      title={spell1.name}
+                                      className="h-6 w-6 rounded"
+                                    />
+                                  ) : (
+                                    <div className="h-6 w-6 rounded bg-slate-800" />
+                                  )}
+                                  {spell2?.image?.full ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)}
+                                      alt={spell2.name}
+                                      title={spell2.name}
+                                      className="h-6 w-6 rounded"
+                                    />
+                                  ) : (
+                                    <div className="h-6 w-6 rounded bg-slate-800" />
+                                  )}
+                                  {keystone?.icon ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={`https://ddragon.leagueoflegends.com/cdn/img/${keystone.icon}`}
+                                      alt={keystone.name}
+                                      title={keystone.name}
+                                      className="h-6 w-6 rounded-full"
+                                    />
+                                  ) : (
+                                    <div className="h-6 w-6 rounded-full bg-slate-800" />
+                                  )}
                                 </div>
                               </div>
                             )
@@ -701,166 +707,63 @@ export default function MatchDetailsModal({
                         </div>
                       </div>
                     ))}
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {[
-                        { label: 'Total kills', blue: teamTotals.blue.kills, red: teamTotals.red.kills },
-                        { label: 'Total gold', blue: teamTotals.blue.gold, red: teamTotals.red.gold },
-                      ].map((row) => {
-                        const total = row.blue + row.red || 1
-                        return (
-                          <div key={row.label} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                            <div className="text-xs uppercase tracking-[0.2em] text-slate-400">{row.label}</div>
-                            <div className="mt-2 flex items-center justify-between text-xs text-slate-300">
-                              <span>{row.blue.toLocaleString()}</span>
-                              <span>{row.red.toLocaleString()}</span>
-                            </div>
-                            <div className="mt-2 h-2 rounded-full bg-slate-800">
-                              <div
-                                className="h-2 rounded-full bg-blue-500"
-                                style={{ width: `${(row.blue / total) * 100}%` }}
-                              />
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
                     <div className="text-[11px] text-slate-500">
                       Player names and ranks use Account-V1, Summoner-V4, and League-V4. Icons use Data Dragon.
                     </div>
                   </section>
 
-                  <section className="space-y-4">
+                  <aside className="space-y-3">
                     <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-                      <span>Match analysis</span>
-                      <span>Match-V5 /lol/match/v5/matches</span>
+                      <span>Focused player</span>
+                      <span>Summary</span>
                     </div>
-                    <div className="grid gap-4 md:grid-cols-2">
-                      {[
-                        { label: 'Champion Kills', key: 'kills' },
-                        { label: 'Gold', key: 'gold' },
-                        { label: 'Damage', key: 'damage' },
-                        { label: 'Wards/Vision', key: 'vision' },
-                        { label: 'Damage Taken', key: 'damageTaken' },
-                        { label: 'CS', key: 'cs' },
-                      ].map((block) => {
-                        const blueTotal = teamTotals.blue[block.key as keyof typeof teamTotals.blue]
-                        const redTotal = teamTotals.red[block.key as keyof typeof teamTotals.red]
-                        const total = blueTotal + redTotal || 1
-                        return (
-                          <div key={block.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                            <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-                              <span>{block.label}</span>
-                              <span>
-                                {blueTotal.toLocaleString()} / {redTotal.toLocaleString()}
-                              </span>
+                    {focusedParticipant ? (
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                        <div className="flex items-center gap-3">
+                          {champMap[focusedParticipant.championId] ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={championIconUrl(ddVersion, champMap[focusedParticipant.championId].id)}
+                              alt=""
+                              className="h-12 w-12 rounded-xl border border-slate-800"
+                            />
+                          ) : (
+                            <div className="h-12 w-12 rounded-xl border border-slate-800 bg-slate-800" />
+                          )}
+                          <div>
+                            <div className="text-sm font-semibold text-white">
+                              {accounts[focusedParticipant.puuid]
+                                ? `${accounts[focusedParticipant.puuid].gameName}#${accounts[focusedParticipant.puuid].tagLine}`
+                                : focusedParticipant.riotIdGameName
+                                  ? `${focusedParticipant.riotIdGameName}#${focusedParticipant.riotIdTagline}`
+                                  : focusedParticipant.summonerName}
                             </div>
-                            <div className="mt-3 flex items-center gap-2">
-                              <div className="h-2 flex-1 rounded-full bg-slate-800">
-                                <div className="h-2 rounded-full bg-blue-500" style={{ width: `${(blueTotal / total) * 100}%` }} />
-                              </div>
-                              <div className="h-2 flex-1 rounded-full bg-slate-800">
-                                <div className="h-2 rounded-full bg-rose-500" style={{ width: `${(redTotal / total) * 100}%` }} />
-                              </div>
-                            </div>
-                            <div className="mt-3 grid gap-1 text-xs text-slate-400">
-                              {teams.blue.map((player) => (
-                                <div key={`${block.label}-${player.puuid}`} className="flex items-center justify-between">
-                                  <span className="truncate text-slate-300">
-                                    {accounts[player.puuid]
-                                      ? `${accounts[player.puuid].gameName}`
-                                      : player.riotIdGameName ?? player.summonerName}
-                                  </span>
-                                  <span>
-                                    {block.key === 'kills'
-                                      ? player.kills
-                                      : block.key === 'gold'
-                                        ? player.goldEarned
-                                        : block.key === 'damage'
-                                          ? player.totalDamageDealtToChampions
-                                          : block.key === 'vision'
-                                            ? player.visionScore
-                                            : block.key === 'damageTaken'
-                                              ? player.totalDamageTaken
-                                              : player.totalMinionsKilled + player.neutralMinionsKilled}
-                                  </span>
-                                </div>
-                              ))}
-                              <div className="h-px bg-slate-800/60" />
-                              {teams.red.map((player) => (
-                                <div key={`${block.label}-red-${player.puuid}`} className="flex items-center justify-between">
-                                  <span className="truncate text-slate-300">
-                                    {accounts[player.puuid]
-                                      ? `${accounts[player.puuid].gameName}`
-                                      : player.riotIdGameName ?? player.summonerName}
-                                  </span>
-                                  <span>
-                                    {block.key === 'kills'
-                                      ? player.kills
-                                      : block.key === 'gold'
-                                        ? player.goldEarned
-                                        : block.key === 'damage'
-                                          ? player.totalDamageDealtToChampions
-                                          : block.key === 'vision'
-                                            ? player.visionScore
-                                            : block.key === 'damageTaken'
-                                              ? player.totalDamageTaken
-                                              : player.totalMinionsKilled + player.neutralMinionsKilled}
-                                  </span>
-                                </div>
-                              ))}
+                            <div className="text-xs text-slate-400">
+                              {focusedParticipant.kills}/{focusedParticipant.deaths}/{focusedParticipant.assists} ·{' '}
+                              {focusedParticipant.goldEarned.toLocaleString()} Gold
                             </div>
                           </div>
-                        )
-                      })}
-                    </div>
-                  </section>
-                </div>
-              ) : null}
-
-              {activeTab === 'build' ? (
-                <div className="space-y-6">
-                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-                    <span>Focused build</span>
-                    <span>Match-V5 + Timeline-V5</span>
-                  </div>
-                  {!focusedParticipant ? (
-                    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-300">
-                      Focused player not found for this match.
-                    </div>
-                  ) : (
-                    <div className="grid gap-4 lg:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Item build timeline</div>
-                        {loadingTimeline ? (
-                          <div className="mt-3 h-24 rounded-xl bg-slate-800/60 animate-pulse" />
-                        ) : focusedTimeline.items.length ? (
-                          <ul className="mt-3 space-y-2 text-xs text-slate-300">
-                            {focusedTimeline.items.slice(0, 12).map((event, idx) => {
-                              const item = staticData.items[String(event.itemId)]
-                              const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
-                              return (
-                                <li key={`${event.timestamp}-${idx}`} className="flex items-center justify-between">
-                                  <span className="flex items-center gap-2">
-                                    {src ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-7 w-7 rounded" />
-                                    ) : (
-                                      <div className="h-7 w-7 rounded bg-slate-800" />
-                                    )}
-                                    <span>{item?.name ?? `Item ${event.itemId}`}</span>
-                                  </span>
-                                  <span>{Math.floor(event.timestamp / 60000)}m</span>
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        ) : (
-                          <div className="mt-3 text-xs text-slate-400">No timeline items found.</div>
-                        )}
-                      </div>
-                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
-                        <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Final items & runes</div>
-                        <div className="mt-3 flex flex-wrap gap-2">
+                        </div>
+                        <div className="mt-4 grid gap-2 text-xs text-slate-300">
+                          <div className="flex items-center justify-between">
+                            <span>Damage</span>
+                            <span>{focusedParticipant.totalDamageDealtToChampions.toLocaleString()}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>CS / min</span>
+                            <span>
+                              {(
+                                (focusedParticipant.totalMinionsKilled + focusedParticipant.neutralMinionsKilled) /
+                                (match.info.gameDuration / 60)
+                              ).toFixed(1)}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Vision</span>
+                            <span>{focusedParticipant.visionScore}</span>
+                          </div>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
                           {[focusedParticipant.item0, focusedParticipant.item1, focusedParticipant.item2, focusedParticipant.item3, focusedParticipant.item4, focusedParticipant.item5, focusedParticipant.item6]
                             .filter(Boolean)
                             .map((itemId, idx) => {
@@ -868,16 +771,282 @@ export default function MatchDetailsModal({
                               const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
                               return src ? (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img key={`${itemId}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-9 w-9 rounded" />
+                                <img key={`${itemId}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-8 w-8 rounded" />
                               ) : (
-                                <div key={`${itemId}-${idx}`} className="h-9 w-9 rounded bg-slate-800" />
+                                <div key={`${itemId}-${idx}`} className="h-8 w-8 rounded bg-slate-800" />
                               )
                             })}
                         </div>
-                        <div className="mt-4 grid gap-3">
+                        <div className="mt-3 text-[11px] text-slate-500">
+                          Match-V5 /lol/match/v5/matches/{match.metadata.matchId}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-400">
+                        Focused player data unavailable.
+                      </div>
+                    )}
+                  </aside>
+                </div>
+              ) : null}
+
+              {activeTab === 'team-analysis' ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
+                    <span>Team analysis</span>
+                    <span>Match-V5 /lol/match/v5/matches</span>
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {[
+                      { label: 'Champion Kills', key: 'kills' },
+                      { label: 'Gold', key: 'gold' },
+                      { label: 'Damage Dealt', key: 'damage' },
+                      { label: 'Damage Taken', key: 'damageTaken' },
+                      { label: 'Vision/Wards', key: 'vision' },
+                      { label: 'CS', key: 'cs' },
+                    ].map((block) => {
+                      const blueTotal = teamTotals.blue[block.key as keyof typeof teamTotals.blue]
+                      const redTotal = teamTotals.red[block.key as keyof typeof teamTotals.red]
+                      const total = blueTotal + redTotal || 1
+                      return (
+                        <div key={block.label} className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                          <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
+                            <span>{block.label}</span>
+                            <span>
+                              {blueTotal.toLocaleString()} / {redTotal.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex items-center gap-2">
+                            <div className="h-2 flex-1 rounded-full bg-slate-800">
+                              <div className="h-2 rounded-full bg-blue-500" style={{ width: `${(blueTotal / total) * 100}%` }} />
+                            </div>
+                            <div className="h-2 flex-1 rounded-full bg-slate-800">
+                              <div className="h-2 rounded-full bg-rose-500" style={{ width: `${(redTotal / total) * 100}%` }} />
+                            </div>
+                          </div>
+                          <div className="mt-3 grid gap-1 text-xs text-slate-400">
+                            {teams.blue.map((player) => (
+                              <div key={`${block.label}-${player.puuid}`} className="flex items-center justify-between">
+                                <span className="truncate text-slate-300">
+                                  {accounts[player.puuid]
+                                    ? `${accounts[player.puuid].gameName}`
+                                    : player.riotIdGameName ?? player.summonerName}
+                                </span>
+                                <span>
+                                  {block.key === 'kills'
+                                    ? player.kills
+                                    : block.key === 'gold'
+                                      ? player.goldEarned
+                                      : block.key === 'damage'
+                                        ? player.totalDamageDealtToChampions
+                                        : block.key === 'vision'
+                                          ? player.visionScore
+                                          : block.key === 'damageTaken'
+                                            ? player.totalDamageTaken
+                                            : player.totalMinionsKilled + player.neutralMinionsKilled}
+                                </span>
+                              </div>
+                            ))}
+                            <div className="h-px bg-slate-800/60" />
+                            {teams.red.map((player) => (
+                              <div key={`${block.label}-red-${player.puuid}`} className="flex items-center justify-between">
+                                <span className="truncate text-slate-300">
+                                  {accounts[player.puuid]
+                                    ? `${accounts[player.puuid].gameName}`
+                                    : player.riotIdGameName ?? player.summonerName}
+                                </span>
+                                <span>
+                                  {block.key === 'kills'
+                                    ? player.kills
+                                    : block.key === 'gold'
+                                      ? player.goldEarned
+                                      : block.key === 'damage'
+                                        ? player.totalDamageDealtToChampions
+                                        : block.key === 'vision'
+                                          ? player.visionScore
+                                          : block.key === 'damageTaken'
+                                            ? player.totalDamageTaken
+                                            : player.totalMinionsKilled + player.neutralMinionsKilled}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {activeTab === 'build' ? (
+                <div className="space-y-6">
+                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
+                    <span>Build</span>
+                    <span>Match-V5 + Timeline-V5</span>
+                  </div>
+                  {!focusedParticipant ? (
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-300">
+                      Focused player not found for this match.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid gap-4 lg:grid-cols-3">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Final build</div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {[focusedParticipant.item0, focusedParticipant.item1, focusedParticipant.item2, focusedParticipant.item3, focusedParticipant.item4, focusedParticipant.item5].map(
+                              (itemId, idx) => {
+                                const item = staticData.items[String(itemId)]
+                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                return src ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img key={`${itemId}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-9 w-9 rounded" />
+                                ) : (
+                                  <div key={`${itemId}-${idx}`} className="h-9 w-9 rounded bg-slate-800" />
+                                )
+                              },
+                            )}
+                            {focusedParticipant.item6 ? (
+                              (() => {
+                                const item = staticData.items[String(focusedParticipant.item6)]
+                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                return src ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-9 w-9 rounded border border-slate-700" />
+                                ) : (
+                                  <div className="h-9 w-9 rounded bg-slate-800" />
+                                )
+                              })()
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Runes</div>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {focusedRunes.keystone?.icon ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.keystone.icon}`}
+                                alt={focusedRunes.keystone.name}
+                                title={focusedRunes.keystone.name}
+                                className="h-9 w-9 rounded-full"
+                              />
+                            ) : (
+                              <div className="h-9 w-9 rounded-full bg-slate-800" />
+                            )}
+                            {focusedRunes.primaryTree?.icon ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.primaryTree.icon}`}
+                                alt={focusedRunes.primaryTree.name}
+                                title={focusedRunes.primaryTree.name}
+                                className="h-8 w-8 rounded-full"
+                              />
+                            ) : (
+                              <div className="h-8 w-8 rounded-full bg-slate-800" />
+                            )}
+                            {focusedRunes.secondaryTree?.icon ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.secondaryTree.icon}`}
+                                alt={focusedRunes.secondaryTree.name}
+                                title={focusedRunes.secondaryTree.name}
+                                className="h-8 w-8 rounded-full"
+                              />
+                            ) : (
+                              <div className="h-8 w-8 rounded-full bg-slate-800" />
+                            )}
+                            {focusedRunes.highlights.map((rune) => (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                key={rune.id}
+                                src={`https://ddragon.leagueoflegends.com/cdn/img/${rune.icon}`}
+                                alt={rune.name}
+                                title={rune.name}
+                                className="h-7 w-7 rounded-full"
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Summ spells + start</div>
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
+                            {(() => {
+                              const spells = Object.values(staticData.spells)
+                              const spell1 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner1Id)
+                              const spell2 = spells.find((s: any) => Number(s.key) === focusedParticipant.summoner2Id)
+                              return (
+                                <>
+                                  {spell1?.image?.full ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={buildStaticUrl(ddragonVersion, `img/spell/${spell1.image.full}`)} alt={spell1.name} className="h-9 w-9 rounded" />
+                                  ) : (
+                                    <div className="h-9 w-9 rounded bg-slate-800" />
+                                  )}
+                                  {spell2?.image?.full ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img src={buildStaticUrl(ddragonVersion, `img/spell/${spell2.image.full}`)} alt={spell2.name} className="h-9 w-9 rounded" />
+                                  ) : (
+                                    <div className="h-9 w-9 rounded bg-slate-800" />
+                                  )}
+                                </>
+                              )
+                            })()}
+                            {focusedPurchaseTimeline
+                              .filter((event) => event.type === 'ITEM_PURCHASED' && event.timestamp <= 120000)
+                              .slice(0, 3)
+                              .map((event, idx) => {
+                                const item = staticData.items[String(event.itemId)]
+                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                return src ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img key={`${event.timestamp}-${idx}`} src={src} alt={item?.name ?? ''} title={item?.name ?? ''} className="h-8 w-8 rounded" />
+                                ) : (
+                                  <div key={`${event.timestamp}-${idx}`} className="h-8 w-8 rounded bg-slate-800" />
+                                )
+                              })}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+                          <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Item build order</div>
+                          {loadingTimeline ? (
+                            <div className="mt-3 h-24 rounded-xl bg-slate-800/60 animate-pulse" />
+                          ) : focusedPurchaseTimeline.length ? (
+                            <ul className="mt-3 space-y-2 text-xs text-slate-300">
+                              {focusedPurchaseTimeline.slice(0, 10).map((event, idx) => {
+                                const item = staticData.items[String(event.itemId)]
+                                const src = item ? buildStaticUrl(ddragonVersion, `img/item/${item.image.full}`) : null
+                                const minutes = Math.floor(event.timestamp / 60000)
+                                const seconds = Math.floor((event.timestamp % 60000) / 1000)
+                                const label = item?.name ?? 'Unknown item'
+                                return (
+                                  <li key={`${event.timestamp}-${idx}`} className="flex items-center justify-between">
+                                    <span className="flex items-center gap-2">
+                                      {src ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={src} alt={label} title={label} className="h-8 w-8 rounded" />
+                                      ) : (
+                                        <div className="h-8 w-8 rounded bg-slate-800" />
+                                      )}
+                                      <span>{label}</span>
+                                    </span>
+                                    <span>
+                                      {minutes}:{seconds.toString().padStart(2, '0')}
+                                    </span>
+                                  </li>
+                                )
+                              })}
+                            </ul>
+                          ) : (
+                            <div className="mt-3 text-xs text-slate-400">No item timeline available.</div>
+                          )}
+                        </div>
+                        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
                           <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Skill order</div>
                           {focusedTimeline.skills.length ? (
-                            <div className="flex flex-wrap gap-2 text-xs text-slate-300">
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
                               {focusedTimeline.skills.map((event, idx) => (
                                 <span key={`${event.timestamp}-${idx}`} className="rounded bg-slate-800 px-2 py-1">
                                   {event.skillSlot === 1 ? 'Q' : event.skillSlot === 2 ? 'W' : event.skillSlot === 3 ? 'E' : 'R'}
@@ -885,35 +1054,10 @@ export default function MatchDetailsModal({
                               ))}
                             </div>
                           ) : (
-                            <div className="text-xs text-slate-400">Skill order unavailable.</div>
+                            <div className="mt-3 text-xs text-slate-400">Skill order unavailable.</div>
                           )}
                         </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              ) : null}
-
-              {activeTab === 'timeline' ? (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-400">
-                    <span>Timeline</span>
-                    <span>Timeline-V5 /lol/match/v5/matches/{match.metadata.matchId}/timeline</span>
-                  </div>
-                  {loadingTimeline ? (
-                    <div className="h-24 rounded-xl bg-slate-800/60 animate-pulse" />
-                  ) : focusedTimeline.timeline.length ? (
-                    <ul className="space-y-2 rounded-2xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-300">
-                      {focusedTimeline.timeline.slice(0, 20).map((event, idx) => (
-                        <li key={`${event.timestamp}-${idx}`} className="flex items-center justify-between">
-                          <span>{event.type.replaceAll('_', ' ').toLowerCase()}</span>
-                          <span>{Math.floor(event.timestamp / 60000)}m</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-4 text-xs text-slate-400">
-                      Timeline events unavailable.
                     </div>
                   )}
                 </div>
