@@ -1,9 +1,10 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
+import MatchDetailsModal from './MatchDetailsModal'
 
 interface Player {
   id: string
@@ -132,11 +133,6 @@ export default function LatestGamesFeedClient({
 }) {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
 
-  const selectedParticipants = useMemo(() => {
-    if (!selectedGame) return []
-    return participantsByMatch[selectedGame.matchId] ?? []
-  }, [participantsByMatch, selectedGame])
-
   if (games.length === 0) {
     return (
       <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-900">
@@ -190,7 +186,7 @@ export default function LatestGamesFeedClient({
             >
               <button
                 type="button"
-                className="w-full text-left"
+                className="w-full text-left disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => setSelectedGame(g)}
                 disabled={!hasMatchDetails}
               >
@@ -312,94 +308,14 @@ export default function LatestGamesFeedClient({
           )
         })}
       </div>
-
-      {selectedGame ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 px-4 py-6"
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setSelectedGame(null)}
-        >
-          <div
-            className="w-full max-w-xl rounded-2xl bg-white p-5 shadow-xl dark:bg-slate-900"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Match details
-                </div>
-                <div className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100">
-                  {formatMatchDuration(selectedGame.durationS) || 'Duration unknown'}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedGame(null)}
-                className="rounded-full border border-slate-200 p-2 text-slate-500 transition hover:text-slate-700 dark:border-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-                aria-label="Close match details"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 10-1.06-1.06L10 8.94 6.28 5.22z" />
-                </svg>
-              </button>
-            </div>
-
-            {selectedParticipants.length === 0 ? (
-              <div className="mt-4 rounded-lg bg-slate-50 p-4 text-center text-xs text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
-                Match data is still syncing.
-              </div>
-            ) : (
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                {[
-                  {
-                    label: 'Winning team',
-                    rows: selectedParticipants.filter((row) => row.win),
-                    badge: 'text-emerald-600 dark:text-emerald-400',
-                  },
-                  {
-                    label: 'Losing team',
-                    rows: selectedParticipants.filter((row) => !row.win),
-                    badge: 'text-rose-600 dark:text-rose-400',
-                  },
-                ].map((team) => (
-                  <div key={team.label} className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/60">
-                    <div className={`text-[10px] font-semibold uppercase tracking-widest ${team.badge}`}>{team.label}</div>
-                    <ul className="mt-2 space-y-1">
-                      {team.rows.map((row) => {
-                        const champInfo = champMap[row.championId]
-                        const champIcon = champInfo ? championIconUrl(ddVersion, champInfo.id) : null
-                        const participant = playersByPuuid[row.puuid]
-                        const participantName = participant ? displayRiotId(participant) : `${row.puuid.slice(0, 6)}...`
-                        return (
-                          <li key={`${row.matchId}-${row.puuid}`} className="flex items-center justify-between text-xs">
-                            <span className="flex min-w-0 items-center gap-2">
-                              {champIcon ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={champIcon}
-                                  alt=""
-                                  className="h-5 w-5 rounded-md border border-slate-200 bg-white object-cover dark:border-slate-700 dark:bg-slate-900"
-                                />
-                              ) : (
-                                <span className="h-5 w-5 rounded-md border border-dashed border-slate-200 dark:border-slate-700" />
-                              )}
-                              <span className="truncate text-slate-700 dark:text-slate-200">{participantName}</span>
-                            </span>
-                            <span className="tabular-nums text-slate-500 dark:text-slate-300">
-                              {row.kills}/{row.deaths}/{row.assists}
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      ) : null}
+      <MatchDetailsModal
+        open={Boolean(selectedGame)}
+        matchId={selectedGame?.matchId ?? null}
+        focusedPuuid={selectedGame?.puuid ?? null}
+        champMap={champMap}
+        ddVersion={ddVersion}
+        onClose={() => setSelectedGame(null)}
+      />
     </>
   )
 }
