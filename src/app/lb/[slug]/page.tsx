@@ -4,6 +4,7 @@ import { timeAgo } from '@/lib/timeAgo'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
+import { getRiotApiKey } from '@/lib/riot/getRiotApiKey'
 import { compareRanks } from '@/lib/rankSort'
 import FitText from './FitText'
 import Link from 'next/link'
@@ -60,6 +61,24 @@ interface MatchParticipant {
   win: boolean
 }
 
+interface RiotMatchResponse {
+  info: {
+    gameDuration: number
+    gameEndTimestamp?: number
+    queueId?: number
+    participants: Array<{
+      puuid: string
+      championId: number
+      kills: number
+      deaths: number
+      assists: number
+      win: boolean
+      totalMinionsKilled: number
+      neutralMinionsKilled: number
+    }>
+  }
+}
+
 // --- Constants ---
 
 // Optimization: Move static object out of function scope to prevent reallocation on every call
@@ -82,11 +101,51 @@ const REGION_MAP: Record<string, string> = {
   VN2: 'vn',
 }
 
+const ROUTING_BY_PLATFORM: Record<string, string> = {
+  NA1: 'americas',
+  BR1: 'americas',
+  LA1: 'americas',
+  LA2: 'americas',
+  OC1: 'sea',
+  KR: 'asia',
+  JP1: 'asia',
+  EUN1: 'europe',
+  EUW1: 'europe',
+  TR1: 'europe',
+  RU: 'europe',
+  PH2: 'sea',
+  SG2: 'sea',
+  TH2: 'sea',
+  TW2: 'sea',
+  VN2: 'sea',
+}
+
 // --- Helpers ---
 
 function getRankIconSrc(tier?: string | null) {
   if (!tier) return '/images/UNRANKED_SMALL.jpg'
   return `/images/${tier.toUpperCase()}_SMALL.jpg`
+}
+
+function getRoutingFromMatchId(matchId: string) {
+  const platform = matchId.split('_')[0]?.toUpperCase()
+  if (!platform) return null
+  return ROUTING_BY_PLATFORM[platform] ?? null
+}
+
+async function fetchRiotMatch(matchId: string): Promise<RiotMatchResponse | null> {
+  const routing = getRoutingFromMatchId(matchId)
+  if (!routing) return null
+  const apiKey = getRiotApiKey()
+  const res = await fetch(`https://${routing}.api.riotgames.com/lol/match/v5/matches/${matchId}`, {
+    headers: {
+      'X-Riot-Token': apiKey,
+    },
+    next: { revalidate: 30 },
+  })
+
+  if (!res.ok) return null
+  return (await res.json()) as RiotMatchResponse
 }
 
 function formatTierShort(tier?: string | null, division?: string | null) {
@@ -802,6 +861,54 @@ export default async function LeaderboardDetail({
     }
   }
 
+  const riotMatchMetaById = new Map<string, { durationS?: number; endTs?: number; queueId?: number }>()
+  const matchIdsNeedingRiot = filteredMatchIds.filter((matchId) => {
+    const participantCount = (participantsByMatch.get(matchId) ?? []).filter((p) => leaderboardPuuids.has(p.puuid)).length
+    return participantCount < 2
+  })
+
+  if (matchIdsNeedingRiot.length > 0) {
+    const riotMatches = await Promise.all(
+      matchIdsNeedingRiot.map(async (matchId) => {
+        try {
+          return { matchId, match: await fetchRiotMatch(matchId) }
+        } catch {
+          return { matchId, match: null }
+        }
+      }),
+    )
+
+    for (const { matchId, match } of riotMatches) {
+      if (!match?.info?.participants) continue
+      riotMatchMetaById.set(matchId, {
+        durationS: match.info.gameDuration,
+        endTs: match.info.gameEndTimestamp,
+        queueId: match.info.queueId,
+      })
+
+      const existing = participantsByMatch.get(matchId) ?? []
+      const merged = new Map(existing.map((p) => [p.puuid, p]))
+
+      for (const participant of match.info.participants) {
+        if (!leaderboardPuuids.has(participant.puuid)) continue
+        if (!merged.has(participant.puuid)) {
+          merged.set(participant.puuid, {
+            matchId,
+            puuid: participant.puuid,
+            championId: participant.championId,
+            kills: participant.kills,
+            deaths: participant.deaths,
+            assists: participant.assists,
+            cs: participant.totalMinionsKilled + participant.neutralMinionsKilled,
+            win: participant.win,
+          })
+        }
+      }
+
+      participantsByMatch.set(matchId, Array.from(merged.values()))
+    }
+  }
+
   const latestRowByMatch = new Map<string, any>()
   const latestRowByMatchAndPuuid = new Map<string, any>()
   for (const row of filteredLatestRaw as Array<any>) {
@@ -828,9 +935,10 @@ export default async function LeaderboardDetail({
     row?: any
     participant?: MatchParticipant
   }) => {
+    const riotMeta = riotMatchMetaById.get(matchId)
     const lpEvent = lpByMatchAndPlayer.get(`${matchId}-${puuid}`)
     const lpChange = row?.lp_change ?? row?.lp_delta ?? row?.lp_diff ?? lpEvent?.delta ?? null
-    const durationS = row?.game_duration_s ?? row?.gameDuration
+    const durationS = row?.game_duration_s ?? row?.gameDuration ?? riotMeta?.durationS
     const endType = computeEndType({
       gameEndedInEarlySurrender: row?.game_ended_in_early_surrender ?? row?.gameEndedInEarlySurrender,
       gameEndedInSurrender: row?.game_ended_in_surrender ?? row?.gameEndedInSurrender,
@@ -847,9 +955,9 @@ export default async function LeaderboardDetail({
       d: participant?.deaths ?? row?.deaths ?? 0,
       a: participant?.assists ?? row?.assists ?? 0,
       cs: participant?.cs ?? row?.cs ?? 0,
-      endTs: row?.game_end_ts,
+      endTs: row?.game_end_ts ?? riotMeta?.endTs,
       durationS,
-      queueId: row?.queue_id,
+      queueId: row?.queue_id ?? riotMeta?.queueId,
       lpChange,
       lpNote: row?.lp_note ?? row?.note ?? lpEvent?.note ?? null,
       endType,
