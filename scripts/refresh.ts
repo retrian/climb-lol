@@ -299,10 +299,19 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
   const existingSet = new Set((existing ?? []).map((r) => r.match_id))
   const newIds = ids.filter((id) => !existingSet.has(id))
 
+  const { data: existingParticipants, error: participantsErr } = await supabase
+    .from('match_participants')
+    .select('match_id')
+    .in('match_id', ids)
+    .eq('puuid', puuid)
+  if (participantsErr) throw participantsErr
+  const existingParticipantsSet = new Set((existingParticipants ?? []).map((r) => r.match_id))
+  const matchIdsToFetch = ids.filter((id) => !existingParticipantsSet.has(id))
+
   const matchUpserts = []
   const participantUpserts = []
 
-  for (const matchId of newIds) {
+  for (const matchId of matchIdsToFetch) {
     const match = await riotFetch<any>(`${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`)
 
     const info = match.info
