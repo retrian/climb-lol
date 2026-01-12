@@ -740,22 +740,14 @@ export default async function LeaderboardDetail({
         .from('match_participants')
         .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win')
         .in('match_id', filteredMatchIds)
+        .in('puuid', puuids)
     : { data: [] as Array<Record<string, unknown>> }
 
   const leaderboardPuuids = new Set(puuids)
-  const participantLeaderboardPuuids = new Set<string>()
-
-  if (matchParticipantsRaw) {
-    for (const row of matchParticipantsRaw as Array<{ match_id?: string | null; puuid?: string | null }>) {
-      if (row.puuid && leaderboardPuuids.has(row.puuid)) {
-        participantLeaderboardPuuids.add(row.puuid)
-      }
-    }
-  }
 
   // FIX: Collect PUUIDs from the games themselves so we get LP data even if the player isn't in the Top 50 loaded above
   const gamePuuids = filteredLatestRaw.map((row: any) => row.puuid).filter(Boolean)
-  const allRelevantPuuids = Array.from(new Set([...puuids, ...gamePuuids, ...participantLeaderboardPuuids]))
+  const allRelevantPuuids = Array.from(new Set([...puuids, ...gamePuuids]))
 
   const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
 
