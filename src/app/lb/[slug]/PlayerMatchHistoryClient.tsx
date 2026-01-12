@@ -423,24 +423,9 @@ export default function PlayerMatchHistoryClient({
   }
 
   useEffect(() => {
-    if (!open || matches.length === 0) return
-
-    const primed = matches.slice(0, 3)
-    let cancelled = false
-
-    const prime = async () => {
-      for (const match of primed) {
-        if (cancelled) return
-        await ensureMatchDetail(match.matchId)
-        await new Promise((resolve) => setTimeout(resolve, 120))
-      }
-    }
-
-    prime().catch(() => null)
-    return () => {
-      cancelled = true
-    }
-  }, [open, matches])
+    if (!open) return
+    matchDetailRequests.current.clear()
+  }, [open])
 
   const handleOpen = (card: PlayerCard) => {
     setSelectedPlayer(card)
@@ -1136,9 +1121,16 @@ export default function PlayerMatchHistoryClient({
                             </div>
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                               {summary?.rank ? (
-                                <span>
-                                  {summary.rank.tier ?? 'Unranked'} {summary.rank.rank ?? ''} • {summary.rank.league_points ?? 0}{' '}
-                                  LP • {summary.rank.wins ?? 0}W-{summary.rank.losses ?? 0}L
+                                <span className="inline-flex items-center gap-2">
+                                  <img
+                                    src={getRankIconSrc(summary.rank.tier)}
+                                    alt={summary.rank.tier ?? ''}
+                                    className="h-4 w-4"
+                                  />
+                                  <span>
+                                    {summary.rank.tier ?? 'Unranked'} {summary.rank.rank ?? ''} • {summary.rank.league_points ?? 0}{' '}
+                                    LP • {summary.rank.wins ?? 0}W-{summary.rank.losses ?? 0}L
+                                  </span>
                                 </span>
                               ) : (
                                 <span>Unranked</span>
