@@ -186,7 +186,7 @@ export default function LatestGamesFeedClient({
             >
               <button
                 type="button"
-                className="w-full text-left disabled:cursor-not-allowed disabled:opacity-60"
+                className="group w-full text-left disabled:cursor-not-allowed disabled:opacity-60"
                 onClick={() => setSelectedGame(g)}
                 disabled={!hasMatchDetails}
               >
@@ -279,29 +279,40 @@ export default function LatestGamesFeedClient({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 text-[10px] border-t border-slate-100 pt-2 -mb-1 dark:border-slate-800">
+                <div className="flex items-center gap-2 text-[10px] border-t border-slate-100 pt-2 mt-2 -mb-1 dark:border-slate-800">
                   {duration && (
                     <>
                       <span className="font-semibold text-slate-600 tabular-nums dark:text-slate-300">{duration}</span>
                       <span className="text-slate-300 dark:text-slate-600">•</span>
                     </>
                   )}
-                  <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200">
+                  <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200 whitespace-nowrap">
                     {g.k}/{g.d}/{g.a}
                   </span>
                   <span className="text-slate-300 dark:text-slate-600">•</span>
-                  <span className={`tabular-nums ${kdaColor}`}>{kda} KDA</span>
+                  <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>{kda} KDA</span>
                   <span className="text-slate-300 dark:text-slate-600">•</span>
-                  <span className="font-semibold text-slate-600 tabular-nums dark:text-slate-300">{g.cs} CS</span>
-                </div>
-                <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400 dark:text-slate-500">
-                  <span>{hasMatchDetails ? 'Click to view match details' : 'Match details unavailable'}</span>
-                  <span className="inline-flex items-center gap-1">
-                    View details
-                    <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                      <path d="M5.23 7.21a.75.75 0 011.06.02L10 10.939l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.25a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" />
-                    </svg>
-                  </span>
+                  <span className="font-semibold text-slate-600 tabular-nums whitespace-nowrap dark:text-slate-300">{g.cs} CS</span>
+                  
+                  {hasMatchDetails && (
+                    <div className="relative ml-auto flex items-center justify-center w-5 h-5 shrink-0">
+                      {/* Chevron that's always visible */}
+                      <svg 
+                        className="h-4 w-4 text-slate-400 transition-all duration-200 group-hover:text-blue-600 group-hover:translate-x-1 dark:text-slate-500 dark:group-hover:text-blue-400" 
+                        viewBox="0 0 20 20" 
+                        fill="currentColor"
+                      >
+                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                      </svg>
+                      
+                      {/* Overlay text that appears on hover */}
+                      <div className="absolute right-full mr-2 opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity duration-200">
+                        <span className="font-medium text-[10px] text-slate-600 whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+                          View details
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </button>
             </div>
