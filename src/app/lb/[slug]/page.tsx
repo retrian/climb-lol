@@ -1,13 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { timeAgo } from '@/lib/timeAgo'
-import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
 import FitText from './FitText'
 import Link from 'next/link'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
+import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 
 // --- Types ---
 
@@ -153,12 +153,11 @@ function getOpggUrl(player: Player) {
   const gn = (player.game_name ?? '').trim()
   const tl = (player.tag_line ?? '').trim()
   if (!gn || !tl) return null
-  
+
   const region = REGION_MAP[tl.toUpperCase()] ?? 'na'
   const riotId = `${gn}-${tl}`
   return `https://op.gg/lol/summoners/${region}/${encodeURIComponent(riotId)}`
 }
-
 
 function computeEndType({
   gameEndedInEarlySurrender,
@@ -832,10 +831,13 @@ export default async function LeaderboardDetail({
   const rankByPuuidRecord = Object.fromEntries(rankBy.entries())
   const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
 
-  const top3 = playersSorted.slice(0, 3)
-  const rest = playersSorted.slice(3)
-
-  const finalPodium = top3.filter(Boolean)
+  const playerCards = playersSorted.map((player, idx) => ({
+    player,
+    index: idx + 1,
+    rankData: rankBy.get(player.puuid) ?? null,
+    stateData: stateBy.get(player.puuid) ?? null,
+    topChamps: champsBy.get(player.puuid) ?? [],
+  }))
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
@@ -875,87 +877,7 @@ export default async function LeaderboardDetail({
 
           {/* Right Content */}
           <div className="lg:col-span-9 order-1 lg:order-2 space-y-10 lg:space-y-12">
-            {/* 2. Podium */}
-            {finalPodium.length > 0 && (
-              <div>
-                <div className="flex items-center gap-2 mb-6">
-                  <div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" />
-                  <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    Top Players
-                  </h2>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-end">
-                  {finalPodium.map((p, idx) => {
-                    const actualRank = idx + 1 // This is 1, 2, or 3
-                    const r = rankBy.get(p.puuid)
-                    
-                    // CSS Grid ordering for desktop: 2nd left, 1st center, 3rd right
-                    let orderClass = ''
-                    if (actualRank === 1) orderClass = 'sm:order-2' // 1st place in center on desktop
-                    if (actualRank === 2) orderClass = 'sm:order-1' // 2nd place on left on desktop
-                    if (actualRank === 3) orderClass = 'sm:order-3' // 3rd place on right on desktop
-                    
-                    return (
-                      <div key={p.id} className={orderClass}>
-                        <PodiumCard
-                          rank={actualRank}
-                          player={p}
-                          icon={profileIconUrl(stateBy.get(p.puuid)?.profile_icon_id, ddVersion)}
-                          rankData={r}
-                          winrate={formatWinrate(r?.wins, r?.losses)}
-                          topChamps={champsBy.get(p.puuid) ?? []}
-                          champMap={champMap}
-                          ddVersion={ddVersion}
-                        />
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* 3. Detailed List */}
-            {rest.length > 0 && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="h-1 w-6 bg-gradient-to-r from-slate-400 to-slate-600 rounded-full" />
-                  <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    Runnerups
-                  </h2>
-                </div>
-                {rest.map((p, idx) => {
-                  const r = rankBy.get(p.puuid)
-                  return (
-                    <PlayerListRow
-                      key={p.id}
-                      index={idx + 4}
-                      player={p}
-                      rankData={r}
-                      stateData={stateBy.get(p.puuid)}
-                      winrate={formatWinrate(r?.wins, r?.losses)}
-                      topChamps={champsBy.get(p.puuid) ?? []}
-                      champMap={champMap}
-                      ddVersion={ddVersion}
-                    />
-                  )
-                })}
-              </div>
-            )}
-
-            {rest.length === 0 && top3.length === 0 && (
-              <div className="text-center py-16 bg-gradient-to-br from-slate-50 to-white rounded-3xl border-2 border-dashed border-slate-200 dark:from-slate-950 dark:to-slate-900 dark:border-slate-700">
-                <svg className="w-16 h-16 mx-auto text-slate-300 mb-4 dark:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-                  />
-                </svg>
-                <p className="text-base font-bold text-slate-500 dark:text-slate-300">No players found</p>
-                <p className="text-sm text-slate-400 mt-1 dark:text-slate-500">Add players to get started</p>
-              </div>
-            )}
+            <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
           </div>
         </div>
       </div>
