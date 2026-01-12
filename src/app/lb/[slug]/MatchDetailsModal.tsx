@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, memo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { formatMatchDuration } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 
-// --- Types (Unchanged) ---
+// --- Types ---
 interface MatchResponse {
   metadata: { matchId: string; participants: string[] }
   info: {
@@ -31,7 +31,7 @@ interface StaticDataState {
   champions: Record<number, { id: string; name: string; image: { full: string } }>
 }
 
-// --- Constants & Helpers ---
+// --- Constants ---
 const QUEUE_LABELS: Record<number, string> = { 420: 'Ranked Solo', 440: 'Ranked Flex', 450: 'ARAM' }
 const SHARD_MAP: Record<number, string> = { 
   5001: 'StatModsHealthScalingIcon.png', 5002: 'StatModsArmorIcon.png', 5003: 'StatModsMagicResIcon.png', 
@@ -73,11 +73,54 @@ async function resolveDdragonVersion(v: string | undefined, fb: string) {
 }
 const handleImageError = (e: any) => { if (e.currentTarget.src !== FALLBACK_ICON) e.currentTarget.src = FALLBACK_ICON }
 
-// --- OPTIMIZATION: Icon Component (Updated for Light/Dark) ---
-const Icon = ({ src, alt, size = "h-6 w-6", rounded = "rounded", className = "", ring = true }: any) => src 
-  // eslint-disable-next-line @next/next/no-img-element
-  ? <img loading="lazy" src={src} alt={alt || ""} title={alt || ""} className={`${size} ${rounded} ${ring ? 'ring-1 ring-slate-200 dark:ring-slate-700' : ''} bg-slate-100 dark:bg-slate-800 object-cover ${className}`} onError={handleImageError} />
+// --- ULTRA-OPTIMIZED Icon with will-change and transform ---
+const Icon = memo(({ src, alt, size = "h-6 w-6", rounded = "rounded", className = "", ring = true }: any) => src 
+  ? <img loading="lazy" src={src} alt={alt || ""} title={alt || ""} className={`${size} ${rounded} ${ring ? 'ring-1 ring-slate-200 dark:ring-slate-700' : ''} bg-slate-100 dark:bg-slate-800 object-cover ${className}`} onError={handleImageError} style={{ willChange: 'transform' }} />
   : <div className={`${size} ${rounded} bg-slate-100 dark:bg-slate-800 ring-1 ring-slate-200 dark:ring-slate-700 ${className}`} />
+)
+
+// --- VIRTUALIZED Player Row with transform optimization ---
+const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonVersion, spellMap, runeMap, getPlayerName, teamColor, isRtl, maxDmg }: any) => {
+  const cs = p.totalMinionsKilled + p.neutralMinionsKilled
+  const s1 = spellMap.get(p.summoner1Id); const s2 = spellMap.get(p.summoner2Id)
+  const isFocused = focusedPuuid === p.puuid
+  const csPerMin = (cs / (match.info.gameDuration / 60)).toFixed(1)
+  const dmgDisplay = p.totalDamageDealtToChampions >= 1000 ? (p.totalDamageDealtToChampions/1000).toFixed(1) + 'k' : p.totalDamageDealtToChampions
+  
+  return (
+    <div className={`group relative flex items-center gap-2 rounded-lg border p-1.5 transition-all ${isFocused ? 'bg-amber-50 border-amber-500/30 ring-1 ring-amber-500/20 dark:bg-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm dark:bg-slate-900 dark:border-transparent dark:hover:bg-slate-800 dark:hover:border-slate-700'} ${isRtl ? 'flex-row-reverse text-right' : ''}`} style={{ willChange: 'transform' }}>
+      <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[p.championId] ?? champMap[p.championId])!)} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
+      <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
+        <div className={`truncate text-xs font-medium w-full ${isFocused ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{getPlayerName(p).split('#')[0]}</div>
+        <div className="flex gap-0.5 mt-0.5">
+          <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
+          <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
+          <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
+          <Icon src={s1 && buildStaticUrl(ddragonVersion, `img/spell/${s1.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+          <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+        </div>
+      </div>
+      <div className={`flex flex-col justify-center w-[3.5rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
+        <div className="text-xs font-bold text-slate-900 tabular-nums tracking-tight dark:text-slate-100">{p.kills}/{p.deaths}/{p.assists}</div>
+        <div className="text-[10px] text-slate-500 tabular-nums">KP {p._kp}%</div>
+      </div>
+      <div className="flex flex-col justify-center w-[4.5rem] shrink-0">
+        <div className={`flex text-[9px] font-medium text-slate-500 mb-0.5 ${isRtl ? 'justify-start' : 'justify-end'}`}><span>{dmgDisplay}</span></div>
+        <div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 relative"><div className={`h-1 rounded-full absolute top-0 ${teamColor} ${isRtl ? 'right-0' : 'left-0'}`} style={{ width: `${(p.totalDamageDealtToChampions / maxDmg) * 100}%`, willChange: 'width' }} /></div>
+      </div>
+      <div className={`flex flex-col justify-center w-[3rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
+        <div className="text-xs font-medium text-slate-600 tabular-nums dark:text-slate-300">{cs}</div>
+        <div className="text-[10px] text-slate-400 tabular-nums dark:text-slate-500">{csPerMin}/m</div>
+      </div>
+      <div className={`flex gap-0.5 w-[9.5rem] shrink-0 ${isRtl ? 'justify-start' : 'justify-end'}`}>
+        {[0,1,2,3,4,5].map(i => {
+          const id = (p as any)[`item${i}`]; 
+          return id ? <Icon key={i} src={getItemIconUrl(ddragonVersion, id)} size="h-6 w-6" rounded="rounded-[3px]" className="ring-0" /> : <div key={i} className="h-6 w-6 rounded-[3px] bg-slate-100 dark:bg-slate-900/50 ring-1 ring-slate-200 dark:ring-slate-800" />
+        })}
+      </div>
+    </div>
+  )
+}, (prev, next) => prev.p.puuid === next.p.puuid && prev.focusedPuuid === next.focusedPuuid && prev.ddragonVersion === next.ddragonVersion)
 
 // --- Main Component ---
 export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose }: {
@@ -96,12 +139,14 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
 
   useEffect(() => { setMounted(true) }, [])
 
+  const handleClose = useCallback(() => onClose(), [onClose])
+  const handleKeyDown = useCallback((e: KeyboardEvent) => { if (e.key === 'Escape') handleClose() }, [handleClose])
+
   useEffect(() => {
     if (!open) return
-    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [open, onClose])
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [open, handleKeyDown])
 
   useEffect(() => {
     if (!open || !matchId) return
@@ -111,7 +156,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       .then(d => setMatch(d.match))
       .catch(() => setError('Match details unavailable.'))
       .finally(() => setLoading(false))
-  }, [open, matchId])
+  }, [open, matchId, ddVersion])
 
   useEffect(() => {
     if (!open || !match) return
@@ -145,11 +190,11 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     })
   }, [open, match])
 
-  // --- Memos ---
   const spellMap = useMemo(() => {
     const m = new Map<number, any>(); Object.values(staticData.spells).forEach((s: any) => m.set(Number(s.key), s))
     return m
   }, [staticData.spells])
+  
   const runeMap = useMemo(() => {
     const m = new Map<number, any>(); 
     staticData.runes.forEach(t => { m.set(t.id, t); t.slots?.forEach((s: any) => s.runes?.forEach((r: any) => m.set(r.id, r))) })
@@ -157,14 +202,29 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [staticData.runes])
 
   const focusedParticipant = useMemo(() => match?.info.participants.find(p => p.puuid === focusedPuuid), [match, focusedPuuid])
-  const teams = useMemo(() => match ? { blue: match.info.participants.filter(p => p.teamId === 100), red: match.info.participants.filter(p => p.teamId === 200) } : { blue: [], red: [] }, [match])
-  const teamTotals = useMemo(() => {
-    const calc = (list: RiotParticipant[]) => list.reduce((a, p) => ({
-      kills: a.kills + p.kills, gold: a.gold + p.goldEarned, damage: a.damage + p.totalDamageDealtToChampions,
-      taken: a.taken + p.totalDamageTaken, vision: a.vision + p.visionScore, cs: a.cs + p.totalMinionsKilled + p.neutralMinionsKilled
-    }), { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 })
-    return { blue: calc(teams.blue), red: calc(teams.red) }
-  }, [teams])
+  
+  const { teams, teamTotals } = useMemo(() => {
+    if (!match) return { teams: { blue: [], red: [] }, teamTotals: { blue: { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 }, red: { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 } } }
+    
+    const blue = match.info.participants.filter(p => p.teamId === 100)
+    const red = match.info.participants.filter(p => p.teamId === 200)
+    
+    const calc = (list: RiotParticipant[]) => {
+      const totals = list.reduce((a, p) => ({
+        kills: a.kills + p.kills, gold: a.gold + p.goldEarned, damage: a.damage + p.totalDamageDealtToChampions,
+        taken: a.taken + p.totalDamageTaken, vision: a.vision + p.visionScore, cs: a.cs + p.totalMinionsKilled + p.neutralMinionsKilled
+      }), { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 })
+      
+      list.forEach(p => (p as any)._kp = totals.kills ? Math.round(((p.kills + p.assists)/totals.kills)*100) : 0)
+      
+      return totals
+    }
+    
+    return { 
+      teams: { blue, red },
+      teamTotals: { blue: calc(blue), red: calc(red) }
+    }
+  }, [match])
 
   const focusedRunes = useMemo(() => {
     if (!focusedParticipant) return { k: null, p: null, s: null, prim: [], sec: [] }
@@ -187,23 +247,23 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     return groups
   }, [timeline, focusedParticipant, staticData.items])
 
-  if (!open || !mounted) return null
-
-  const getPlayerName = (p: RiotParticipant) => {
+  const getPlayerName = useCallback((p: RiotParticipant) => {
     const acc = accounts[p.puuid]; 
     return acc ? `${acc.gameName} #${acc.tagLine}` : p.riotIdGameName ? `${p.riotIdGameName} #${p.riotIdTagline}` : p.summonerName
-  }
+  }, [accounts])
+
+  // OPTIMIZATION: Use requestAnimationFrame for smooth tab transitions
+  const handleTabChange = useCallback((tab: 'overview' | 'analysis' | 'build') => {
+    requestAnimationFrame(() => setActiveTab(tab))
+  }, [])
+
+  if (!open || !mounted) return null
 
   const isWin = focusedParticipant?.win ?? true;
 
   return createPortal(
-    // Backdrop: Light mode (slate-900/50), Dark mode (slate-950/80)
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200 dark:bg-slate-950/80" onClick={onClose}>
-      
-      {/* Modal Container: White (Light), Slate-950 (Dark) */}
-      <div ref={containerRef} className="flex h-auto max-h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100" onClick={e => e.stopPropagation()}>
-        
-        {/* Header */}
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4 animate-in fade-in duration-200 dark:bg-slate-950/80" onClick={handleClose}>
+      <div ref={containerRef} className="flex h-auto max-h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100" onClick={e => e.stopPropagation()} style={{ willChange: 'transform' }}>
         <header className={`sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur flex justify-between items-center dark:border-slate-800 dark:bg-slate-950/95 ${isWin ? 'shadow-[0_1px_15px_-5px_rgba(34,197,94,0.1)]' : 'shadow-[0_1px_15px_-5px_rgba(239,68,68,0.1)]'}`}>
           <div className="flex flex-col gap-0.5">
             <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Match Details</div>
@@ -215,21 +275,19 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
               {match && <span className="text-xs text-slate-400 font-mono dark:text-slate-500">{formatMatchDuration(match.info.gameDuration)} • {timeAgo(match.info.gameEndTimestamp ?? match.info.gameCreation)} • {getMatchPatch(match.info.gameVersion) ?? ddVersion}</span>}
             </div>
           </div>
-          <button onClick={onClose} className="group rounded-full bg-slate-100 border border-slate-200 p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-600 dark:bg-slate-900 dark:border-slate-800 dark:hover:bg-slate-800 dark:hover:text-white">
+          <button onClick={handleClose} className="group rounded-full bg-slate-100 border border-slate-200 p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-600 dark:bg-slate-900 dark:border-slate-800 dark:hover:bg-slate-800 dark:hover:text-white">
             <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 10-1.06-1.06L10 8.94 6.28 5.22z"/></svg>
           </button>
         </header>
 
-        {/* Tabs */}
         <div className="flex items-center gap-1 border-b border-slate-200 bg-slate-50 px-6 py-2 shrink-0 dark:border-slate-800 dark:bg-slate-900/50">
           {[{k:'overview', l:'Overview'}, {k:'analysis', l:'Analysis'}, {k:'build', l:'Build'}].map(tab => (
-            <button key={tab.k} onClick={() => setActiveTab(tab.k as any)} className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-all ${activeTab === tab.k ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}>{tab.l}</button>
+            <button key={tab.k} onClick={() => handleTabChange(tab.k as any)} className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-all ${activeTab === tab.k ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}>{tab.l}</button>
           ))}
           {error && <span className="ml-auto text-xs font-medium text-amber-500/80">{error}</span>}
         </div>
 
-        {/* Content Area */}
-        <div className="flex-1 overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-slate-50 px-4 py-6 md:px-8 custom-scrollbar dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+        <div className="flex-1 overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-slate-50 px-4 py-6 md:px-8 custom-scrollbar dark:from-slate-950 dark:via-slate-950 dark:to-slate-900" style={{ transform: 'translateZ(0)', willChange: 'scroll-position' }}>
           {loading ? (
             <div className="space-y-4 animate-pulse">
               <div className="h-32 rounded-xl bg-slate-200 dark:bg-slate-900" />
@@ -239,7 +297,6 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
             <div className="h-full">
               {activeTab === 'overview' && focusedParticipant && (
                 <div className="space-y-6 pb-6">
-                  {/* Focus Card */}
                   <div className={`relative flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${focusedParticipant.win ? 'shadow-emerald-500/5 dark:shadow-emerald-900/5' : 'shadow-rose-500/5 dark:shadow-rose-900/5'}`}>
                     <div className="flex items-center gap-4">
                       <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId])!)} size="h-14 w-14" rounded="rounded-xl" className="shadow-lg ring-2 ring-slate-100 dark:ring-slate-800" />
@@ -274,7 +331,6 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                     </div>
                   </div>
 
-                  {/* Team Lists */}
                   <div className="grid gap-6 lg:grid-cols-2">
                     {[{ l: 'Blue Team', id: 100, d: teams.blue, t: teamTotals.blue, color: 'text-blue-600 dark:text-blue-400', bar: 'bg-blue-500', dir: 'ltr' }, 
                       { l: 'Red Team', id: 200, d: teams.red, t: teamTotals.red, color: 'text-rose-600 dark:text-rose-400', bar: 'bg-rose-500', dir: 'rtl' }].map(tm => {
@@ -287,44 +343,9 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                             <span className="text-xs font-medium text-slate-500 font-mono"><span className="text-slate-900 dark:text-slate-200">{tm.t.kills}</span> Kills <span className="mx-1 text-slate-300 dark:text-slate-700">|</span> <span className="text-amber-500 dark:text-amber-400">{tm.t.gold.toLocaleString()}</span>g</span>
                           </div>
                           <div className="space-y-1">
-                            {tm.d.map(p => {
-                              const cs = p.totalMinionsKilled + p.neutralMinionsKilled
-                              const s1 = spellMap.get(p.summoner1Id); const s2 = spellMap.get(p.summoner2Id)
-                              const isFocused = focusedPuuid === p.puuid
-                              return (
-                                <div key={p.puuid} className={`group relative flex items-center gap-2 rounded-lg border p-1.5 transition-all ${isFocused ? 'bg-amber-50 border-amber-500/30 ring-1 ring-amber-500/20 dark:bg-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm dark:bg-slate-900 dark:border-transparent dark:hover:bg-slate-800 dark:hover:border-slate-700'} ${isRtl ? 'flex-row-reverse text-right' : ''}`}>
-                                  <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[p.championId] ?? champMap[p.championId])!)} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
-                                  <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
-                                    <div className={`truncate text-xs font-medium w-full ${isFocused ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{getPlayerName(p).split('#')[0]}</div>
-                                    <div className="flex gap-0.5 mt-0.5">
-                                      <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
-                                      <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
-                                      <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
-                                      <Icon src={s1 && buildStaticUrl(ddragonVersion, `img/spell/${s1.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
-                                      <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
-                                    </div>
-                                  </div>
-                                  <div className={`flex flex-col justify-center w-[3.5rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
-                                    <div className="text-xs font-bold text-slate-900 tabular-nums tracking-tight dark:text-slate-100">{p.kills}/{p.deaths}/{p.assists}</div>
-                                    <div className="text-[10px] text-slate-500 tabular-nums">KP {tm.t.kills ? Math.round(((p.kills + p.assists)/tm.t.kills)*100) : 0}%</div>
-                                  </div>
-                                  <div className="flex flex-col justify-center w-[4.5rem] shrink-0">
-                                    <div className={`flex text-[9px] font-medium text-slate-500 mb-0.5 ${isRtl ? 'justify-start' : 'justify-end'}`}><span>{p.totalDamageDealtToChampions >= 1000 ? (p.totalDamageDealtToChampions/1000).toFixed(1) + 'k' : p.totalDamageDealtToChampions}</span></div>
-                                    <div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 relative"><div className={`h-1 rounded-full absolute top-0 ${tm.bar} ${isRtl ? 'right-0' : 'left-0'}`} style={{ width: `${(p.totalDamageDealtToChampions / maxDmg) * 100}%` }} /></div>
-                                  </div>
-                                  <div className={`flex flex-col justify-center w-[3rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
-                                    <div className="text-xs font-medium text-slate-600 tabular-nums dark:text-slate-300">{cs}</div>
-                                    <div className="text-[10px] text-slate-400 tabular-nums dark:text-slate-500">{(cs / (match.info.gameDuration / 60)).toFixed(1)}/m</div>
-                                  </div>
-                                  <div className={`flex gap-0.5 w-[9.5rem] shrink-0 ${isRtl ? 'justify-start' : 'justify-end'}`}>
-                                    {[0,1,2,3,4,5].map(i => {
-                                      const id = (p as any)[`item${i}`]; 
-                                      return id ? <Icon key={i} src={getItemIconUrl(ddragonVersion, id)} size="h-6 w-6" rounded="rounded-[3px]" className="ring-0" /> : <div key={i} className="h-6 w-6 rounded-[3px] bg-slate-100 dark:bg-slate-900/50 ring-1 ring-slate-200 dark:ring-slate-800" />
-                                    })}
-                                  </div>
-                                </div>
-                              )
-                            })}
+                            {tm.d.map(p => (
+                              <PlayerRow key={p.puuid} p={p} match={match} focusedPuuid={focusedPuuid} staticData={staticData} champMap={champMap} ddragonVersion={ddragonVersion} spellMap={spellMap} runeMap={runeMap} getPlayerName={getPlayerName} teamColor={tm.bar} isRtl={isRtl} maxDmg={maxDmg} />
+                            ))}
                           </div>
                         </div>
                       )
@@ -382,7 +403,6 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                 <div className="h-full max-h-[600px] w-full flex gap-6 overflow-hidden pb-2">
                   {!focusedParticipant ? <div className="p-8 text-center text-slate-500 italic bg-slate-50 rounded-xl border border-slate-200 w-full dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400">Player data not found.</div> : (
                     <>
-                      {/* Left Col */}
                       <div className="w-auto max-w-[280px] shrink-0 flex flex-col gap-6 h-full">
                         <div className="rounded-xl border border-slate-200 bg-white p-5 flex-1 overflow-hidden flex flex-col justify-center dark:border-slate-800 dark:bg-slate-900">
                           <div className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-6 text-center">Runes & Stats</div>
@@ -419,7 +439,6 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                         </div>
                       </div>
                       
-                      {/* Build Order */}
                       <div className="flex-1 rounded-xl border border-slate-200 bg-white p-5 flex flex-col h-full overflow-hidden dark:border-slate-800 dark:bg-slate-900">
                         <div className="text-xs font-bold uppercase tracking-widest text-slate-500 mb-4 sticky top-0">Item Build Order</div>
                         <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
