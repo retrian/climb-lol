@@ -735,9 +735,27 @@ export default async function LeaderboardDetail({
   const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => allowedMatchIds.has(row.match_id))
   const filteredMatchIds = latestMatchIds.filter((matchId) => allowedMatchIds.has(matchId))
 
+  const { data: matchParticipantsRaw } = filteredMatchIds.length
+    ? await supabase
+        .from('match_participants')
+        .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win')
+        .in('match_id', filteredMatchIds)
+    : { data: [] as Array<Record<string, unknown>> }
+
+  const leaderboardPuuids = new Set(puuids)
+  const participantLeaderboardPuuids = new Set<string>()
+
+  if (matchParticipantsRaw) {
+    for (const row of matchParticipantsRaw as Array<{ match_id?: string | null; puuid?: string | null }>) {
+      if (row.puuid && leaderboardPuuids.has(row.puuid)) {
+        participantLeaderboardPuuids.add(row.puuid)
+      }
+    }
+  }
+
   // FIX: Collect PUUIDs from the games themselves so we get LP data even if the player isn't in the Top 50 loaded above
   const gamePuuids = filteredLatestRaw.map((row: any) => row.puuid).filter(Boolean)
-  const allRelevantPuuids = Array.from(new Set([...puuids, ...gamePuuids]))
+  const allRelevantPuuids = Array.from(new Set([...puuids, ...gamePuuids, ...participantLeaderboardPuuids]))
 
   const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
 
@@ -759,42 +777,6 @@ export default async function LeaderboardDetail({
       }
     }
   }
-
-  const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
-    const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
-    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
-    const durationS = row.game_duration_s ?? row.gameDuration
-    const endType = computeEndType({
-      gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
-      gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
-      gameDurationS: durationS,
-      lpChange,
-    })
-
-    return {
-      matchId: row.match_id,
-      puuid: row.puuid,
-      championId: row.champion_id,
-      win: row.win,
-      k: row.kills ?? 0,
-      d: row.deaths ?? 0,
-      a: row.assists ?? 0,
-      cs: row.cs ?? 0,
-      endTs: row.game_end_ts,
-      durationS,
-      queueId: row.queue_id,
-      lpChange,
-      lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
-      endType,
-    }
-  })
-
-  const { data: matchParticipantsRaw } = filteredMatchIds.length
-    ? await supabase
-        .from('match_participants')
-        .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win')
-        .in('match_id', filteredMatchIds)
-    : { data: [] as Array<Record<string, unknown>> }
 
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   if (matchParticipantsRaw) {
@@ -825,6 +807,86 @@ export default async function LeaderboardDetail({
       } else {
         participantsByMatch.set(entry.matchId, [entry])
       }
+    }
+  }
+
+  const latestRowByMatch = new Map<string, any>()
+  const latestRowByMatchAndPuuid = new Map<string, any>()
+  for (const row of filteredLatestRaw as Array<any>) {
+    if (!row.match_id) continue
+    if (!latestRowByMatch.has(row.match_id)) {
+      latestRowByMatch.set(row.match_id, row)
+    }
+    if (row.puuid) {
+      latestRowByMatchAndPuuid.set(`${row.match_id}-${row.puuid}`, row)
+    }
+  }
+
+  const latestGames: Game[] = []
+  for (const matchId of filteredMatchIds) {
+    const baseRow = latestRowByMatch.get(matchId)
+    const participants = (participantsByMatch.get(matchId) ?? []).filter((p) => leaderboardPuuids.has(p.puuid))
+
+    if (participants.length === 0 && baseRow) {
+      const lpEvent = lpByMatchAndPlayer.get(`${baseRow.match_id}-${baseRow.puuid}`)
+      const lpChange = baseRow.lp_change ?? baseRow.lp_delta ?? baseRow.lp_diff ?? lpEvent?.delta ?? null
+      const durationS = baseRow.game_duration_s ?? baseRow.gameDuration
+      const endType = computeEndType({
+        gameEndedInEarlySurrender: baseRow.game_ended_in_early_surrender ?? baseRow.gameEndedInEarlySurrender,
+        gameEndedInSurrender: baseRow.game_ended_in_surrender ?? baseRow.gameEndedInSurrender,
+        gameDurationS: durationS,
+        lpChange,
+      })
+
+      latestGames.push({
+        matchId: baseRow.match_id,
+        puuid: baseRow.puuid,
+        championId: baseRow.champion_id,
+        win: baseRow.win,
+        k: baseRow.kills ?? 0,
+        d: baseRow.deaths ?? 0,
+        a: baseRow.assists ?? 0,
+        cs: baseRow.cs ?? 0,
+        endTs: baseRow.game_end_ts,
+        durationS,
+        queueId: baseRow.queue_id,
+        lpChange,
+        lpNote: baseRow.lp_note ?? baseRow.note ?? lpEvent?.note ?? null,
+        endType,
+      })
+      continue
+    }
+
+    for (const participant of participants) {
+      const row = latestRowByMatchAndPuuid.get(`${matchId}-${participant.puuid}`) ?? baseRow
+      if (!row) continue
+
+      const lpEvent = lpByMatchAndPlayer.get(`${matchId}-${participant.puuid}`)
+      const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+      const durationS = row.game_duration_s ?? row.gameDuration
+      const endType = computeEndType({
+        gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
+        gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
+        gameDurationS: durationS,
+        lpChange,
+      })
+
+      latestGames.push({
+        matchId,
+        puuid: participant.puuid,
+        championId: participant.championId ?? row.champion_id,
+        win: participant.win ?? row.win,
+        k: participant.kills ?? row.kills ?? 0,
+        d: participant.deaths ?? row.deaths ?? 0,
+        a: participant.assists ?? row.assists ?? 0,
+        cs: participant.cs ?? row.cs ?? 0,
+        endTs: row.game_end_ts,
+        durationS,
+        queueId: row.queue_id,
+        lpChange,
+        lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+        endType,
+      })
     }
   }
 
