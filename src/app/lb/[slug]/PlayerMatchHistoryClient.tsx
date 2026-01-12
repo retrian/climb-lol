@@ -427,6 +427,35 @@ export default function PlayerMatchHistoryClient({
     matchDetailRequests.current.clear()
   }, [open])
 
+  useEffect(() => {
+    if (!open || matches.length === 0) return
+    let cancelled = false
+    const queue = matches.map((match) => match.matchId).filter((matchId) => !matchDetailCache.has(matchId))
+
+    const schedule = (fn: () => void) => {
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        ;(window as any).requestIdleCallback(fn, { timeout: 1200 })
+      } else {
+        setTimeout(fn, 200)
+      }
+    }
+
+    const runNext = () => {
+      if (cancelled) return
+      const matchId = queue.shift()
+      if (!matchId) return
+      ensureMatchDetail(matchId).finally(() => {
+        if (cancelled) return
+        schedule(runNext)
+      })
+    }
+
+    schedule(runNext)
+    return () => {
+      cancelled = true
+    }
+  }, [open, matches])
+
   const handleOpen = (card: PlayerCard) => {
     setSelectedPlayer(card)
     setOpen(true)
