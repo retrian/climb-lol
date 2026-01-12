@@ -506,7 +506,7 @@ export default function PlayerMatchHistoryClient({
 
           <div className="relative h-24 w-24 rounded-2xl overflow-hidden border-2 border-slate-200 shadow-md bg-slate-100 group-hover:scale-105 transition-transform duration-300 dark:border-slate-700 dark:bg-slate-800">
             {icon ? (
-              <img loading="eager" decoding="sync" loading="eager" decoding="sync" src={icon} alt="" className="h-full w-full object-cover" />
+              <img loading="eager" decoding="sync" src={icon} alt="" className="h-full w-full object-cover" />
             ) : (
               <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
             )}
@@ -545,7 +545,7 @@ export default function PlayerMatchHistoryClient({
           <div className="mt-5 flex flex-col items-center gap-3 w-full">
             <div className="flex items-center gap-3 bg-slate-50 px-5 py-3 rounded-xl border border-slate-200 w-full justify-center group-hover:bg-slate-100 transition-colors duration-200 dark:border-slate-700 dark:bg-slate-900 dark:group-hover:bg-slate-800">
               {getRankIconSrc(rankData?.tier) && (
-                <img loading="eager" decoding="sync" loading="eager" decoding="sync" src={getRankIconSrc(rankData?.tier)} alt={rankData?.tier || ''} className="h-11 w-11 object-contain" />
+                <img loading="eager" decoding="sync" src={getRankIconSrc(rankData?.tier)} alt={rankData?.tier || ''} className="h-11 w-11 object-contain" />
               )}
               <div className="flex flex-col items-start">
                 <div className="text-2xl font-black text-slate-900 tabular-nums dark:text-slate-100">
@@ -654,7 +654,7 @@ export default function PlayerMatchHistoryClient({
 
         <div className="flex items-center gap-3 min-w-0 flex-1">
           <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
-            {icon && <img loading="eager" decoding="sync" loading="eager" decoding="sync" src={icon} alt="" className="h-full w-full object-cover" />}
+            {icon && <img loading="eager" decoding="sync" src={icon} alt="" className="h-full w-full object-cover" />}
           </div>
           <div className="min-w-0 flex-1">
             {opggUrl ? (
@@ -684,7 +684,7 @@ export default function PlayerMatchHistoryClient({
         </div>
 
         <div className="hidden md:flex items-center gap-2 lg:gap-3 shrink-0">
-          {rankIcon && <img loading="eager" decoding="sync" loading="eager" decoding="sync" src={rankIcon} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />}
+          {rankIcon && <img loading="eager" decoding="sync" src={rankIcon} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />}
           <div className="flex flex-col">
             <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">
               {rankData?.league_points ?? 0} LP
