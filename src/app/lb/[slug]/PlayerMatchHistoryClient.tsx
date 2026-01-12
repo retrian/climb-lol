@@ -311,6 +311,7 @@ export default function PlayerMatchHistoryClient({
   const [matchDetails, setMatchDetails] = useState<Record<string, MatchDetailResponse | null>>({})
   const modalRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
+  const matchDetailRequests = useRef(new Set<string>())
 
   const hasPlayers = playerCards.length > 0
   const top3 = playerCards.slice(0, 3)
@@ -405,39 +406,37 @@ export default function PlayerMatchHistoryClient({
     }
   }, [open, selectedPlayer])
 
+  const ensureMatchDetail = async (matchId: string) => {
+    if (matchDetailCache.has(matchId) || matchDetailRequests.current.has(matchId)) return
+    matchDetailRequests.current.add(matchId)
+    try {
+      const res = await fetch(`/api/match/${matchId}`)
+      if (!res.ok) return
+      const data = await res.json()
+      if (data?.match) {
+        matchDetailCache.set(matchId, data.match)
+        setMatchDetails((prev) => ({ ...prev, [matchId]: data.match }))
+      }
+    } finally {
+      matchDetailRequests.current.delete(matchId)
+    }
+  }
+
   useEffect(() => {
     if (!open || matches.length === 0) return
 
-    const pending = matches
-      .map((match) => match.matchId)
-      .filter((matchId) => !matchDetailCache.has(matchId))
-
-    if (!pending.length) return
-
+    const primed = matches.slice(0, 3)
     let cancelled = false
-    const queue = [...pending]
-    const workers = Array.from({ length: 3 }, async () => {
-      while (queue.length) {
-        const matchId = queue.shift()
-        if (!matchId) return
-        if (matchDetailCache.has(matchId)) continue
-        try {
-          const res = await fetch(`/api/match/${matchId}`)
-          if (!res.ok) continue
-          const data = await res.json()
-          if (cancelled) return
-          if (data?.match) {
-            matchDetailCache.set(matchId, data.match)
-            setMatchDetails((prev) => ({ ...prev, [matchId]: data.match }))
-          }
-        } catch {
-          if (cancelled) return
-        }
+
+    const prime = async () => {
+      for (const match of primed) {
+        if (cancelled) return
+        await ensureMatchDetail(match.matchId)
+        await new Promise((resolve) => setTimeout(resolve, 120))
       }
-    })
+    }
 
-    Promise.all(workers).catch(() => null)
-
+    prime().catch(() => null)
     return () => {
       cancelled = true
     }
@@ -510,99 +509,94 @@ export default function PlayerMatchHistoryClient({
             handleOpen(card)
           }
         }}
-        className={`group relative flex h-full flex-col rounded-3xl border-2 border-slate-100 ${cardBg} ${hoverEffect} transition-all duration-300 cursor-pointer ${sizeClass} ${glowEffect} dark:border-slate-800`}
+        className={`group relative flex flex-col ${cardBg} rounded-2xl shadow-lg ${hoverEffect} ${sizeClass} ${glowEffect} transition-all duration-300 overflow-hidden border border-slate-200 dark:border-slate-800 cursor-pointer`}
       >
-        <div
-          className={`absolute left-1/2 top-0 h-1.5 w-24 -translate-x-1/2 rounded-full bg-gradient-to-r ${accentColor}`}
-        />
-        <div className="flex h-full flex-col items-center p-6 text-center">
-          <div
-            className={`flex items-center justify-center rounded-full px-5 py-2 text-xs font-black uppercase tracking-widest ${rankBg} ${rankText} shadow-lg`}
-          >
+        <div className={`h-1.5 w-full bg-gradient-to-r ${accentColor}`} />
+        <div className="absolute top-3 right-3 z-10">
+          <div className={`${rankBg} px-3 py-1.5 rounded-lg shadow-md ${rankText} text-xs font-bold tracking-wide`}>
             #{rank}
           </div>
+        </div>
+        <div className="p-6 flex flex-col items-center">
 
-          <div className="relative mt-4">
-            <div className="absolute inset-0 rounded-full bg-gradient-to-br from-blue-200 to-purple-200 blur-xl opacity-40" />
-            <div className="relative h-20 w-20 overflow-hidden rounded-full border-4 border-white shadow-xl dark:border-slate-900">
-              {icon && <img src={icon} alt="" className="h-full w-full object-cover" />}
-            </div>
+          <div className="relative h-24 w-24 rounded-2xl overflow-hidden border-2 border-slate-200 shadow-md bg-slate-100 group-hover:scale-105 transition-transform duration-300 dark:border-slate-700 dark:bg-slate-800">
+            {icon ? (
+              <img src={icon} alt="" className="h-full w-full object-cover" />
+            ) : (
+              <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+            )}
           </div>
 
-          <div className="mt-4 w-full">
+          <div className="mt-4 text-center w-full px-2">
             {opggUrl ? (
               <a
                 href={opggUrl}
                 target="_blank"
                 rel="noreferrer"
                 onClick={(event) => event.stopPropagation()}
-                className="inline-flex max-w-full items-center justify-center text-slate-900 transition-colors hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+                className="inline-flex max-w-full items-center justify-center gap-1 text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
                 title="View on OP.GG"
               >
-                <FitText text={displayRiotId(card.player)} className="max-w-full text-lg font-bold" minScale={0.7} />
+                <FitText
+                  text={displayRiotId(card.player)}
+                  className="block max-w-full whitespace-nowrap font-bold"
+                  minScale={0.65}
+                />
               </a>
             ) : (
               <FitText
                 text={displayRiotId(card.player)}
-                className="text-lg font-bold text-slate-900 dark:text-slate-100"
-                minScale={0.7}
+                className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100"
+                minScale={0.65}
               />
             )}
             {card.player.role && (
-              <div className="mt-1 text-xs font-semibold uppercase tracking-widest text-slate-400">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1 dark:text-slate-400">
                 {card.player.role}
               </div>
             )}
           </div>
 
-          <div className="mt-4 flex items-center gap-3">
-            <img src={getRankIconSrc(rankData?.tier)} alt="" className="h-10 w-10" />
-            <div className="text-left">
-              <div className="text-sm font-bold text-slate-900 dark:text-slate-100">
-                {rankData?.league_points ?? 0} LP
+          <div className="mt-5 flex flex-col items-center gap-3 w-full">
+            <div className="flex items-center gap-3 bg-slate-50 px-5 py-3 rounded-xl border border-slate-200 w-full justify-center group-hover:bg-slate-100 transition-colors duration-200 dark:border-slate-700 dark:bg-slate-900 dark:group-hover:bg-slate-800">
+              {getRankIconSrc(rankData?.tier) && (
+                <img src={getRankIconSrc(rankData?.tier)} alt={rankData?.tier || ''} className="h-11 w-11 object-contain" />
+              )}
+              <div className="flex flex-col items-start">
+                <div className="text-2xl font-black text-slate-900 tabular-nums dark:text-slate-100">
+                  {rankData?.league_points ?? 0}
+                  <span className="text-sm font-bold text-slate-500 ml-1 dark:text-slate-400">LP</span>
+                </div>
+                {tierDisplay && (
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide dark:text-slate-500">
+                    {tierDisplay}
+                  </div>
+                )}
               </div>
-              {tierDisplay && (
-                <div className="text-xs font-semibold text-slate-400 dark:text-slate-500">{tierDisplay}</div>
-              )}
-              {isApex && tier && (
-                <div className="text-xs font-semibold text-slate-400 dark:text-slate-500">{tier}</div>
-              )}
             </div>
-          </div>
 
-          <div className="mt-4 flex items-center gap-3">
-            <div className="flex flex-col items-center">
-              <span
-                className={`text-sm font-black ${
-                  winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'
+            <div className="flex items-center gap-2 text-sm">
+              <div
+                className={`font-black tabular-nums ${
+                  winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
                 }`}
               >
                 {winrate.pct}%
-              </span>
-              <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">
-                Win
-              </span>
-            </div>
-            <div className="h-6 w-px bg-slate-200 dark:bg-slate-700" />
-            <div className="flex flex-col items-center">
-              <span className="text-sm font-black text-slate-900 dark:text-slate-100">{winrate.total}</span>
-              <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">
-                Games
-              </span>
+              </div>
+              <div className="text-slate-400 font-medium dark:text-slate-500">{winrate.label}</div>
             </div>
           </div>
 
-          <div className="mt-5 flex items-center justify-center gap-2">
-            {[0, 1, 2].map((idx) => {
-              const champ = card.topChamps[idx]
-              const champData = champ ? champMap[champ.champion_id] : null
-              if (!champData) return <div key={idx} className="h-9 w-9" />
+          <div className="mt-5 flex gap-2">
+            {card.topChamps.slice(0, 3).map((c) => {
+              const champ = champMap[c.champion_id]
+              if (!champ) return null
               return (
                 <img
-                  key={champ.champion_id}
-                  src={championIconUrl(ddVersion, champData.id)}
-                  className="h-9 w-9 rounded-lg border-2 border-slate-200 shadow-sm dark:border-slate-700"
-                  alt=""
+                  key={c.champion_id}
+                  src={championIconUrl(ddVersion, champ.id)}
+                  alt={champ.name}
+                  className="h-10 w-10 rounded-lg border-2 border-slate-200 shadow-sm hover:scale-125 hover:border-slate-300 transition-all duration-200 hover:z-10 dark:border-slate-700"
                 />
               )
             })}
@@ -819,59 +813,60 @@ export default function PlayerMatchHistoryClient({
 
     const isExpanded = expandedMatchId === match.matchId
 
+    const rowBg = match.win ? 'bg-emerald-50/80 dark:bg-emerald-500/10' : 'bg-rose-50/80 dark:bg-rose-500/10'
+    const rowBorder = match.win ? 'border-emerald-200/80 dark:border-emerald-500/30' : 'border-rose-200/80 dark:border-rose-500/30'
+    const rowAccent = match.win ? 'border-emerald-400' : 'border-rose-400'
+
     return (
-      <div key={match.matchId} className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950">
+      <div key={match.matchId} className={`rounded-2xl border ${rowBorder} ${rowBg} shadow-sm`}>
         <button
           type="button"
-          onClick={() => setExpandedMatchId(isExpanded ? null : match.matchId)}
-          className="w-full px-4 py-3 text-left transition hover:bg-slate-50 dark:hover:bg-slate-900 overflow-x-auto"
+          onClick={() => {
+            if (!isExpanded) ensureMatchDetail(match.matchId)
+            setExpandedMatchId(isExpanded ? null : match.matchId)
+          }}
+          className="w-full px-4 py-3 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40"
         >
-          <div className="flex items-center gap-4 text-xs text-slate-500 whitespace-nowrap min-w-[860px]">
-            <div className="flex items-center gap-3 w-[220px] shrink-0">
-              <div className="flex flex-col">
-                <span className={`text-sm font-bold ${resultColor}`}>{resultLabel}</span>
-                <span className="text-[11px] font-semibold text-slate-400">{queueLabel}</span>
-              </div>
-              <div className="h-9 w-px bg-slate-200 dark:bg-slate-800" />
-              <div className="flex flex-col">
-                <span className="text-[11px] font-semibold text-slate-400">{when}</span>
-                <span className="text-[11px] font-semibold text-slate-400">{durationLabel}</span>
-              </div>
+          <div className={`flex items-center gap-3 text-xs text-slate-500 ${rowAccent} border-l-4 pl-3 min-w-0`}>
+            <div className="flex flex-col w-[140px] shrink-0">
+              <span className={`text-sm font-bold ${resultColor}`}>{resultLabel}</span>
+              <span className="text-[11px] font-semibold text-slate-400">{queueLabel}</span>
+              <span className="text-[11px] text-slate-400">
+                {when} • {durationLabel}
+              </span>
             </div>
 
-            <div className="flex items-center gap-3 w-[200px] shrink-0">
+            <div className="flex items-center gap-2 w-[160px] shrink-0">
               {champSrc ? (
-                <img
-                  src={champSrc}
-                  alt=""
-                  className="h-10 w-10 rounded-lg border-2 border-slate-200 shadow-sm dark:border-slate-700"
-                />
+                <div className="relative">
+                  <img
+                    src={champSrc}
+                    alt=""
+                    className="h-11 w-11 rounded-lg border-2 border-slate-200 shadow-sm dark:border-slate-700"
+                  />
+                  <span className="absolute -bottom-2 -right-2 rounded-full bg-slate-900 px-1.5 text-[10px] font-bold text-white shadow dark:bg-slate-100 dark:text-slate-900">
+                    {participant?.champLevel ?? '—'}
+                  </span>
+                </div>
               ) : (
-                <div className="h-10 w-10 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                <div className="h-11 w-11 rounded-lg bg-slate-200 dark:bg-slate-800" />
               )}
               <div className="min-w-0">
                 <div className="text-sm font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap truncate">
                   {champion?.name ?? 'Unknown'}
                 </div>
-                <div className="text-[11px] text-slate-400 font-semibold whitespace-nowrap truncate">
-                  Level {participant?.champLevel ?? '—'}
+                <div className={`text-[11px] font-semibold ${kdaColor} whitespace-nowrap`}>
+                  {match.k}/{match.d}/{match.a} • {kdaLabel} KDA
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3 w-[160px] shrink-0">
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                {match.k}/{match.d}/{match.a}
-              </div>
-              <div className={`text-xs whitespace-nowrap ${kdaColor}`}>{kdaLabel} KDA</div>
+            <div className="flex flex-col w-[120px] shrink-0">
+              <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">{match.cs} CS</span>
+              <span className="text-[11px] text-slate-400 font-semibold whitespace-nowrap">{csPerMin}/m</span>
             </div>
 
-            <div className="flex items-center gap-2 w-[120px] shrink-0">
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">{match.cs} CS</div>
-              <div className="text-xs text-slate-400 font-semibold whitespace-nowrap">{csPerMin}/m</div>
-            </div>
-
-            <div className="flex items-center gap-1 w-[90px] shrink-0">
+            <div className="flex items-center gap-1 w-[80px] shrink-0">
               {[spell1, spell2].map((spell, idx) => {
                 const icon = buildSpellIconUrl(ddVersion, spell)
                 return icon ? (
@@ -887,7 +882,7 @@ export default function PlayerMatchHistoryClient({
               })}
             </div>
 
-            <div className="flex items-center gap-1 w-[80px] shrink-0">
+            <div className="flex items-center gap-1 w-[70px] shrink-0">
               {[keystone, secondaryStyle].map((rune, idx) => {
                 const icon = buildRuneIconUrl(rune?.icon)
                 return icon ? (
@@ -903,7 +898,7 @@ export default function PlayerMatchHistoryClient({
               })}
             </div>
 
-            <div className="flex flex-1 items-center justify-end gap-1 overflow-hidden">
+            <div className="flex flex-1 items-center justify-end gap-1 min-w-0">
               {items.length > 0
                 ? items.map((itemId, idx) => {
                     const icon = buildItemIconUrl(ddVersion, itemId)
@@ -924,6 +919,16 @@ export default function PlayerMatchHistoryClient({
                 : Array.from({ length: 7 }).map((_, idx) => (
                     <div key={`${match.matchId}-item-empty-${idx}`} className="h-7 w-7 rounded-md bg-slate-200 dark:bg-slate-800" />
                   ))}
+            </div>
+
+            <div className="ml-2 text-slate-400">
+              <svg className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+                <path
+                  fillRule="evenodd"
+                  d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                  clipRule="evenodd"
+                />
+              </svg>
             </div>
           </div>
         </button>
@@ -1182,7 +1187,7 @@ export default function PlayerMatchHistoryClient({
 
                 <div className="flex-1 overflow-hidden">
                   {activeTab === 'matches' && (
-                    <div className="h-full overflow-y-auto px-6 py-5 space-y-3">
+                    <div className="h-full overflow-y-auto px-6 py-5 space-y-3 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
                       {loadingMatches ? (
                         <MatchDetailSkeleton />
                       ) : matches.length === 0 ? (
