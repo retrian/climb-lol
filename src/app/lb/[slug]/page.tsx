@@ -46,6 +46,8 @@ interface Game {
   queueId?: number
   lpChange?: number | null
   lpNote?: string | null
+  rankTier?: string | null
+  rankDivision?: string | null
   endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
@@ -140,6 +142,18 @@ function formatWinrate(wins?: number | null, losses?: number | null) {
     pct: Math.min(100, Math.max(0, pct)),
     total,
   }
+}
+
+function normalizeNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function getLpDeltaFromRow(row: any) {
+  const rowDelta = normalizeNumber(row.lp_change ?? row.lp_delta ?? row.lp_diff ?? null)
+  const before = normalizeNumber(row.lp_before ?? row.lp_prior ?? null)
+  const after = normalizeNumber(row.lp_after ?? row.lp_current ?? row.lp ?? null)
+  const diff = before !== null && after !== null ? after - before : null
+  return { rowDelta, diff }
 }
 
 function displayRiotId(p: Player) {
@@ -761,7 +775,15 @@ export default async function LeaderboardDetail({
 
   const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
-    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+    const { rowDelta, diff } = getLpDeltaFromRow(row)
+    const eventDelta = normalizeNumber(lpEvent?.delta)
+    let lpChange = rowDelta ?? eventDelta ?? diff ?? null
+    if ((lpChange === null || lpChange === 0) && eventDelta !== null && eventDelta !== 0) {
+      lpChange = eventDelta
+    }
+    if ((lpChange === null || lpChange === 0) && diff !== null && diff !== 0) {
+      lpChange = diff
+    }
     const durationS = row.game_duration_s ?? row.gameDuration
     const endType = computeEndType({
       gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
@@ -784,6 +806,8 @@ export default async function LeaderboardDetail({
       queueId: row.queue_id,
       lpChange,
       lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+      rankTier: row.rank_tier ?? row.tier ?? row.rankTier ?? null,
+      rankDivision: row.rank_division ?? row.rank ?? row.rankDivision ?? null,
       endType,
     }
   })
