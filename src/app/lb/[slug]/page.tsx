@@ -148,12 +148,112 @@ function normalizeNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function normalizeTier(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim().toUpperCase() : null
+}
+
+function normalizeDivision(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim().toUpperCase() : null
+}
+
+const RANK_TIERS = [
+  'IRON',
+  'BRONZE',
+  'SILVER',
+  'GOLD',
+  'PLATINUM',
+  'EMERALD',
+  'DIAMOND',
+  'MASTER',
+  'GRANDMASTER',
+  'CHALLENGER',
+]
+
+const RANK_DIVISIONS = ['IV', 'III', 'II', 'I']
+
+function isApexTier(tier: string) {
+  return ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
+}
+
+function getPromotedRank(tier: string | null, division: string | null) {
+  if (!tier) return { tier: null, division: null }
+  if (isApexTier(tier)) {
+    const idx = RANK_TIERS.indexOf(tier)
+    const nextTier = idx >= 0 && idx < RANK_TIERS.length - 1 ? RANK_TIERS[idx + 1] : tier
+    return { tier: nextTier, division: null }
+  }
+  if (!division) return { tier, division: null }
+  const divIdx = RANK_DIVISIONS.indexOf(division)
+  if (divIdx > 0) {
+    return { tier, division: RANK_DIVISIONS[divIdx - 1] }
+  }
+  const tierIdx = RANK_TIERS.indexOf(tier)
+  const nextTier = tierIdx >= 0 && tierIdx < RANK_TIERS.length - 1 ? RANK_TIERS[tierIdx + 1] : tier
+  if (nextTier && isApexTier(nextTier)) return { tier: nextTier, division: null }
+  return { tier: nextTier, division: RANK_DIVISIONS[0] ?? null }
+}
+
+function getDemotedRank(tier: string | null, division: string | null) {
+  if (!tier) return { tier: null, division: null }
+  if (isApexTier(tier)) {
+    const idx = RANK_TIERS.indexOf(tier)
+    const prevTier = idx > 0 ? RANK_TIERS[idx - 1] : tier
+    if (prevTier && isApexTier(prevTier)) return { tier: prevTier, division: null }
+    return { tier: prevTier, division: 'I' }
+  }
+  if (!division) return { tier, division: null }
+  const divIdx = RANK_DIVISIONS.indexOf(division)
+  if (divIdx >= 0 && divIdx < RANK_DIVISIONS.length - 1) {
+    return { tier, division: RANK_DIVISIONS[divIdx + 1] }
+  }
+  const tierIdx = RANK_TIERS.indexOf(tier)
+  const prevTier = tierIdx > 0 ? RANK_TIERS[tierIdx - 1] : tier
+  return { tier: prevTier, division: RANK_DIVISIONS[RANK_DIVISIONS.length - 1] ?? null }
+}
+
 function getLpDeltaFromRow(row: any) {
   const rowDelta = normalizeNumber(row.lp_change ?? row.lp_delta ?? row.lp_diff ?? null)
   const before = normalizeNumber(row.lp_before ?? row.lp_prior ?? null)
   const after = normalizeNumber(row.lp_after ?? row.lp_current ?? row.lp ?? null)
   const diff = before !== null && after !== null ? after - before : null
   return { rowDelta, diff }
+}
+
+function resolveMatchRank(row: any, lpNoteRaw: string | null) {
+  const lpNote = lpNoteRaw?.toUpperCase() ?? null
+  const beforeTier = normalizeTier(row.rank_tier ?? row.tier ?? row.rankTier ?? null)
+  const beforeDivision = normalizeDivision(row.rank_division ?? row.rank ?? row.rankDivision ?? null)
+  const afterTier = normalizeTier(
+    row.rank_after_tier ??
+      row.rankTierAfter ??
+      row.tier_after ??
+      row.after_tier ??
+      row.post_tier ??
+      null,
+  )
+  const afterDivision = normalizeDivision(
+    row.rank_after_division ??
+      row.rankDivisionAfter ??
+      row.rank_division_after ??
+      row.tier_division_after ??
+      row.after_division ??
+      row.post_division ??
+      null,
+  )
+
+  if (afterTier) {
+    return { tier: afterTier, division: afterDivision }
+  }
+
+  if (lpNote === 'PROMOTED') {
+    return getPromotedRank(beforeTier, beforeDivision)
+  }
+
+  if (lpNote === 'DEMOTED') {
+    return getDemotedRank(beforeTier, beforeDivision)
+  }
+
+  return { tier: beforeTier, division: beforeDivision }
 }
 
 function displayRiotId(p: Player) {
@@ -785,6 +885,7 @@ export default async function LeaderboardDetail({
       lpChange = diff
     }
     const durationS = row.game_duration_s ?? row.gameDuration
+    const matchRank = resolveMatchRank(row, row.lp_note ?? row.note ?? lpEvent?.note ?? null)
     const endType = computeEndType({
       gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
       gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
@@ -806,8 +907,8 @@ export default async function LeaderboardDetail({
       queueId: row.queue_id,
       lpChange,
       lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
-      rankTier: row.rank_tier ?? row.tier ?? row.rankTier ?? null,
-      rankDivision: row.rank_division ?? row.rank ?? row.rankDivision ?? null,
+      rankTier: matchRank.tier,
+      rankDivision: matchRank.division,
       endType,
     }
   })
