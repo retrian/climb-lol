@@ -219,10 +219,12 @@ function getLpDeltaFromRow(row: any) {
   return { rowDelta, diff }
 }
 
-function resolveMatchRank(row: any, lpNoteRaw: string | null) {
+function resolveMatchRank(row: any, lpNoteRaw: string | null, historyRank?: { tier: string | null; division: string | null } | null) {
   const lpNote = lpNoteRaw?.toUpperCase() ?? null
   const beforeTier = normalizeTier(row.rank_tier ?? row.tier ?? row.rankTier ?? null)
   const beforeDivision = normalizeDivision(row.rank_division ?? row.rank ?? row.rankDivision ?? null)
+  const historyTier = normalizeTier(historyRank?.tier ?? null)
+  const historyDivision = normalizeDivision(historyRank?.division ?? null)
   const afterTier = normalizeTier(
     row.rank_after_tier ??
       row.rankTierAfter ??
@@ -248,6 +250,9 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null) {
     (afterDivision ?? null) === (beforeDivision ?? null)
 
   if (lpNote === 'PROMOTED') {
+    if (historyTier) {
+      return { tier: historyTier, division: historyDivision }
+    }
     if (!hasAfterRank || sameAsBefore) {
       return getPromotedRank(beforeTier, beforeDivision)
     }
@@ -255,6 +260,9 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null) {
   }
 
   if (lpNote === 'DEMOTED') {
+    if (historyTier) {
+      return { tier: historyTier, division: historyDivision }
+    }
     if (!hasAfterRank || sameAsBefore) {
       return getDemotedRank(beforeTier, beforeDivision)
     }
@@ -263,6 +271,10 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null) {
 
   if (hasAfterRank) {
     return { tier: afterTier, division: afterDivision }
+  }
+
+  if (historyTier) {
+    return { tier: historyTier, division: historyDivision }
   }
 
   return { tier: beforeTier, division: beforeDivision }
@@ -885,6 +897,41 @@ export default async function LeaderboardDetail({
     }
   }
 
+  const matchRankHistory = new Map<string, Array<{ fetchedAt: number; tier: string | null; division: string | null }>>()
+  const gameEndTimestamps = filteredLatestRaw
+    .map((row: any) => (typeof row.game_end_ts === 'number' ? row.game_end_ts : null))
+    .filter((ts): ts is number => ts !== null)
+
+  if (allRelevantPuuids.length > 0 && gameEndTimestamps.length > 0) {
+    const minGameEnd = new Date(Math.min(...gameEndTimestamps)).toISOString()
+    const maxGameEnd = new Date(Math.max(...gameEndTimestamps)).toISOString()
+    const { data: historyRaw } = await supabase
+      .from('player_lp_history')
+      .select('puuid, tier, rank, fetched_at')
+      .in('puuid', allRelevantPuuids)
+      .gte('fetched_at', minGameEnd)
+      .lte('fetched_at', maxGameEnd)
+
+    if (historyRaw) {
+      for (const row of historyRaw) {
+        if (!row.puuid || !row.fetched_at) continue
+        const fetchedAtMs = new Date(row.fetched_at).getTime()
+        const entry = matchRankHistory.get(row.puuid) ?? []
+        entry.push({
+          fetchedAt: fetchedAtMs,
+          tier: row.tier ?? null,
+          division: row.rank ?? null,
+        })
+        matchRankHistory.set(row.puuid, entry)
+      }
+    }
+  }
+
+  for (const [puuid, entries] of matchRankHistory.entries()) {
+    entries.sort((a, b) => a.fetchedAt - b.fetchedAt)
+    matchRankHistory.set(puuid, entries)
+  }
+
   const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
     const { rowDelta, diff } = getLpDeltaFromRow(row)
@@ -897,7 +944,25 @@ export default async function LeaderboardDetail({
       lpChange = diff
     }
     const durationS = row.game_duration_s ?? row.gameDuration
-    const matchRank = resolveMatchRank(row, row.lp_note ?? row.note ?? lpEvent?.note ?? null)
+    const historyEntries = row.puuid ? matchRankHistory.get(row.puuid) ?? [] : []
+    const gameEndTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
+    let historyRank: { tier: string | null; division: string | null } | null = null
+    if (gameEndTs && historyEntries.length > 0) {
+      const afterEntry = historyEntries.find((entry) => entry.fetchedAt >= gameEndTs)
+      let beforeEntry: (typeof historyEntries)[number] | null = null
+      for (let i = historyEntries.length - 1; i >= 0; i -= 1) {
+        const entry = historyEntries[i]
+        if (entry.fetchedAt <= gameEndTs) {
+          beforeEntry = entry
+          break
+        }
+      }
+      const selected = afterEntry ?? beforeEntry ?? null
+      if (selected) {
+        historyRank = { tier: selected.tier, division: selected.division }
+      }
+    }
+    const matchRank = resolveMatchRank(row, row.lp_note ?? row.note ?? lpEvent?.note ?? null, historyRank)
     const endType = computeEndType({
       gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
       gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
