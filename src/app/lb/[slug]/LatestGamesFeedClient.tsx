@@ -26,6 +26,8 @@ interface Game {
   durationS?: number
   lpChange?: number | null
   lpNote?: string | null
+  rankTier?: string | null
+  rankDivision?: string | null
   endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
@@ -166,8 +168,10 @@ export default function LatestGamesFeedClient({
           const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
           const lpNote = g.lpNote?.toUpperCase() ?? null
           const rankData = rankByPuuid[g.puuid]
-          const rankIcon = getRankIconSrc(rankData?.tier)
-          const rankLabel = formatTierShort(rankData?.tier, rankData?.rank)
+          const displayTier = g.rankTier ?? rankData?.tier
+          const displayDivision = g.rankDivision ?? rankData?.rank
+          const rankIcon = getRankIconSrc(displayTier)
+          const rankLabel = formatTierShort(displayTier, displayDivision)
           const isRemake = g.endType === 'REMAKE'
           const lpTitle =
             lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'

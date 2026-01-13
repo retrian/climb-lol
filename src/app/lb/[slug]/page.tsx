@@ -46,6 +46,8 @@ interface Game {
   queueId?: number
   lpChange?: number | null
   lpNote?: string | null
+  rankTier?: string | null
+  rankDivision?: string | null
   endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
@@ -140,6 +142,147 @@ function formatWinrate(wins?: number | null, losses?: number | null) {
     pct: Math.min(100, Math.max(0, pct)),
     total,
   }
+}
+
+function normalizeNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function normalizeTier(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim().toUpperCase() : null
+}
+
+function normalizeDivision(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim().toUpperCase() : null
+}
+
+const RANK_TIERS = [
+  'IRON',
+  'BRONZE',
+  'SILVER',
+  'GOLD',
+  'PLATINUM',
+  'EMERALD',
+  'DIAMOND',
+  'MASTER',
+  'GRANDMASTER',
+  'CHALLENGER',
+]
+
+const RANK_DIVISIONS = ['IV', 'III', 'II', 'I']
+
+function isApexTier(tier: string) {
+  return ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
+}
+
+function getPromotedRank(tier: string | null, division: string | null) {
+  if (!tier) return { tier: null, division: null }
+  if (isApexTier(tier)) {
+    const idx = RANK_TIERS.indexOf(tier)
+    const nextTier = idx >= 0 && idx < RANK_TIERS.length - 1 ? RANK_TIERS[idx + 1] : tier
+    return { tier: nextTier, division: null }
+  }
+  if (!division) return { tier, division: null }
+  const divIdx = RANK_DIVISIONS.indexOf(division)
+  if (divIdx > 0) {
+    return { tier, division: RANK_DIVISIONS[divIdx - 1] }
+  }
+  const tierIdx = RANK_TIERS.indexOf(tier)
+  const nextTier = tierIdx >= 0 && tierIdx < RANK_TIERS.length - 1 ? RANK_TIERS[tierIdx + 1] : tier
+  if (nextTier && isApexTier(nextTier)) return { tier: nextTier, division: null }
+  return { tier: nextTier, division: RANK_DIVISIONS[0] ?? null }
+}
+
+function getDemotedRank(tier: string | null, division: string | null) {
+  if (!tier) return { tier: null, division: null }
+  if (isApexTier(tier)) {
+    const idx = RANK_TIERS.indexOf(tier)
+    const prevTier = idx > 0 ? RANK_TIERS[idx - 1] : tier
+    if (prevTier && isApexTier(prevTier)) return { tier: prevTier, division: null }
+    return { tier: prevTier, division: 'I' }
+  }
+  if (!division) return { tier, division: null }
+  const divIdx = RANK_DIVISIONS.indexOf(division)
+  if (divIdx >= 0 && divIdx < RANK_DIVISIONS.length - 1) {
+    return { tier, division: RANK_DIVISIONS[divIdx + 1] }
+  }
+  const tierIdx = RANK_TIERS.indexOf(tier)
+  const prevTier = tierIdx > 0 ? RANK_TIERS[tierIdx - 1] : tier
+  return { tier: prevTier, division: RANK_DIVISIONS[RANK_DIVISIONS.length - 1] ?? null }
+}
+
+function getLpDeltaFromRow(row: any) {
+  const rowDelta = normalizeNumber(row.lp_change ?? row.lp_delta ?? row.lp_diff ?? null)
+  const before = normalizeNumber(row.lp_before ?? row.lp_prior ?? null)
+  const after = normalizeNumber(row.lp_after ?? row.lp_current ?? row.lp ?? null)
+  const diff = before !== null && after !== null ? after - before : null
+  return { rowDelta, diff }
+}
+
+function resolveMatchRank(
+  row: any,
+  lpNoteRaw: string | null,
+  historyRank?: { tier: string | null; division: string | null; isAfter: boolean } | null,
+) {
+  const lpNote = lpNoteRaw?.toUpperCase() ?? null
+  const beforeTier = normalizeTier(row.rank_tier ?? row.tier ?? row.rankTier ?? null)
+  const beforeDivision = normalizeDivision(row.rank_division ?? row.rank ?? row.rankDivision ?? null)
+  const historyTier = normalizeTier(historyRank?.tier ?? null)
+  const historyDivision = normalizeDivision(historyRank?.division ?? null)
+  const historyIsAfter = historyRank?.isAfter ?? false
+  const afterTier = normalizeTier(
+    row.rank_after_tier ??
+      row.rankTierAfter ??
+      row.tier_after ??
+      row.after_tier ??
+      row.post_tier ??
+      null,
+  )
+  const afterDivision = normalizeDivision(
+    row.rank_after_division ??
+      row.rankDivisionAfter ??
+      row.rank_division_after ??
+      row.tier_division_after ??
+      row.after_division ??
+      row.post_division ??
+      null,
+  )
+
+  const hasAfterRank = Boolean(afterTier)
+  const sameAsBefore =
+    hasAfterRank &&
+    afterTier === beforeTier &&
+    (afterDivision ?? null) === (beforeDivision ?? null)
+
+  if (lpNote === 'PROMOTED') {
+    if (historyTier && historyIsAfter) {
+      return { tier: historyTier, division: historyDivision }
+    }
+    if (!hasAfterRank || sameAsBefore) {
+      return getPromotedRank(beforeTier, beforeDivision)
+    }
+    return { tier: afterTier, division: afterDivision }
+  }
+
+  if (lpNote === 'DEMOTED') {
+    if (historyTier && historyIsAfter) {
+      return { tier: historyTier, division: historyDivision }
+    }
+    if (!hasAfterRank || sameAsBefore) {
+      return getDemotedRank(beforeTier, beforeDivision)
+    }
+    return { tier: afterTier, division: afterDivision }
+  }
+
+  if (hasAfterRank) {
+    return { tier: afterTier, division: afterDivision }
+  }
+
+  if (historyTier && historyIsAfter) {
+    return { tier: historyTier, division: historyDivision }
+  }
+
+  return { tier: beforeTier, division: beforeDivision }
 }
 
 function displayRiotId(p: Player) {
@@ -759,10 +902,73 @@ export default async function LeaderboardDetail({
     }
   }
 
+  const matchRankHistory = new Map<string, Array<{ fetchedAt: number; tier: string | null; division: string | null }>>()
+  const gameEndTimestamps = filteredLatestRaw
+    .map((row: any) => (typeof row.game_end_ts === 'number' ? row.game_end_ts : null))
+    .filter((ts: number | null): ts is number => ts !== null)
+
+  if (allRelevantPuuids.length > 0 && gameEndTimestamps.length > 0) {
+    const minGameEnd = new Date(Math.min(...gameEndTimestamps)).toISOString()
+    const maxGameEnd = new Date(Math.max(...gameEndTimestamps)).toISOString()
+    const { data: historyRaw } = await supabase
+      .from('player_lp_history')
+      .select('puuid, tier, rank, fetched_at')
+      .in('puuid', allRelevantPuuids)
+      .gte('fetched_at', minGameEnd)
+      .lte('fetched_at', maxGameEnd)
+
+    if (historyRaw) {
+      for (const row of historyRaw) {
+        if (!row.puuid || !row.fetched_at) continue
+        const fetchedAtMs = new Date(row.fetched_at).getTime()
+        const entry = matchRankHistory.get(row.puuid) ?? []
+        entry.push({
+          fetchedAt: fetchedAtMs,
+          tier: row.tier ?? null,
+          division: row.rank ?? null,
+        })
+        matchRankHistory.set(row.puuid, entry)
+      }
+    }
+  }
+
+  for (const [puuid, entries] of matchRankHistory.entries()) {
+    entries.sort((a, b) => a.fetchedAt - b.fetchedAt)
+    matchRankHistory.set(puuid, entries)
+  }
+
   const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(`${row.match_id}-${row.puuid}`)
-    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+    const { rowDelta, diff } = getLpDeltaFromRow(row)
+    const eventDelta = normalizeNumber(lpEvent?.delta)
+    let lpChange = rowDelta ?? eventDelta ?? diff ?? null
+    if ((lpChange === null || lpChange === 0) && eventDelta !== null && eventDelta !== 0) {
+      lpChange = eventDelta
+    }
+    if ((lpChange === null || lpChange === 0) && diff !== null && diff !== 0) {
+      lpChange = diff
+    }
     const durationS = row.game_duration_s ?? row.gameDuration
+    const historyEntries = row.puuid ? matchRankHistory.get(row.puuid) ?? [] : []
+    const gameEndTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
+    let historyRank: { tier: string | null; division: string | null; isAfter: boolean } | null = null
+    if (gameEndTs && historyEntries.length > 0) {
+      const afterEntry = historyEntries.find((entry) => entry.fetchedAt >= gameEndTs)
+      let beforeEntry: (typeof historyEntries)[number] | null = null
+      for (let i = historyEntries.length - 1; i >= 0; i -= 1) {
+        const entry = historyEntries[i]
+        if (entry.fetchedAt <= gameEndTs) {
+          beforeEntry = entry
+          break
+        }
+      }
+      if (afterEntry) {
+        historyRank = { tier: afterEntry.tier, division: afterEntry.division, isAfter: true }
+      } else if (beforeEntry) {
+        historyRank = { tier: beforeEntry.tier, division: beforeEntry.division, isAfter: false }
+      }
+    }
+    const matchRank = resolveMatchRank(row, row.lp_note ?? row.note ?? lpEvent?.note ?? null, historyRank)
     const endType = computeEndType({
       gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
       gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
@@ -784,6 +990,8 @@ export default async function LeaderboardDetail({
       queueId: row.queue_id,
       lpChange,
       lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+      rankTier: matchRank.tier,
+      rankDivision: matchRank.division,
       endType,
     }
   })
