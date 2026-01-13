@@ -900,7 +900,7 @@ export default async function LeaderboardDetail({
   const matchRankHistory = new Map<string, Array<{ fetchedAt: number; tier: string | null; division: string | null }>>()
   const gameEndTimestamps = filteredLatestRaw
     .map((row: any) => (typeof row.game_end_ts === 'number' ? row.game_end_ts : null))
-    .filter((ts): ts is number => ts !== null)
+    .filter((ts: number | null): ts is number => ts !== null)
 
   if (allRelevantPuuids.length > 0 && gameEndTimestamps.length > 0) {
     const minGameEnd = new Date(Math.min(...gameEndTimestamps)).toISOString()
