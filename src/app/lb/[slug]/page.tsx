@@ -219,12 +219,17 @@ function getLpDeltaFromRow(row: any) {
   return { rowDelta, diff }
 }
 
-function resolveMatchRank(row: any, lpNoteRaw: string | null, historyRank?: { tier: string | null; division: string | null } | null) {
+function resolveMatchRank(
+  row: any,
+  lpNoteRaw: string | null,
+  historyRank?: { tier: string | null; division: string | null; isAfter: boolean } | null,
+) {
   const lpNote = lpNoteRaw?.toUpperCase() ?? null
   const beforeTier = normalizeTier(row.rank_tier ?? row.tier ?? row.rankTier ?? null)
   const beforeDivision = normalizeDivision(row.rank_division ?? row.rank ?? row.rankDivision ?? null)
   const historyTier = normalizeTier(historyRank?.tier ?? null)
   const historyDivision = normalizeDivision(historyRank?.division ?? null)
+  const historyIsAfter = historyRank?.isAfter ?? false
   const afterTier = normalizeTier(
     row.rank_after_tier ??
       row.rankTierAfter ??
@@ -250,7 +255,7 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null, historyRank?: { ti
     (afterDivision ?? null) === (beforeDivision ?? null)
 
   if (lpNote === 'PROMOTED') {
-    if (historyTier) {
+    if (historyTier && historyIsAfter) {
       return { tier: historyTier, division: historyDivision }
     }
     if (!hasAfterRank || sameAsBefore) {
@@ -260,7 +265,7 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null, historyRank?: { ti
   }
 
   if (lpNote === 'DEMOTED') {
-    if (historyTier) {
+    if (historyTier && historyIsAfter) {
       return { tier: historyTier, division: historyDivision }
     }
     if (!hasAfterRank || sameAsBefore) {
@@ -273,7 +278,7 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null, historyRank?: { ti
     return { tier: afterTier, division: afterDivision }
   }
 
-  if (historyTier) {
+  if (historyTier && historyIsAfter) {
     return { tier: historyTier, division: historyDivision }
   }
 
@@ -946,7 +951,7 @@ export default async function LeaderboardDetail({
     const durationS = row.game_duration_s ?? row.gameDuration
     const historyEntries = row.puuid ? matchRankHistory.get(row.puuid) ?? [] : []
     const gameEndTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
-    let historyRank: { tier: string | null; division: string | null } | null = null
+    let historyRank: { tier: string | null; division: string | null; isAfter: boolean } | null = null
     if (gameEndTs && historyEntries.length > 0) {
       const afterEntry = historyEntries.find((entry) => entry.fetchedAt >= gameEndTs)
       let beforeEntry: (typeof historyEntries)[number] | null = null
@@ -957,9 +962,10 @@ export default async function LeaderboardDetail({
           break
         }
       }
-      const selected = afterEntry ?? beforeEntry ?? null
-      if (selected) {
-        historyRank = { tier: selected.tier, division: selected.division }
+      if (afterEntry) {
+        historyRank = { tier: afterEntry.tier, division: afterEntry.division, isAfter: true }
+      } else if (beforeEntry) {
+        historyRank = { tier: beforeEntry.tier, division: beforeEntry.division, isAfter: false }
       }
     }
     const matchRank = resolveMatchRank(row, row.lp_note ?? row.note ?? lpEvent?.note ?? null, historyRank)
