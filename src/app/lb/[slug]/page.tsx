@@ -241,16 +241,28 @@ function resolveMatchRank(row: any, lpNoteRaw: string | null) {
       null,
   )
 
-  if (afterTier) {
+  const hasAfterRank = Boolean(afterTier)
+  const sameAsBefore =
+    hasAfterRank &&
+    afterTier === beforeTier &&
+    (afterDivision ?? null) === (beforeDivision ?? null)
+
+  if (lpNote === 'PROMOTED') {
+    if (!hasAfterRank || sameAsBefore) {
+      return getPromotedRank(beforeTier, beforeDivision)
+    }
     return { tier: afterTier, division: afterDivision }
   }
 
-  if (lpNote === 'PROMOTED') {
-    return getPromotedRank(beforeTier, beforeDivision)
+  if (lpNote === 'DEMOTED') {
+    if (!hasAfterRank || sameAsBefore) {
+      return getDemotedRank(beforeTier, beforeDivision)
+    }
+    return { tier: afterTier, division: afterDivision }
   }
 
-  if (lpNote === 'DEMOTED') {
-    return getDemotedRank(beforeTier, beforeDivision)
+  if (hasAfterRank) {
+    return { tier: afterTier, division: afterDivision }
   }
 
   return { tier: beforeTier, division: beforeDivision }
