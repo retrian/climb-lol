@@ -8,6 +8,8 @@ import FitText from './FitText'
 import Link from 'next/link'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
+import type { Metadata } from 'next'
+import { headers } from 'next/headers'
 
 // --- Types ---
 
@@ -173,6 +175,117 @@ const RANK_DIVISIONS = ['IV', 'III', 'II', 'I']
 
 function isApexTier(tier: string) {
   return ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
+}
+
+function getBaseUrl() {
+  const headerList = headers()
+  const host = headerList.get('host')
+  if (!host) return 'https://cwf.lol'
+  const proto = headerList.get('x-forwarded-proto') ?? 'https'
+  return `${proto}://${host}`
+}
+
+function buildLeaderboardDescription(description?: string | null) {
+  const trimmed = description?.trim()
+  return trimmed && trimmed.length > 0
+    ? trimmed
+    : 'Custom League of Legends leaderboard with live rank updates.'
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}): Promise<Metadata> {
+  const { slug } = await params
+  const supabase = await createClient()
+
+  const { data: lb } = await supabase
+    .from('leaderboards')
+    .select('id, user_id, name, description, visibility, banner_url, updated_at')
+    .eq('slug', slug)
+    .maybeSingle()
+
+  if (!lb) {
+    return {
+      title: 'Leaderboard not found | CWF.LOL',
+      robots: { index: false, follow: false },
+    }
+  }
+
+  if ((lb.visibility as Visibility) === 'PRIVATE') {
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user || user.id !== lb.user_id) {
+      return {
+        title: 'Leaderboard not found | CWF.LOL',
+        robots: { index: false, follow: false },
+      }
+    }
+  }
+
+  const { data: playersRaw } = await supabase
+    .from('leaderboard_players')
+    .select('puuid')
+    .eq('leaderboard_id', lb.id)
+    .limit(50)
+
+  const puuids = (playersRaw ?? []).map((row) => row.puuid).filter(Boolean)
+  let lastSyncIso: string | null = null
+
+  if (puuids.length > 0) {
+    const { data: statesRaw } = await supabase
+      .from('player_riot_state')
+      .select('last_rank_sync_at')
+      .in('puuid', puuids)
+
+    if (statesRaw) {
+      let maxTs = 0
+      for (const state of statesRaw) {
+        if (!state.last_rank_sync_at) continue
+        const ts = new Date(state.last_rank_sync_at).getTime()
+        if (ts > maxTs) {
+          maxTs = ts
+          lastSyncIso = state.last_rank_sync_at
+        }
+      }
+    }
+  }
+
+  const baseUrl = getBaseUrl()
+  const updatedAt = lb.updated_at ? new Date(lb.updated_at).getTime() : 0
+  const lastSyncAt = lastSyncIso ? new Date(lastSyncIso).getTime() : 0
+  const version = Math.max(updatedAt, lastSyncAt)
+  const versionSuffix = version ? `?v=${version}` : ''
+  const ogImageUrl = `${baseUrl}/api/og/leaderboard/${encodeURIComponent(slug)}${versionSuffix}`
+  const title = lb.name ? `${lb.name} | CWF.LOL` : 'Leaderboard | CWF.LOL'
+  const description = buildLeaderboardDescription(lb.description)
+  const url = `${baseUrl}/lb/${encodeURIComponent(slug)}`
+
+  return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      type: 'website',
+      url,
+      images: [
+        {
+          url: ogImageUrl,
+          width: 1200,
+          height: 630,
+          alt: `${lb.name ?? 'Leaderboard'} preview`,
+        },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description,
+      images: [ogImageUrl],
+    },
+  }
 }
 
 function getPromotedRank(tier: string | null, division: string | null) {
