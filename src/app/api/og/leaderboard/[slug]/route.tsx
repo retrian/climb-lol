@@ -1,7 +1,7 @@
 import { ImageResponse } from 'next/og'
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 
-export const runtime = 'edge'
+export const runtime = 'nodejs'
 
 const SIZE = {
   width: 1200,
@@ -21,7 +21,7 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params
-  const supabase = await createClient()
+  const supabase = createServiceClient()
 
   const { data: lb } = await supabase
     .from('leaderboards')
