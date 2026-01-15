@@ -7,6 +7,10 @@ import { timeAgo } from '@/lib/timeAgo'
 import Link from 'next/link'
 import ChampionTable from './ChampionTable'
 
+// --- Configuration ---
+const FALLBACK_SEASON_START = '2026-01-08T20:00:00.000Z'
+
+// --- Types ---
 type Player = {
   id: string
   puuid: string
@@ -42,6 +46,36 @@ type StatTotals = {
   durationS: number
 }
 
+// Types expected by ChampionTable
+type ChampionPlayerRow = {
+  puuid: string
+  name: string
+  iconUrl: string | null
+  games: number
+  wins: number
+  losses: number
+  winrate: string
+  kda: { value: number; label: string }
+  avgCs: number
+}
+
+type ChampionRow = {
+  id: number
+  name: string
+  iconUrl: string | null
+  wins: number
+  losses: number
+  winrate: string
+  winrateValue: number
+  games: number
+  kdaLabel: string
+  kdaValue: number
+  avgCs: number
+  players: ChampionPlayerRow[]
+}
+
+// --- Helpers ---
+
 function displayRiotId(player: Player) {
   const gn = (player.game_name ?? '').trim()
   if (gn) return gn
@@ -60,9 +94,13 @@ function formatWinrate(wins: number, games: number) {
 }
 
 function formatAverageKda(kills: number, assists: number, deaths: number) {
-  const kda = (kills + assists) / Math.max(1, deaths)
+  // Prevent division by zero and handle negative numbers gracefully
+  const safeDeaths = Math.max(1, deaths)
+  const kda = (Math.max(0, kills) + Math.max(0, assists)) / safeDeaths
   return { value: kda, label: kda.toFixed(2) }
 }
+
+// --- Components ---
 
 function TeamHeaderCard({
   name,
@@ -186,14 +224,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   if (!lb) notFound()
 
   if (lb.visibility === 'PRIVATE') {
-    try {
-      // Wrapped in try/catch to prevent 'Refresh Token Already Used' errors crashing the page
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
-      if (!user || user.id !== lb.user_id) notFound()
-    } catch (error) {
-      // If auth fails (token invalid/expired/used), treat as unauthorized
+    // Better auth check: check error or user mismatch explicitly
+    const { data, error } = await supabase.auth.getUser()
+    if (error || !data.user || data.user.id !== lb.user_id) {
       notFound()
     }
   }
@@ -203,7 +236,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .select('id, puuid, game_name, tag_line')
     .eq('leaderboard_id', lb.id)
     .order('sort_order', { ascending: true })
-    .limit(50)
+    .limit(500)
 
   const players = (playersRaw ?? []) as Player[]
   const puuids = players.map((p) => p.puuid)
@@ -223,7 +256,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       label: item.label,
       lp: cutoffsByTier.get(item.key),
       icon: item.icon,
-      // eslint-disable-next-line
     }))
     .filter((item) => item.lp !== undefined) as Array<{ label: string; lp: number; icon: string }>
 
@@ -250,7 +282,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     )
   }
 
-  const seasonStartMs = new Date('2026-01-08T20:00:00.000Z').getTime()
+  const seasonStartMs = new Date(process.env.NEXT_PUBLIC_SEASON_START || FALLBACK_SEASON_START).getTime()
 
   const { data: stateRaw } = await supabase
     .from('player_riot_state')
@@ -266,24 +298,40 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id)))
 
-  const { data: matchesRaw } = matchIds.length
-    ? await supabase
+  // ✅ BATCHED QUERY FIX: Fetch matches in chunks to avoid URL length limits
+  const matchesRaw: MatchRow[] = []
+  const BATCH_SIZE = 500
+  
+  if (matchIds.length > 0) {
+    for (let i = 0; i < matchIds.length; i += BATCH_SIZE) {
+      const batch = matchIds.slice(i, i + BATCH_SIZE)
+      const { data } = await supabase
         .from('matches')
         .select('match_id, game_duration_s, game_end_ts')
-        .in('match_id', matchIds)
-        .gte('game_end_ts', seasonStartMs)
-    : { data: [] as MatchRow[] }
+        .in('match_id', batch)
+      
+      if (data) {
+        matchesRaw.push(...data)
+      }
+    }
+  }
 
+  // Build match Map with CLIENT-SIDE filtering
   const matchById = new Map<string, { durationS: number; endTs: number }>()
-  for (const row of (matchesRaw ?? []) as MatchRow[]) {
+  
+  for (const row of matchesRaw) {
     const endTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
+    
+    // ✅ Filter applied here in JavaScript to be safe against BigInt issues
     if (!endTs || endTs < seasonStartMs) continue
+
     matchById.set(row.match_id, {
       durationS: typeof row.game_duration_s === 'number' ? row.game_duration_s : 0,
       endTs,
     })
   }
 
+  // Type assertion verified by previous query logic
   const participants = (participantsRaw ?? []).filter((row) => matchById.has(row.match_id)) as MatchParticipant[]
 
   const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
@@ -371,7 +419,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     const avgCs = stats.games ? stats.cs / stats.games : 0
     const winrateValue = stats.games ? stats.wins / stats.games : 0
 
-    const playersStats = Array.from(championPlayers.get(championId)?.entries() ?? []).map(([puuid, values]) => {
+    const playersStats: ChampionPlayerRow[] = Array.from(championPlayers.get(championId)?.entries() ?? []).map(([puuid, values]) => {
       const player = playersByPuuid.get(puuid)
       const playerKda = formatAverageKda(values.kills, values.assists, values.deaths)
       const playerAvgCs = values.games ? values.cs / values.games : 0
@@ -412,7 +460,8 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     return b.avgCs - a.avgCs
   })
 
-  const championTableRows = championLeaderboard.map((champ) => ({
+  // Explicit type annotation for championTableRows
+  const championTableRows: ChampionRow[] = championLeaderboard.map((champ) => ({
     id: champ.championId,
     name: champ.championName,
     iconUrl: champ.championKey ? championIconUrl(ddVersion, champ.championKey) : null,
@@ -497,8 +546,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
           secondaryActionHref={`/lb/${slug}/graph`}
           secondaryActionLabel="View graph"
         />
-
-        {/* --- DELETED THE NAV BUTTONS ROW THAT WAS HERE --- */}
 
         {noGames ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
@@ -677,165 +724,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                   )}
                 </div>
               ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-blue-400 to-blue-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Performance Metrics
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Highest Average KDA
-                </div>
-                {topKdaPlayers.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                ) : (
-                  <ol className="mt-2 space-y-1 text-sm">
-                    {topKdaPlayers.map((row, idx) => (
-                      <li key={row.puuid} className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                          <span className="text-slate-400">{idx + 1}.</span>
-                          {row.iconUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={row.iconUrl}
-                              alt=""
-                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                            />
-                          ) : (
-                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                          )}
-                          <span>{row.name}</span>
-                        </span>
-                        <span className={`font-semibold tabular-nums ${getKdaColor(row.kda.value)}`}>
-                          {row.kda.label}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Highest Winrate
-                </div>
-                {topWinratePlayers.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                ) : (
-                  <ol className="mt-2 space-y-1 text-sm">
-                    {topWinratePlayers.map((row, idx) => (
-                      <li key={row.puuid} className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                          <span className="text-slate-400">{idx + 1}.</span>
-                          {row.iconUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={row.iconUrl}
-                              alt=""
-                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                            />
-                          ) : (
-                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                          )}
-                          <span>{row.name}</span>
-                        </span>
-                        <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                          {row.winrate}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Time & Duration Stats
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Longest Single Match
-                </div>
-                {longestMatches.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                ) : (
-                  <ol className="mt-2 space-y-1 text-sm">
-                    {longestMatches.map((row, idx) => (
-                      <li key={row.matchId} className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                          <span className="text-slate-400">{idx + 1}.</span>
-                          {row.playerIconUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={row.playerIconUrl}
-                              alt=""
-                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                            />
-                          ) : (
-                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                          )}
-                          <span>{row.playerName}</span>
-                          {row.endTs ? (
-                            <span className="text-slate-400"> • {timeAgo(row.endTs)}</span>
-                          ) : null}
-                        </span>
-                        <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                          {Math.round(row.durationS / 60)} min
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Total Time Played
-                </div>
-                {topTotalTime.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                ) : (
-                  <ol className="mt-2 space-y-1 text-sm">
-                    {topTotalTime.map((row, idx) => (
-                      <li key={row.puuid} className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                          <span className="text-slate-400">{idx + 1}.</span>
-                          {row.iconUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={row.iconUrl}
-                              alt=""
-                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                            />
-                          ) : (
-                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                          )}
-                          <span>{row.name}</span>
-                        </span>
-                        <span className="font-semibold tabular-nums text-slate-900 dark:text-slate-100">
-                          {formatDaysHours(row.durationS)}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
             </div>
           </div>
         </section>

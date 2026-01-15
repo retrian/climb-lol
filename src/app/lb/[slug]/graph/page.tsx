@@ -3,6 +3,30 @@ import { createClient } from '@/lib/supabase/server'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import Link from 'next/link'
 
+// --- Constants ---
+const FALLBACK_SEASON_START = '2026-01-08T20:00:00.000Z'
+const DEFAULT_GRANDMASTER_CUTOFF = 200
+const DEFAULT_CHALLENGER_CUTOFF = 500
+
+// --- Types ---
+type Player = {
+  id: string
+  puuid: string
+  game_name: string | null
+  tag_line: string | null
+}
+
+type LpHistoryRow = {
+  puuid: string
+  tier: string | null
+  rank: string | null
+  lp: number | null
+  wins: number | null
+  losses: number | null
+  fetched_at: string
+}
+
+// --- Helpers ---
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
   const gn = (player.game_name ?? '').trim()
   if (gn) return gn
@@ -15,11 +39,11 @@ function profileIconUrl(profileIconId?: number | null) {
   return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
 }
 
+// --- Components ---
 function TeamHeaderCard({
   name,
   description,
   visibility,
-  lastUpdated,
   cutoffs,
   bannerUrl,
   actionHref,
@@ -30,7 +54,6 @@ function TeamHeaderCard({
   name: string
   description?: string | null
   visibility: string
-  lastUpdated: string | null
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
   actionHref: string
@@ -61,28 +84,30 @@ function TeamHeaderCard({
               {visibility}
             </span>
             {actionHref && actionLabel && (
-              <Link
-                href={actionHref}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
-                </svg>
-                {actionLabel}
-              </Link>
-            )}
-            {secondaryActionHref && secondaryActionLabel && (
-              <Link
-                href={secondaryActionHref}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16l4-4 4 4" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 8l4 4 4-4" />
-                </svg>
-                {secondaryActionLabel}
-              </Link>
+              <>
+                <Link
+                  href={actionHref}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
+                  </svg>
+                  {actionLabel}
+                </Link>
+                {secondaryActionHref && secondaryActionLabel && (
+                  <Link
+                    href={secondaryActionHref}
+                    className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+                  >
+                    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16l4-4 4 4" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 8l4 4 4-4" />
+                    </svg>
+                    {secondaryActionLabel}
+                  </Link>
+                )}
+              </>
             )}
           </div>
 
@@ -139,9 +164,10 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   if (!lb) notFound()
 
   if (lb.visibility === 'PRIVATE') {
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user || user.id !== lb.user_id) notFound()
+    const { data, error } = await supabase.auth.getUser()
+    if (error || !data.user || data.user.id !== lb.user_id) {
+      notFound()
+    }
   }
 
   const { data: playersRaw } = await supabase
@@ -149,9 +175,9 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .select('id, puuid, game_name, tag_line')
     .eq('leaderboard_id', lb.id)
     .order('sort_order', { ascending: true })
-    .limit(50)
+    .limit(2000)
 
-  const players = playersRaw ?? []
+  const players = (playersRaw ?? []) as Player[]
   const puuids = players.map((p) => p.puuid)
 
   const { data: cutoffsRaw } = await supabase
@@ -170,7 +196,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
       lp: cutoffsByTier.get(item.key),
       icon: item.icon,
     }))
-    .filter((item) => item.lp !== undefined)
+    .filter((item): item is { label: string; lp: number; icon: string } => item.lp !== undefined)
 
   if (puuids.length === 0) {
     return (
@@ -180,7 +206,6 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
             name={lb.name}
             description={lb.description}
             visibility={lb.visibility}
-            lastUpdated={null}
             cutoffs={cutoffsDisplay}
             bannerUrl={lb.banner_url}
             actionHref={`/lb/${slug}`}
@@ -203,7 +228,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = '2026-01-08T20:00:00.000Z'
+  const seasonStartIso = process.env.NEXT_PUBLIC_SEASON_START || FALLBACK_SEASON_START
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')
@@ -219,8 +244,8 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   }))
 
   const cutoffs = {
-    grandmaster: cutoffsByTier.get('GRANDMASTER') ?? 200,
-    challenger: cutoffsByTier.get('CHALLENGER') ?? 500,
+    grandmaster: cutoffsByTier.get('GRANDMASTER') ?? DEFAULT_GRANDMASTER_CUTOFF,
+    challenger: cutoffsByTier.get('CHALLENGER') ?? DEFAULT_CHALLENGER_CUTOFF,
   }
 
   return (
@@ -230,7 +255,6 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           name={lb.name}
           description={lb.description}
           visibility={lb.visibility}
-          lastUpdated={null}
           cutoffs={cutoffsDisplay}
           bannerUrl={lb.banner_url}
           actionHref={`/lb/${slug}`}
@@ -239,7 +263,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           secondaryActionLabel="View stats"
         />
 
-        <LeaderboardGraphClient players={playerSummaries} points={historyRaw ?? []} cutoffs={cutoffs} />
+        <LeaderboardGraphClient players={playerSummaries} points={(historyRaw as LpHistoryRow[]) ?? []} cutoffs={cutoffs} />
       </div>
     </main>
   )

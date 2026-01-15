@@ -14,6 +14,8 @@ interface MatchResponse {
   }
 }
 interface TimelineResponse { info: { frames: Array<{ timestamp: number; events: Array<Record<string, any>> }> } }
+
+// Detailed API Data
 interface RiotParticipant {
   participantId: number; puuid: string; championId: number; champLevel: number
   summonerName: string; riotIdGameName?: string; riotIdTagline?: string
@@ -23,7 +25,21 @@ interface RiotParticipant {
   item0: number; item1: number; item2: number; item3: number; item4: number; item5: number; item6: number
   summoner1Id: number; summoner2Id: number
   perks: { styles: Array<{ style: number; selections: Array<{ perk: number }> }>; statPerks: { defense: number; flex: number; offense: number } }
+  _kp?: number; // Calculated property
 }
+
+// Summary Parent Data
+interface MatchParticipant {
+  matchId: string
+  puuid: string
+  championId: number
+  kills: number
+  deaths: number
+  assists: number
+  cs: number
+  win: boolean
+}
+
 interface RiotTeam { teamId: number; win: boolean; objectives: Record<string, { kills: number }> }
 interface AccountResponse { gameName: string; tagLine: string }
 interface StaticDataState {
@@ -73,6 +89,34 @@ async function resolveDdragonVersion(v: string | undefined, fb: string) {
 }
 const handleImageError = (e: any) => { if (e.currentTarget.src !== FALLBACK_ICON) e.currentTarget.src = FALLBACK_ICON }
 
+// --- Helper: Adapter for Summary Data ---
+// Converts the lightweight "MatchParticipant" into a partial "RiotParticipant" for previewing
+function adaptSummaryToRiot(summary: MatchParticipant, index: number): RiotParticipant {
+  return {
+    participantId: index + 1, // temporary ID
+    puuid: summary.puuid,
+    championId: summary.championId,
+    champLevel: 0, // Unknown in summary
+    summonerName: '', // Will be filled by AccountResponse later
+    riotIdGameName: '', 
+    riotIdTagline: '',
+    kills: summary.kills,
+    deaths: summary.deaths,
+    assists: summary.assists,
+    win: summary.win,
+    teamId: 100, // We calculate this in the useMemo below
+    goldEarned: 0, // Unknown in summary
+    totalDamageDealtToChampions: 0, // Unknown
+    totalDamageTaken: 0, // Unknown
+    visionScore: 0, // Unknown
+    totalMinionsKilled: summary.cs, // Approx (combines both)
+    neutralMinionsKilled: 0,
+    item0: 0, item1: 0, item2: 0, item3: 0, item4: 0, item5: 0, item6: 0,
+    summoner1Id: 0, summoner2Id: 0,
+    perks: { styles: [], statPerks: { defense: 0, flex: 0, offense: 0 } }
+  }
+}
+
 // --- ULTRA-OPTIMIZED Icon with will-change and transform ---
 const Icon = memo(({ src, alt, size = "h-6 w-6", rounded = "rounded", className = "", ring = true }: any) => src 
   ? <img loading="lazy" src={src} alt={alt || ""} title={alt || ""} className={`${size} ${rounded} ${ring ? 'ring-1 ring-slate-200 dark:ring-slate-700' : ''} bg-slate-100 dark:bg-slate-800 object-cover ${className}`} onError={handleImageError} style={{ willChange: 'transform' }} />
@@ -80,19 +124,25 @@ const Icon = memo(({ src, alt, size = "h-6 w-6", rounded = "rounded", className 
 )
 
 // --- VIRTUALIZED Player Row with transform optimization ---
-const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonVersion, spellMap, runeMap, getPlayerName, teamColor, isRtl, maxDmg }: any) => {
+const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonVersion, spellMap, runeMap, getPlayerName, teamColor, isRtl, maxDmg, isPreview }: any) => {
   const cs = p.totalMinionsKilled + p.neutralMinionsKilled
   const s1 = spellMap.get(p.summoner1Id); const s2 = spellMap.get(p.summoner2Id)
   const isFocused = focusedPuuid === p.puuid
-  const csPerMin = (cs / (match.info.gameDuration / 60)).toFixed(1)
+  // Fallback for duration in preview mode (avoid division by zero if duration missing)
+  const duration = match?.info?.gameDuration ?? 1
+  const csPerMin = (cs / (duration / 60)).toFixed(1)
   const dmgDisplay = p.totalDamageDealtToChampions >= 1000 ? (p.totalDamageDealtToChampions/1000).toFixed(1) + 'k' : p.totalDamageDealtToChampions
   
   return (
     <div className={`group relative flex items-center gap-2 rounded-lg border p-1.5 transition-all ${isFocused ? 'bg-amber-50 border-amber-500/30 ring-1 ring-amber-500/20 dark:bg-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm dark:bg-slate-900 dark:border-transparent dark:hover:bg-slate-800 dark:hover:border-slate-700'} ${isRtl ? 'flex-row-reverse text-right' : ''}`} style={{ willChange: 'transform' }}>
+      {/* Champion Icon: Uses champMap which is available instantly from parent */}
       <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[p.championId] ?? champMap[p.championId])!)} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
+      
       <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
         <div className={`truncate text-xs font-medium w-full ${isFocused ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{getPlayerName(p).split('#')[0]}</div>
-        <div className="flex gap-0.5 mt-0.5">
+        
+        {/* Items/Runes/Spells - Dimmed or Skeleton in Preview Mode */}
+        <div className={`flex gap-0.5 mt-0.5 ${isPreview ? 'opacity-30' : ''}`}>
           <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
           <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
           <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
@@ -100,18 +150,28 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
           <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
         </div>
       </div>
+
       <div className={`flex flex-col justify-center w-[3.5rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
         <div className="text-xs font-bold text-slate-900 tabular-nums tracking-tight dark:text-slate-100">{p.kills}/{p.deaths}/{p.assists}</div>
-        <div className="text-[10px] text-slate-500 tabular-nums">KP {p._kp}%</div>
+        <div className="text-[10px] text-slate-500 tabular-nums">{!isPreview && `KP ${p._kp}%`}</div>
       </div>
+
+      {/* Damage Graph - Only visible when full data loaded */}
       <div className="flex flex-col justify-center w-[4.5rem] shrink-0">
-        <div className={`flex text-[9px] font-medium text-slate-500 mb-0.5 ${isRtl ? 'justify-start' : 'justify-end'}`}><span>{dmgDisplay}</span></div>
-        <div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 relative"><div className={`h-1 rounded-full absolute top-0 ${teamColor} ${isRtl ? 'right-0' : 'left-0'}`} style={{ width: `${(p.totalDamageDealtToChampions / maxDmg) * 100}%`, willChange: 'width' }} /></div>
+        {!isPreview ? (
+          <>
+            <div className={`flex text-[9px] font-medium text-slate-500 mb-0.5 ${isRtl ? 'justify-start' : 'justify-end'}`}><span>{dmgDisplay}</span></div>
+            <div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 relative"><div className={`h-1 rounded-full absolute top-0 ${teamColor} ${isRtl ? 'right-0' : 'left-0'}`} style={{ width: `${(p.totalDamageDealtToChampions / maxDmg) * 100}%`, willChange: 'width' }} /></div>
+          </>
+        ) : <div className="h-1 w-12 rounded-full bg-slate-100 dark:bg-slate-800 mx-auto" />}
       </div>
+
       <div className={`flex flex-col justify-center w-[3rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
         <div className="text-xs font-medium text-slate-600 tabular-nums dark:text-slate-300">{cs}</div>
-        <div className="text-[10px] text-slate-400 tabular-nums dark:text-slate-500">{csPerMin}/m</div>
+        <div className="text-[10px] text-slate-400 tabular-nums dark:text-slate-500">{!isPreview && `${csPerMin}/m`}</div>
       </div>
+
+      {/* Items - Blank placeholders in Preview Mode */}
       <div className={`flex gap-0.5 w-[9.5rem] shrink-0 ${isRtl ? 'justify-start' : 'justify-end'}`}>
         {[0,1,2,3,4,5].map(i => {
           const id = (p as any)[`item${i}`]; 
@@ -120,11 +180,11 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
       </div>
     </div>
   )
-}, (prev, next) => prev.p.puuid === next.p.puuid && prev.focusedPuuid === next.focusedPuuid && prev.ddragonVersion === next.ddragonVersion)
+}, (prev, next) => prev.p.puuid === next.p.puuid && prev.focusedPuuid === next.focusedPuuid && prev.ddragonVersion === next.ddragonVersion && prev.isPreview === next.isPreview)
 
 // --- Main Component ---
-export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose }: {
-  open: boolean; matchId: string | null; focusedPuuid: string | null; champMap: any; ddVersion: string; onClose: () => void
+export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose, participants }: {
+  open: boolean; matchId: string | null; focusedPuuid: string | null; champMap: any; ddVersion: string; onClose: () => void; participants: MatchParticipant[]
 }) {
   const [mounted, setMounted] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'analysis' | 'build'>('overview')
@@ -150,7 +210,9 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
 
   useEffect(() => {
     if (!open || !matchId) return
+    // Reset state but keep participants prop data active
     setActiveTab('overview'); setMatch(null); setTimeline(null); setAccounts({}); setError(null); setLoading(true); setDdragonVersion(ddVersion)
+    
     fetch(`/api/riot/match/${matchId}`)
       .then(r => r.ok ? r.json() : Promise.reject())
       .then(d => setMatch(d.match))
@@ -164,9 +226,13 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [open, match, ddVersion])
 
   useEffect(() => {
-    if (!open || !match) return
-    const patch = ddragonVersion
+    // If no match loaded yet, we can't really load specific version assets easily, 
+    // but we can default to ddVersion (latest) for the preview icons
+    const patch = match ? ddragonVersion : ddVersion
     if (STATIC_CACHE.has(patch)) { setStaticData(STATIC_CACHE.get(patch)!); return }
+    
+    // Only fetch static data if we have a match OR if we are just opening it (using default version)
+    // We want this to run for preview too so champ icons map correctly
     Promise.all([
       fetch(buildStaticUrl(patch, 'data/en_US/item.json')),
       fetch(buildStaticUrl(patch, 'data/en_US/summoner.json')),
@@ -177,7 +243,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
         const d = { items: (await i.json()).data, spells: (await s.json()).data, runes: await r.json(), champions: buildChampionMap((await c.json()).data) }
         STATIC_CACHE.set(patch, d); setStaticData(d)
     }).catch(() => setStaticData(EMPTY_STATIC))
-  }, [open, match, ddragonVersion])
+  }, [open, match, ddragonVersion, ddVersion])
 
   useEffect(() => {
     if (!open || !match) return
@@ -201,13 +267,39 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     return m
   }, [staticData.runes])
 
-  const focusedParticipant = useMemo(() => match?.info.participants.find(p => p.puuid === focusedPuuid), [match, focusedPuuid])
+  // --- CORE LOGIC CHANGE: Determine Data Source ---
+  // Use API match data if available, otherwise fallback to participants prop (mapped)
+  const isPreview = !match;
+  
+  const displayParticipants: RiotParticipant[] = useMemo(() => {
+    if (match) return match.info.participants;
+    
+    // Fallback: Map the summary participants to RiotParticipant shape
+    return participants.map((p, i) => {
+      // Calculate Team ID based on mapped index (usually 0-4 is Blue/100, 5-9 is Red/200)
+      // Or use the 'win' property to group them if we sort them, but usually standard ordering applies.
+      // Better strategy: The parent `LatestGamesFeed` usually doesn't sort by team, it's just a list.
+      // However, for the Modal, we need to split by team.
+      // Strategy: Group winners vs losers. 
+      const mapped = adaptSummaryToRiot(p, i);
+      // We can't know for sure which team is 100/200 without API, but we can group by win/loss.
+      // Let's assume Winners = Blue (visual preference) or just group them.
+      // ACTUALLY: The safest bet for Preview is just to assign teamId based on win status
+      // so they appear on different sides of the modal.
+      mapped.teamId = p.win ? 100 : 200; 
+      return mapped;
+    });
+  }, [match, participants]);
+
+  const focusedParticipant = useMemo(() => displayParticipants.find(p => p.puuid === focusedPuuid), [displayParticipants, focusedPuuid])
   
   const { teams, teamTotals } = useMemo(() => {
-    if (!match) return { teams: { blue: [], red: [] }, teamTotals: { blue: { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 }, red: { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 } } }
+    // If we have neither match nor participants, return empty
+    if (!match && participants.length === 0) return { teams: { blue: [], red: [] }, teamTotals: { blue: { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 }, red: { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 } } }
     
-    const blue = match.info.participants.filter(p => p.teamId === 100)
-    const red = match.info.participants.filter(p => p.teamId === 200)
+    // Filter based on the displayParticipants we calculated above
+    const blue = displayParticipants.filter(p => p.teamId === 100)
+    const red = displayParticipants.filter(p => p.teamId === 200)
     
     const calc = (list: RiotParticipant[]) => {
       const totals = list.reduce((a, p) => ({
@@ -224,7 +316,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       teams: { blue, red },
       teamTotals: { blue: calc(blue), red: calc(red) }
     }
-  }, [match])
+  }, [match, participants, displayParticipants])
 
   const focusedRunes = useMemo(() => {
     if (!focusedParticipant) return { k: null, p: null, s: null, prim: [], sec: [] }
@@ -249,15 +341,17 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
 
   const getPlayerName = useCallback((p: RiotParticipant) => {
     const acc = accounts[p.puuid]; 
-    return acc ? `${acc.gameName} #${acc.tagLine}` : p.riotIdGameName ? `${p.riotIdGameName} #${p.riotIdTagline}` : p.summonerName
+    return acc ? `${acc.gameName} #${acc.tagLine}` : p.riotIdGameName ? `${p.riotIdGameName} #${p.riotIdTagline}` : p.summonerName || 'Unknown'
   }, [accounts])
 
-  // OPTIMIZATION: Use requestAnimationFrame for smooth tab transitions
   const handleTabChange = useCallback((tab: 'overview' | 'analysis' | 'build') => {
     requestAnimationFrame(() => setActiveTab(tab))
   }, [])
 
   if (!open || !mounted) return null
+
+  // If we have absolutely no data (no match API, no summary prop), show nothing or basic loading
+  if (!match && participants.length === 0 && loading) return null;
 
   const isWin = focusedParticipant?.win ?? true;
 
@@ -266,13 +360,26 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       <div ref={containerRef} className="flex h-auto max-h-[90vh] w-full max-w-6xl flex-col rounded-2xl border border-slate-200 bg-white text-slate-900 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100" onClick={e => e.stopPropagation()} style={{ willChange: 'transform' }}>
         <header className={`sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-4 backdrop-blur flex justify-between items-center dark:border-slate-800 dark:bg-slate-950/95 ${isWin ? 'shadow-[0_1px_15px_-5px_rgba(34,197,94,0.1)]' : 'shadow-[0_1px_15px_-5px_rgba(239,68,68,0.1)]'}`}>
           <div className="flex flex-col gap-0.5">
-            <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Match Details</div>
+            <div className="flex items-center gap-2">
+              <div className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">Match Details</div>
+              {/* Visual Feedback for Loading State */}
+              {isPreview && (
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                </span>
+              )}
+            </div>
             <div className="flex items-baseline gap-3">
-              <span className={`text-xl font-bold tracking-tight ${match ? (match.info.teams.find(t => t.teamId === (focusedParticipant?.teamId ?? 100))?.win ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400') : 'text-slate-900 dark:text-slate-200'}`}>
-                {match ? (match.info.teams.find(t => t.teamId === (focusedParticipant?.teamId ?? 100))?.win ? 'Victory' : 'Defeat') : 'Loading...'}
+              <span className={`text-xl font-bold tracking-tight ${focusedParticipant?.win ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400'}`}>
+                {focusedParticipant?.win ? 'Victory' : 'Defeat'}
               </span>
-              <span className="text-sm font-medium text-slate-500 dark:text-slate-400">{QUEUE_LABELS[match?.info.queueId ?? 0] ?? 'Custom'}</span>
-              {match && <span className="text-xs text-slate-400 font-mono dark:text-slate-500">{formatMatchDuration(match.info.gameDuration)} • {timeAgo(match.info.gameEndTimestamp ?? match.info.gameCreation)} • {getMatchPatch(match.info.gameVersion) ?? ddVersion}</span>}
+              <span className="text-sm font-medium text-slate-500 dark:text-slate-400">{QUEUE_LABELS[match?.info.queueId ?? 0] ?? 'Match'}</span>
+              {match ? (
+                <span className="text-xs text-slate-400 font-mono dark:text-slate-500">{formatMatchDuration(match.info.gameDuration)} • {timeAgo(match.info.gameEndTimestamp ?? match.info.gameCreation)} • {getMatchPatch(match.info.gameVersion) ?? ddVersion}</span>
+              ) : (
+                <span className="text-xs text-slate-400 font-mono dark:text-slate-500 italic">Fetching full stats...</span>
+              )}
             </div>
           </div>
           <button onClick={handleClose} className="group rounded-full bg-slate-100 border border-slate-200 p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-600 dark:bg-slate-900 dark:border-slate-800 dark:hover:bg-slate-800 dark:hover:text-white">
@@ -282,21 +389,23 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
 
         <div className="flex items-center gap-1 border-b border-slate-200 bg-slate-50 px-6 py-2 shrink-0 dark:border-slate-800 dark:bg-slate-900/50">
           {[{k:'overview', l:'Overview'}, {k:'analysis', l:'Analysis'}, {k:'build', l:'Build'}].map(tab => (
-            <button key={tab.k} onClick={() => handleTabChange(tab.k as any)} className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-all ${activeTab === tab.k ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'}`}>{tab.l}</button>
+            <button key={tab.k} onClick={() => handleTabChange(tab.k as any)} disabled={isPreview && tab.k !== 'overview'} className={`rounded-lg px-4 py-1.5 text-xs font-semibold uppercase tracking-wider transition-all ${activeTab === tab.k ? 'bg-white text-slate-900 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-500 hover:bg-slate-200/50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200'} ${isPreview && tab.k !== 'overview' ? 'opacity-50 cursor-not-allowed' : ''}`}>{tab.l}</button>
           ))}
           {error && <span className="ml-auto text-xs font-medium text-amber-500/80">{error}</span>}
         </div>
 
         <div className="flex-1 overflow-y-auto bg-gradient-to-br from-slate-50 via-white to-slate-50 px-4 py-6 md:px-8 custom-scrollbar dark:from-slate-950 dark:via-slate-950 dark:to-slate-900" style={{ transform: 'translateZ(0)', willChange: 'scroll-position' }}>
-          {loading ? (
+          {/* Changed Logic: Only show skeleton if we have NO data (neither match nor participants) */}
+          {loading && !match && participants.length === 0 ? (
             <div className="space-y-4 animate-pulse">
               <div className="h-32 rounded-xl bg-slate-200 dark:bg-slate-900" />
               <div className="h-96 rounded-xl bg-slate-200 dark:bg-slate-900" />
             </div>
-          ) : match ? (
+          ) : (
             <div className="h-full">
               {activeTab === 'overview' && focusedParticipant && (
                 <div className="space-y-6 pb-6">
+                  {/* Banner Section */}
                   <div className={`relative flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${focusedParticipant.win ? 'shadow-emerald-500/5 dark:shadow-emerald-900/5' : 'shadow-rose-500/5 dark:shadow-rose-900/5'}`}>
                     <div className="flex items-center gap-4">
                       <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId])!)} size="h-14 w-14" rounded="rounded-xl" className="shadow-lg ring-2 ring-slate-100 dark:ring-slate-800" />
@@ -304,12 +413,13 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                         <div className="text-xl font-bold text-slate-900 tracking-tight dark:text-slate-100">{getPlayerName(focusedParticipant)}</div>
                         <div className="flex items-center gap-3 text-sm text-slate-500 mt-0.5 dark:text-slate-400">
                           <span className="font-mono font-medium text-slate-700 dark:text-slate-200">{focusedParticipant.kills}/{focusedParticipant.deaths}/{focusedParticipant.assists}</span>
-                          <span>{focusedParticipant.goldEarned.toLocaleString()} <span className="text-amber-500 dark:text-amber-400">G</span></span>
-                          <span>{((focusedParticipant.totalMinionsKilled + focusedParticipant.neutralMinionsKilled) / (match.info.gameDuration / 60)).toFixed(1)} CS/m</span>
+                          {!isPreview && <span>{focusedParticipant.goldEarned.toLocaleString()} <span className="text-amber-500 dark:text-amber-400">G</span></span>}
+                          <span>{((focusedParticipant.totalMinionsKilled + focusedParticipant.neutralMinionsKilled) / ((match?.info.gameDuration || 60) / 60)).toFixed(1)} CS/m</span>
                         </div>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
+                    {/* Items/Runes in Banner */}
+                    <div className={`flex items-center gap-3 ${isPreview ? 'opacity-50 grayscale' : ''}`}>
                       <div className="flex gap-1 p-1 bg-slate-50 rounded-lg border border-slate-200 dark:bg-slate-950 dark:border-slate-800">
                         {[0,1,2,3,4,5].map(i => {
                           const id = (focusedParticipant as any)[`item${i}`];
@@ -340,11 +450,13 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                         <div key={tm.id} className="flex flex-col gap-2">
                           <div className={`flex items-center justify-between px-2 pb-2 border-b border-slate-200 dark:border-slate-800 ${isRtl ? 'flex-row-reverse' : ''}`}>
                             <span className={`text-xs font-bold uppercase tracking-widest ${tm.color}`}>{tm.l}</span>
-                            <span className="text-xs font-medium text-slate-500 font-mono"><span className="text-slate-900 dark:text-slate-200">{tm.t.kills}</span> Kills <span className="mx-1 text-slate-300 dark:text-slate-700">|</span> <span className="text-amber-500 dark:text-amber-400">{tm.t.gold.toLocaleString()}</span>g</span>
+                            {!isPreview && (
+                              <span className="text-xs font-medium text-slate-500 font-mono"><span className="text-slate-900 dark:text-slate-200">{tm.t.kills}</span> Kills <span className="mx-1 text-slate-300 dark:text-slate-700">|</span> <span className="text-amber-500 dark:text-amber-400">{tm.t.gold.toLocaleString()}</span>g</span>
+                            )}
                           </div>
                           <div className="space-y-1">
                             {tm.d.map(p => (
-                              <PlayerRow key={p.puuid} p={p} match={match} focusedPuuid={focusedPuuid} staticData={staticData} champMap={champMap} ddragonVersion={ddragonVersion} spellMap={spellMap} runeMap={runeMap} getPlayerName={getPlayerName} teamColor={tm.bar} isRtl={isRtl} maxDmg={maxDmg} />
+                              <PlayerRow key={p.puuid} p={p} match={match} focusedPuuid={focusedPuuid} staticData={staticData} champMap={champMap} ddragonVersion={ddragonVersion} spellMap={spellMap} runeMap={runeMap} getPlayerName={getPlayerName} teamColor={tm.bar} isRtl={isRtl} maxDmg={maxDmg} isPreview={isPreview} />
                             ))}
                           </div>
                         </div>
@@ -353,9 +465,12 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                   </div>
                 </div>
               )}
-              {activeTab === 'analysis' && (
+              
+              {/* Other tabs remain largely the same, but conditional on !isPreview so they don't break */}
+              {activeTab === 'analysis' && !isPreview && (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 pb-6">
-                  {[
+                  {/* Analysis content... (omitted for brevity, assume existing content) */}
+                   {[
                     { l: 'Kills', b: teamTotals.blue.kills, r: teamTotals.red.kills, k: 'kills' },
                     { l: 'Gold Earned', b: teamTotals.blue.gold, r: teamTotals.red.gold, k: 'goldEarned', format: (n:number) => n.toLocaleString() },
                     { l: 'Damage Dealt', b: teamTotals.blue.damage, r: teamTotals.red.damage, k: 'totalDamageDealtToChampions', format: (n:number) => n.toLocaleString() },
@@ -399,9 +514,10 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                 </div>
               )}
 
-              {activeTab === 'build' && (
+              {activeTab === 'build' && !isPreview && (
                 <div className="h-full max-h-[600px] w-full flex gap-6 overflow-hidden pb-2">
-                  {!focusedParticipant ? <div className="p-8 text-center text-slate-500 italic bg-slate-50 rounded-xl border border-slate-200 w-full dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400">Player data not found.</div> : (
+                   {/* Build content... (omitted for brevity, assume existing content) */}
+                   {!focusedParticipant ? <div className="p-8 text-center text-slate-500 italic bg-slate-50 rounded-xl border border-slate-200 w-full dark:bg-slate-900 dark:border-slate-800 dark:text-slate-400">Player data not found.</div> : (
                     <>
                       <div className="w-auto max-w-[280px] shrink-0 flex flex-col gap-6 h-full">
                         <div className="rounded-xl border border-slate-200 bg-white p-5 flex-1 overflow-hidden flex flex-col justify-center dark:border-slate-800 dark:bg-slate-900">
@@ -466,7 +582,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                 </div>
               )}
             </div>
-          ) : <div className="flex h-full items-center justify-center text-slate-500">Match data unavailable.</div>}
+          )}
         </div>
       </div>
     </div>,

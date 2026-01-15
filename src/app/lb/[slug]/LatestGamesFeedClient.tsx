@@ -97,7 +97,7 @@ function displayRiotId(p: Player) {
   const gn = (p.game_name ?? '').trim()
   const tl = (p.tag_line ?? '').trim()
   if (gn && tl) return `${gn}#${tl}`
-  return p.puuid
+  return 'Unknown Player'
 }
 
 function getOpggUrl(player: Player) {
@@ -153,31 +153,49 @@ export default function LatestGamesFeedClient({
     <>
       <div className="space-y-2.5">
         {games.map((g) => {
-          const player = playersByPuuid[g.puuid]
+          const player = playersByPuuid?.[g.puuid] ?? null
           const opggUrl = player ? getOpggUrl(player) : null
           const name = player ? displayRiotId(player) : 'Unknown'
+          
           const when = g.endTs ? timeAgo(g.endTs) : ''
           const champ = champMap[g.championId]
           const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
+          
+          const isRemake = g.endType === 'REMAKE'
+
           const kdaValue = g.d > 0 ? (g.k + g.a) / g.d : 99
           const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
-          const kdaColor = g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue)
+          
+          const kdaColor = isRemake 
+            ? 'text-slate-400' 
+            : (g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue))
+
           const duration = formatMatchDuration(g.durationS)
           const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
           const lpNote = g.lpNote?.toUpperCase() ?? null
-          const rankData = rankByPuuid[g.puuid]
+          
+          const rankData = rankByPuuid?.[g.puuid]
           const rankIcon = getRankIconSrc(rankData?.tier)
           const rankLabel = formatTierShort(rankData?.tier, rankData?.rank)
-          const isRemake = g.endType === 'REMAKE'
-          const lpTitle =
-            lpChange !== null ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` : 'LP change unavailable'
-          const lpHoverLabel = lpChange !== null ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` : 'LP'
+          
+          // Logic Fix: Defined explicit titles for both states
+          const lpTitle = lpChange !== null 
+            ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` 
+            : `Rank at match time unavailable. Displaying current rank: ${rankLabel}`
+          
+          // Logic Fix: Only define hover label if we actually have LP change to show
+          const lpHoverLabel = lpChange !== null 
+            ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` 
+            : null
+
           const resultBorderClasses = isRemake
             ? 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
             : g.win
               ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
               : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
-          const hasMatchDetails = (participantsByMatch[g.matchId] ?? []).length > 0
+          
+          const matchParticipants = participantsByMatch[g.matchId] ?? []
+          const hasMatchDetails = matchParticipants.length > 0
 
           return (
             <div
@@ -251,10 +269,12 @@ export default function LatestGamesFeedClient({
                                 lpNote
                               )}
                             </span>
+                            {/* Logic Check: lpHoverLabel is guaranteed to be non-null here because lpChange is checked above */}
                             <span className="hidden group-hover:inline">{lpHoverLabel}</span>
                           </span>
                         ) : (
                           <span
+                            title={lpTitle}
                             className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
                               lpChange >= 0
                                 ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
@@ -270,9 +290,13 @@ export default function LatestGamesFeedClient({
                       ) : (
                         <span
                           title={lpTitle}
-                          className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
+                          className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
                         >
-                          - LP
+                           {rankIcon && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={rankIcon} alt="" className="h-3 w-3 object-contain" />
+                          )}
+                          {rankLabel} <span className="text-[9px] opacity-70">(N/A)</span>
                         </span>
                       )}
                     </div>
@@ -286,17 +310,23 @@ export default function LatestGamesFeedClient({
                       <span className="text-slate-300 dark:text-slate-600">•</span>
                     </>
                   )}
-                  <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200 whitespace-nowrap">
-                    {g.k}/{g.d}/{g.a}
-                  </span>
-                  <span className="text-slate-300 dark:text-slate-600">•</span>
-                  <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>{kda} KDA</span>
-                  <span className="text-slate-300 dark:text-slate-600">•</span>
-                  <span className="font-semibold text-slate-600 tabular-nums whitespace-nowrap dark:text-slate-300">{g.cs} CS</span>
+                  
+                  {isRemake ? (
+                    <span className="font-bold text-slate-400 dark:text-slate-500">REMAKE</span>
+                  ) : (
+                    <>
+                      <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200 whitespace-nowrap">
+                        {g.k}/{g.d}/{g.a}
+                      </span>
+                      <span className="text-slate-300 dark:text-slate-600">•</span>
+                      <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>{kda} KDA</span>
+                      <span className="text-slate-300 dark:text-slate-600">•</span>
+                      <span className="font-semibold text-slate-600 tabular-nums whitespace-nowrap dark:text-slate-300">{g.cs} CS</span>
+                    </>
+                  )}
                   
                   {hasMatchDetails && (
                     <div className="relative ml-auto flex items-center justify-center w-5 h-5 shrink-0">
-                      {/* Chevron that's always visible */}
                       <svg 
                         className="h-4 w-4 text-slate-400 transition-all duration-200 group-hover:text-blue-600 group-hover:translate-x-1 dark:text-slate-500 dark:group-hover:text-blue-400" 
                         viewBox="0 0 20 20" 
@@ -305,7 +335,6 @@ export default function LatestGamesFeedClient({
                         <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
                       </svg>
                       
-                      {/* Overlay text that appears on hover */}
                       <div className="absolute right-full mr-2 opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity duration-200">
                         <span className="font-medium text-[10px] text-slate-600 whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
                           View details
@@ -319,12 +348,15 @@ export default function LatestGamesFeedClient({
           )
         })}
       </div>
+      
       <MatchDetailsModal
         open={Boolean(selectedGame)}
         matchId={selectedGame?.matchId ?? null}
         focusedPuuid={selectedGame?.puuid ?? null}
         champMap={champMap}
         ddVersion={ddVersion}
+        // The line below is now valid, so we removed the @ts-expect-error comment
+        participants={selectedGame ? participantsByMatch[selectedGame.matchId] ?? [] : []}
         onClose={() => setSelectedGame(null)}
       />
     </>

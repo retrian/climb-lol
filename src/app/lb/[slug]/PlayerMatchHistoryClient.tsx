@@ -172,6 +172,7 @@ function formatCsPerMin(cs: number, durationS?: number | null) {
 
 function buildSpellMap(spells: Record<string, any>) {
   const map = new Map<number, any>()
+  if (!spells) return map;
   for (const spell of Object.values(spells)) {
     const key = Number(spell.key)
     if (Number.isFinite(key)) map.set(key, spell)
@@ -181,6 +182,7 @@ function buildSpellMap(spells: Record<string, any>) {
 
 function buildRuneMap(runes: Array<any>) {
   const map = new Map<number, any>()
+  if (!runes) return map;
   for (const style of runes) {
     map.set(style.id, style)
     if (style.slots) {
@@ -302,7 +304,8 @@ const PodiumCard = memo(({ card, rank, ddVersion, onOpen, champMap }: { card: Pl
         </div>
         <div className="mt-5 flex gap-2">
           {card.topChamps.slice(0, 3).map(c => {
-            const champ = champMap[c.champion_id]
+            // Defensive check: champMap might be undefined or missing key
+            const champ = champMap?.[c.champion_id]
             return champ ? <img loading="lazy" decoding="async" key={c.champion_id} src={championIconUrl(ddVersion, champ.id)} alt={champ.name} className="h-10 w-10 rounded-lg border-2 border-slate-200 shadow-sm hover:scale-125 hover:border-slate-300 transition-all duration-200 hover:z-10 dark:border-slate-700" /> : null
           })}
         </div>
@@ -317,8 +320,16 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
   const winrate = useMemo(() => formatWinrate(rankData?.wins, rankData?.losses), [rankData?.wins, rankData?.losses])
   const opggUrl = useMemo(() => getOpggUrl(card.player), [card.player])
   const displayId = useMemo(() => displayRiotId(card.player), [card.player])
+
+  // ✅ add this
+  const icon = useMemo(
+    () => profileIconUrl(card.stateData?.profile_icon_id, ddVersion),
+    [card.stateData?.profile_icon_id, ddVersion]
+  )
+
   const isApex = rankData?.tier && ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(rankData.tier)
   const tierLabel = isApex ? rankData?.tier : `${rankData?.tier || 'Unranked'} ${rankData?.rank || ''}`.trim()
+
 
   return (
     <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen(card)} className="group flex items-center gap-3 lg:gap-4 rounded-2xl border border-slate-200 bg-white px-4 lg:px-6 py-4 transition-all hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 cursor-pointer">
@@ -357,7 +368,8 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
       </div>
       <div className="hidden lg:flex items-center gap-1 shrink-0">
         {[0, 1, 2].map(idx => {
-          const c = card.topChamps[idx], champ = c ? champMap[c.champion_id] : null
+          // Defensive check
+          const c = card.topChamps[idx], champ = c && champMap ? champMap[c.champion_id] : null
           return champ ? <img loading="lazy" decoding="async" key={c.champion_id} src={championIconUrl(ddVersion, champ.id)} className="h-8 w-8 rounded-lg border-2 border-slate-200 shadow-sm hover:scale-110 hover:border-slate-300 transition-all duration-200 dark:border-slate-700" alt="" title={champ.name} /> : <div key={`empty-${idx}`} className="h-8 w-8" />
         })}
       </div>
@@ -367,7 +379,8 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 RunnerupRow.displayName = 'RunnerupRow'
 
 const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpand, spellMap, runeMap }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, isExpanded: boolean, onExpand: (id: string) => void, spellMap: Map<number, any>, runeMap: Map<number, any> }) => {
-    const champion = champMap[match.championId]
+    // 5. Defensive Checks: Guard against undefined maps
+    const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
     const durationLabel = formatMatchDuration(match.durationS ?? 0)
     const kdaValue = match.d > 0 ? (match.k + match.a) / match.d : 99
@@ -382,10 +395,10 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
   
     const runePrimary = participant?.perks?.styles?.[0]
     const runeSecondary = participant?.perks?.styles?.[1]
-    const keystone = runePrimary?.selections?.[0]?.perk ? runeMap.get(runePrimary.selections[0].perk) : null
-    const secondaryStyle = runeSecondary?.style ? runeMap.get(runeSecondary.style) : null
-    const spell1 = participant ? spellMap.get(participant.summoner1Id) : null
-    const spell2 = participant ? spellMap.get(participant.summoner2Id) : null
+    const keystone = runePrimary?.selections?.[0]?.perk ? runeMap?.get(runePrimary.selections[0].perk) : null
+    const secondaryStyle = runeSecondary?.style ? runeMap?.get(runeSecondary.style) : null
+    const spell1 = participant ? spellMap?.get(participant.summoner1Id) : null
+    const spell2 = participant ? spellMap?.get(participant.summoner2Id) : null
     const items = participant ? [participant.item0, participant.item1, participant.item2, participant.item3, participant.item4, participant.item5, participant.item6] : []
   
     const rowBg = match.win ? 'bg-emerald-50/80 dark:bg-emerald-500/10' : 'bg-rose-50/80 dark:bg-rose-500/10'
@@ -455,7 +468,8 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
                         </div>
                         <div className="space-y-2">
                           {detail.info.participants.filter(p => p.teamId === teamId).map(p => {
-                            const c = champMap[p.championId]
+                            // Defensive Check
+                            const c = champMap?.[p.championId]
                             const icon = c ? championIconUrl(ddVersion, c.id) : null
                             return (
                               <div key={p.puuid} className="flex items-center gap-2 text-xs">
@@ -543,21 +557,17 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
         .finally(() => setLoadingSummary(false))
     }
 
+    // 3. Inefficient Sorting Fix: Use cached if available, otherwise fetch -> sort -> cache
     if (matchesCache.has(puuid)) {
-      // Sort cached matches just in case
-      const cached = matchesCache.get(puuid)!
-      setMatches([...cached].sort((a, b) => (b.endTs || 0) - (a.endTs || 0)))
+      setMatches(matchesCache.get(puuid)!)
     } else {
       setLoadingMatches(true)
       fetch(`/api/player/${puuid}/matches?limit=20`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
           const list: MatchSummary[] = data.matches ?? []
-          
-          // --- FIX START: Sort by end timestamp descending ---
+          // Sort ONCE here
           list.sort((a, b) => (b.endTs || 0) - (a.endTs || 0))
-          // --- FIX END ---
-
           matchesCache.set(puuid, list)
           setMatches(list)
         })
@@ -620,7 +630,12 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
 
     const timer = setTimeout(processBatch, 1000)
-    return () => { cancelled = true; clearTimeout(timer) }
+    // 1. Critical Race Condition Fix: Clear fetchingMatches set on unmount/re-run
+    return () => { 
+        cancelled = true; 
+        clearTimeout(timer);
+        fetchingMatches.current.clear();
+    }
   }, [open, matches])
 
   const handleOpen = useCallback((card: PlayerCard) => {
@@ -634,6 +649,8 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setSummary(null)
     setMatches([])
     setExpandedMatchId(null)
+    // 2. Memory Leak Fix: Clear heavy detail state
+    setMatchDetails({})
   }, [])
 
   const toggleExpand = useCallback((matchId: string) => {
@@ -688,6 +705,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
 
       {open && selectedPlayer && createPortal(
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={handleClose}>
+            {/* 4. Backdrop Click Fix: Stop propagation on content click */}
             <div ref={modalRef} role="dialog" aria-modal="true" className="flex h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
               <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-5 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
                 <div className="flex items-start justify-between gap-4">
