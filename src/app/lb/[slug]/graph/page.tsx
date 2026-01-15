@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import Link from 'next/link'
 
+export const dynamic = 'force-dynamic'
+
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
   const gn = (player.game_name ?? '').trim()
   if (gn) return gn

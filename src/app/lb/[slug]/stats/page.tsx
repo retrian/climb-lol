@@ -7,6 +7,8 @@ import { timeAgo } from '@/lib/timeAgo'
 import Link from 'next/link'
 import ChampionTable from './ChampionTable'
 
+export const dynamic = 'force-dynamic'
+
 type Player = {
   id: string
   puuid: string

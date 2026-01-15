@@ -11,6 +11,8 @@ import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import type { Metadata } from 'next'
 import { headers } from 'next/headers'
 
+export const dynamic = 'force-dynamic'
+
 // --- Types ---
 
 type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
