@@ -8,13 +8,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
 
     const { searchParams } = new URL(request.url)
     const limitParam = searchParams.get('limit')
-    const limit = Math.min(Math.max(Number(limitParam ?? 20), 1), 50)
+    const limit = Math.min(Math.max(Number(limitParam ?? 50), 1), 50)
 
     const supabase = await createClient()
 
     const { data: rows, error } = await supabase
       .from('match_participants')
-      .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, matches!inner(game_end_ts, game_duration_s, queue_id)')
+      .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, matches(game_end_ts, game_duration_s, queue_id)')
       .eq('puuid', puuid)
       .order('game_end_ts', { referencedTable: 'matches', ascending: false })
       .limit(limit)

@@ -106,6 +106,11 @@ interface PlayerBasicRaw {
   tag_line: string | null
 }
 
+interface SeasonChampionRaw {
+  puuid: string
+  champion_id: number | null
+}
+
 // --- Helpers ---
 
 async function safeDb<T>(query: Promise<{ data: T | null; error: any }> | any, fallback: T): Promise<T> {
@@ -253,14 +258,14 @@ export default async function LeaderboardDetail({
   const missingPuuids = Array.from(gamePuuids).filter(p => !top50Set.has(p))
   const allRelevantPuuids = Array.from(new Set([...top50Puuids, ...Array.from(gamePuuids)]))
 
-  const seasonStartIso = '2025-01-08T20:00:00.000Z'
+  const seasonStartIso = process.env.RANKED_SEASON_START ?? '2025-01-08T20:00:00.000Z'
   const seasonStartMsLatest = new Date(seasonStartIso).getTime()
 
   // Phase 2: Enrichment (Parallel Fetch)
   const [
     statesRaw,
     ranksRaw,
-    champsRaw,
+    seasonChampsRaw,
     missingPlayersRaw,
     latestMatchesRaw,
     lpEventsRaw,
@@ -268,7 +273,14 @@ export default async function LeaderboardDetail({
   ] = await Promise.all([
     safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[]),
     safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[]),
-    safeDb(supabase.from('player_top_champions').select('*').in('puuid', top50Puuids), [] as any[]),
+    top50Puuids.length > 0 ? safeDb(
+      supabase
+        .from('match_participants')
+        .select('puuid, champion_id, matches!inner(game_end_ts)')
+        .in('puuid', top50Puuids)
+        .gte('matches.game_end_ts', seasonStartMsLatest),
+      [] as SeasonChampionRaw[]
+    ) : [],
     missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[]) : [],
     latestMatchIds.length > 0 ? safeDb(supabase.from('matches').select('match_id, fetched_at, game_end_ts').in('match_id', latestMatchIds).gte('fetched_at', seasonStartIso).gte('game_end_ts', seasonStartMsLatest), [] as LatestMatchRaw[]) : [],
     latestMatchIds.length > 0 ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[]) : [],
@@ -312,8 +324,7 @@ export default async function LeaderboardDetail({
 
   // 3. Process Ranks
   const rankBy = new Map<string, PlayerRankSnapshot | null>()
-  const seasonStartRaw = process.env.RANKED_SEASON_START
-  const seasonStartMs = seasonStartRaw ? new Date(seasonStartRaw).getTime() : 0
+  const seasonStartMs = seasonStartMsLatest
   const queuesByPuuid = new Map<string, { solo: any; flex: any }>()
 
   for (const r of ranksRaw) {
@@ -345,17 +356,22 @@ export default async function LeaderboardDetail({
   })
 
   // 5. Process Champs
-  const champsBy = new Map<string, any[]>()
-  for (const c of champsRaw) {
-    let arr = champsBy.get(c.puuid)
-    if (!arr) {
-      arr = []
-      champsBy.set(c.puuid, arr)
+  const champCountsByPuuid = new Map<string, Map<number, number>>()
+  for (const row of seasonChampsRaw) {
+    if (!row.puuid || !row.champion_id) continue
+    let champMap = champCountsByPuuid.get(row.puuid)
+    if (!champMap) {
+      champMap = new Map<number, number>()
+      champCountsByPuuid.set(row.puuid, champMap)
     }
-    arr.push(c)
+    champMap.set(row.champion_id, (champMap.get(row.champion_id) ?? 0) + 1)
   }
-  for (const arr of champsBy.values()) {
-    arr.sort((a: any, b: any) => b.games - a.games)
+  const champsBy = new Map<string, Array<{ champion_id: number; games: number }>>()
+  for (const [puuid, champMap] of champCountsByPuuid.entries()) {
+    const champs = Array.from(champMap.entries())
+      .map(([champion_id, games]) => ({ champion_id, games }))
+      .sort((a, b) => b.games - a.games)
+    champsBy.set(puuid, champs)
   }
 
   // 6. Process Cutoffs

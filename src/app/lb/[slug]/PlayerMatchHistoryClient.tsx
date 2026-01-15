@@ -562,7 +562,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       setMatches(matchesCache.get(puuid)!)
     } else {
       setLoadingMatches(true)
-      fetch(`/api/player/${puuid}/matches?limit=20`)
+      fetch(`/api/player/${puuid}/matches?limit=50`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
           const list: MatchSummary[] = data.matches ?? []
