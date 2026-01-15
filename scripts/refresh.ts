@@ -253,15 +253,26 @@ async function syncRankByPuuid(puuid: string): Promise<{
   const flex = pickFlex(entries)
 
   const upserts = entries
-    .filter((e) => e.queueType === QUEUE_SOLO || e.queueType === QUEUE_FLEX)
-    .map((e) => ({
+    .map((entry) => {
+      if (entry.queueType === QUEUE_SOLO) {
+        return { ...entry, queueType: QUEUE_SOLO }
+      }
+      if (entry.queueType === QUEUE_FLEX) {
+        return { ...entry, queueType: QUEUE_FLEX }
+      }
+      return null
+    })
+    .filter(
+      (entry): entry is RankEntry & { queueType: typeof QUEUE_SOLO | typeof QUEUE_FLEX } => Boolean(entry)
+    )
+    .map((entry) => ({
       puuid,
-      queue_type: e.queueType,
-      tier: e.tier,
-      rank: e.rank,
-      league_points: e.leaguePoints,
-      wins: e.wins,
-      losses: e.losses,
+      queue_type: entry.queueType,
+      tier: entry.tier,
+      rank: entry.rank,
+      league_points: entry.leaguePoints,
+      wins: entry.wins,
+      losses: entry.losses,
       fetched_at: now,
     }))
 
@@ -274,8 +285,8 @@ async function syncRankByPuuid(puuid: string): Promise<{
 
   await upsertRiotState(puuid, { last_rank_sync_at: now, last_error: null })
 
-  const snapshots = upserts.map((entry) => ({
-    queue_type: entry.queue_type as typeof QUEUE_SOLO | typeof QUEUE_FLEX,
+  const snapshots: QueueSnapshot[] = upserts.map((entry) => ({
+    queue_type: entry.queue_type,
     tier: entry.tier,
     rank: entry.rank,
     lp: entry.league_points,
