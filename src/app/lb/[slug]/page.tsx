@@ -177,8 +177,8 @@ function isApexTier(tier: string) {
   return ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(tier)
 }
 
-function getBaseUrl() {
-  const headerList = headers()
+async function getBaseUrl() {
+  const headerList = await headers()
   const host = headerList.get('host')
   if (!host) return 'https://cwf.lol'
   const proto = headerList.get('x-forwarded-proto') ?? 'https'
@@ -252,7 +252,7 @@ export async function generateMetadata({
     }
   }
 
-  const baseUrl = getBaseUrl()
+  const baseUrl = await getBaseUrl()
   const updatedAt = lb.updated_at ? new Date(lb.updated_at).getTime() : 0
   const lastSyncAt = lastSyncIso ? new Date(lastSyncIso).getTime() : 0
   const version = Math.max(updatedAt, lastSyncAt)
