@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
-import { formatDaysHours, getKdaColor } from '@/lib/formatters'
+import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 import Link from 'next/link'
 import ChampionTable from './ChampionTable'
@@ -98,6 +98,13 @@ function formatAverageKda(kills: number, assists: number, deaths: number) {
   const safeDeaths = Math.max(1, deaths)
   const kda = (Math.max(0, kills) + Math.max(0, assists)) / safeDeaths
   return { value: kda, label: kda.toFixed(2) }
+}
+
+function formatDaysHoursCaps(totalSeconds: number) {
+  const safeSeconds = Number.isFinite(totalSeconds) && totalSeconds > 0 ? totalSeconds : 0
+  const days = Math.floor(safeSeconds / 86400)
+  const hours = Math.floor((safeSeconds % 86400) / 3600)
+  return `${days}D ${hours.toString().padStart(2, '0')}H`
 }
 
 // --- Components ---
@@ -493,6 +500,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topDeaths = [...playerLeaderboard].sort((a, b) => b.deaths - a.deaths).slice(0, 5)
   const topAssists = [...playerLeaderboard].sort((a, b) => b.assists - a.assists).slice(0, 5)
   const topKdaPlayers = [...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value).slice(0, 5)
+  const bottomKdaPlayers = [...playerLeaderboard].sort((a, b) => a.kda.value - b.kda.value).slice(0, 5)
   const topWinratePlayers = [...playerLeaderboard].sort((a, b) => b.wins / b.games - a.wins / a.games).slice(0, 5)
   const topTotalTime = [...playerLeaderboard].sort((a, b) => b.durationS - a.durationS).slice(0, 5)
 
@@ -500,6 +508,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
   const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
   const topCsSingle = [...participants].sort((a, b) => b.cs - a.cs).slice(0, 3)
+  const topVisionSingle: MatchParticipant[] = []
 
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   for (const row of participants) {
@@ -511,24 +520,30 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     }
   }
 
-  const longestMatches = Array.from(matchById.entries())
-    .map(([matchId, meta]) => {
-      const matchParticipants = participantsByMatch.get(matchId) ?? []
-      const representative = matchParticipants[0]
-      const player = representative ? playersByPuuid.get(representative.puuid) : null
-      return {
-        matchId,
-        durationS: meta.durationS,
-        endTs: meta.endTs,
-        playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
-        playerIconUrl: representative
-          ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
-          : null,
-      }
-    })
+  const matchSummaries = Array.from(matchById.entries()).map(([matchId, meta]) => {
+    const matchParticipants = participantsByMatch.get(matchId) ?? []
+    const representative = matchParticipants[0]
+    const player = representative ? playersByPuuid.get(representative.puuid) : null
+    return {
+      matchId,
+      durationS: meta.durationS,
+      endTs: meta.endTs,
+      playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
+      playerIconUrl: representative
+        ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
+        : null,
+    }
+  })
+
+  const longestMatches = matchSummaries
     .filter((match) => match.durationS > 0)
     .sort((a, b) => b.durationS - a.durationS)
     .slice(0, 5)
+
+  const longestGamesTop = longestMatches.slice(0, 3)
+  const bestKdaPlayersTop = topKdaPlayers.slice(0, 3)
+  const worstKdaPlayersTop = bottomKdaPlayers.slice(0, 3)
+  const longestTotalTimeTop = topTotalTime.slice(0, 3)
 
   const noGames = participants.length === 0
 
@@ -563,12 +578,12 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             {
               label: 'Total Record',
               value: `${totals.wins}W - ${totals.losses}L`,
-              sub: formatWinrate(totals.wins, totals.games),
+              sub: `${formatWinrate(totals.wins, totals.games)} • ${totals.games.toLocaleString()} games`,
             },
             {
-              label: 'Total Play Time',
-              value: formatDaysHours(totals.durationS),
-              sub: 'Across all matches',
+              label: 'Total Time Played',
+              value: formatDaysHoursCaps(totals.durationS),
+              sub: `Across all matches • ${Math.floor((Number.isFinite(totals.durationS) ? totals.durationS : 0) / 3600).toLocaleString()}h`,
             },
           ].map((card) => (
             <div
@@ -684,6 +699,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
                 { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
                 { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
+                { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision' },
               ].map((block) => (
                 <div key={block.title}>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
@@ -724,6 +740,132 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                   )}
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-sky-400 to-sky-600" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                KDA Leaderboard Highlights
+              </h3>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              {[
+                { title: 'Best Overall KDA', data: bestKdaPlayersTop },
+                { title: 'Worst Overall KDA', data: worstKdaPlayersTop },
+              ].map((block) => (
+                <div key={block.title}>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                    {block.title}
+                  </div>
+                  {block.data.length === 0 ? (
+                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                  ) : (
+                    <ol className="mt-2 space-y-1 text-sm">
+                      {block.data.map((row, idx) => (
+                        <li key={row.puuid} className="flex items-center justify-between">
+                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                            <span className="text-slate-400">{idx + 1}.</span>
+                            {row.iconUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={row.iconUrl}
+                                alt=""
+                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                              />
+                            ) : (
+                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                            )}
+                            <span>{row.name}</span>
+                          </span>
+                          <span className={`font-semibold tabular-nums ${getKdaColor(row.kda.value)}`}>
+                            {row.kda.label} KDA
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                Time &amp; Length Highlights
+              </h3>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Longest Game Length
+                </div>
+                {longestGamesTop.length === 0 ? (
+                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                ) : (
+                  <ol className="mt-2 space-y-1 text-sm">
+                    {longestGamesTop.map((row, idx) => (
+                      <li key={row.matchId} className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                          <span className="text-slate-400">{idx + 1}.</span>
+                          {row.playerIconUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={row.playerIconUrl}
+                              alt=""
+                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                            />
+                          ) : (
+                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                          )}
+                          <span>{row.playerName}</span>
+                        </span>
+                        <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                          {formatMatchDuration(row.durationS)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Longest Individual Total Time Played
+                </div>
+                {longestTotalTimeTop.length === 0 ? (
+                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                ) : (
+                  <ol className="mt-2 space-y-1 text-sm">
+                    {longestTotalTimeTop.map((row, idx) => (
+                      <li key={row.puuid} className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                          <span className="text-slate-400">{idx + 1}.</span>
+                          {row.iconUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={row.iconUrl}
+                              alt=""
+                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                            />
+                          ) : (
+                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                          )}
+                          <span>{row.name}</span>
+                        </span>
+                        <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                          {formatDaysHoursCaps(row.durationS)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
             </div>
           </div>
         </section>
