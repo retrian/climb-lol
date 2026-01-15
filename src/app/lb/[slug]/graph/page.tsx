@@ -149,7 +149,6 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .select('id, puuid, game_name, tag_line')
     .eq('leaderboard_id', lb.id)
     .order('sort_order', { ascending: true })
-    .limit(50)
 
   const players = playersRaw ?? []
   const puuids = players.map((p) => p.puuid)
@@ -203,7 +202,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = '2026-01-08T20:00:00.000Z'
+  const seasonStartIso = process.env.RANKED_SEASON_START || '2025-01-08T20:00:00.000Z'
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')

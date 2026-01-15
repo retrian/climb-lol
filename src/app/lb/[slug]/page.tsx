@@ -854,7 +854,6 @@ export default async function LeaderboardDetail({
     .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
     .eq('leaderboard_id', lb.id)
     .order('sort_order', { ascending: true })
-    .limit(50)
 
   const players: Player[] = playersRaw ?? []
   const puuids = players.map((p) => p.puuid).filter(Boolean)
