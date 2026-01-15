@@ -578,17 +578,12 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             {
               label: 'Total Record',
               value: `${totals.wins}W - ${totals.losses}L`,
-              sub: formatWinrate(totals.wins, totals.games),
+              sub: `${formatWinrate(totals.wins, totals.games)} • ${totals.games.toLocaleString()} games`,
             },
             {
               label: 'Total Time Played',
-              value: (
-                <span>
-                  {formatDaysHoursCaps(totals.durationS)}{' '}
-                  <span className="text-slate-500 dark:text-slate-400">({totals.games} games)</span>
-                </span>
-              ),
-              sub: 'Across all matches',
+              value: formatDaysHoursCaps(totals.durationS),
+              sub: `Across all matches • ${Math.floor((Number.isFinite(totals.durationS) ? totals.durationS : 0) / 3600).toLocaleString()}h`,
             },
           ].map((card) => (
             <div
