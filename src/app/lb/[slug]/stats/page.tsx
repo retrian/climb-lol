@@ -500,6 +500,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topDeaths = [...playerLeaderboard].sort((a, b) => b.deaths - a.deaths).slice(0, 5)
   const topAssists = [...playerLeaderboard].sort((a, b) => b.assists - a.assists).slice(0, 5)
   const topKdaPlayers = [...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value).slice(0, 5)
+  const bottomKdaPlayers = [...playerLeaderboard].sort((a, b) => a.kda.value - b.kda.value).slice(0, 5)
   const topWinratePlayers = [...playerLeaderboard].sort((a, b) => b.wins / b.games - a.wins / a.games).slice(0, 5)
   const topTotalTime = [...playerLeaderboard].sort((a, b) => b.durationS - a.durationS).slice(0, 5)
 
@@ -507,6 +508,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
   const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
   const topCsSingle = [...participants].sort((a, b) => b.cs - a.cs).slice(0, 3)
+  const topVisionSingle: MatchParticipant[] = []
 
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   for (const row of participants) {
@@ -527,9 +529,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       durationS: meta.durationS,
       endTs: meta.endTs,
       playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
-      playerIconUrl: representative
-        ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
-        : null,
     }
   })
 
@@ -542,8 +541,10 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .filter((match) => match.durationS >= 900)
     .sort((a, b) => a.durationS - b.durationS)[0]
 
-  const longestMatch = longestMatches[0]
-  const bestKdaPlayer = topKdaPlayers[0]
+  const longestGamesTop = longestMatches.slice(0, 3)
+  const bestKdaPlayersTop = topKdaPlayers.slice(0, 3)
+  const worstKdaPlayersTop = bottomKdaPlayers.slice(0, 3)
+  const longestTotalTimeTop = topTotalTime.slice(0, 3)
 
   const noGames = participants.length === 0
 
@@ -602,31 +603,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {[
             {
-              label: 'Most Vision Score in One Game',
-              value: '—',
-              sub: 'Not tracked yet.',
-            },
-            {
-              label: 'Longest Game Length',
-              value: longestMatch ? formatMatchDuration(longestMatch.durationS) : '—',
-              sub: longestMatch ? `By ${longestMatch.playerName}` : 'No data yet.',
-            },
-            {
               label: 'Fastest Game Length (Non-FF)',
               value: fastestNonFfMatch ? formatMatchDuration(fastestNonFfMatch.durationS) : '—',
               sub: fastestNonFfMatch ? `By ${fastestNonFfMatch.playerName}` : 'No data yet.',
-            },
-            {
-              label: 'Best Overall KDA',
-              value: bestKdaPlayer ? (
-                <span className="flex flex-wrap items-baseline gap-2">
-                  <span className="text-slate-900 dark:text-slate-100">{bestKdaPlayer.name}</span>
-                  <span className={getKdaColor(bestKdaPlayer.kda.value)}>{bestKdaPlayer.kda.label} KDA</span>
-                </span>
-              ) : (
-                '—'
-              ),
-              sub: bestKdaPlayer ? `${bestKdaPlayer.kills}/${bestKdaPlayer.deaths}/${bestKdaPlayer.assists}` : 'No data yet.',
             },
             {
               label: 'Highest Damage per Minute',
@@ -752,6 +731,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
                 { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
                 { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
+                { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision' },
               ].map((block) => (
                 <div key={block.title}>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
@@ -792,6 +772,112 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                   )}
                 </div>
               ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-sky-400 to-sky-600" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                KDA Leaderboard Highlights
+              </h3>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              {[
+                { title: 'Best Overall KDA', data: bestKdaPlayersTop },
+                { title: 'Worst Overall KDA', data: worstKdaPlayersTop },
+              ].map((block) => (
+                <div key={block.title}>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                    {block.title}
+                  </div>
+                  {block.data.length === 0 ? (
+                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                  ) : (
+                    <ol className="mt-2 space-y-1 text-sm">
+                      {block.data.map((row, idx) => (
+                        <li key={row.puuid} className="flex items-center justify-between">
+                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                            <span className="text-slate-400">{idx + 1}.</span>
+                            {row.iconUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={row.iconUrl}
+                                alt=""
+                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                              />
+                            ) : (
+                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                            )}
+                            <span>{row.name}</span>
+                          </span>
+                          <span className={`font-semibold tabular-nums ${getKdaColor(row.kda.value)}`}>
+                            {row.kda.label} KDA
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center gap-2">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                Time &amp; Length Highlights
+              </h3>
+            </div>
+
+            <div className="mt-4 space-y-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Longest Game Length
+                </div>
+                {longestGamesTop.length === 0 ? (
+                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                ) : (
+                  <ol className="mt-2 space-y-1 text-sm">
+                    {longestGamesTop.map((row, idx) => (
+                      <li key={row.matchId} className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                          <span className="text-slate-400">{idx + 1}.</span>
+                          <span>{row.playerName}</span>
+                        </span>
+                        <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                          {formatMatchDuration(row.durationS)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
+
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Longest Individual Total Time Played
+                </div>
+                {longestTotalTimeTop.length === 0 ? (
+                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                ) : (
+                  <ol className="mt-2 space-y-1 text-sm">
+                    {longestTotalTimeTop.map((row, idx) => (
+                      <li key={row.puuid} className="flex items-center justify-between">
+                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                          <span className="text-slate-400">{idx + 1}.</span>
+                          <span>{row.name}</span>
+                        </span>
+                        <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                          {formatDaysHoursCaps(row.durationS)}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
             </div>
           </div>
         </section>
