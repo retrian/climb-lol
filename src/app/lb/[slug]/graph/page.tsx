@@ -203,7 +203,11 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = process.env.RANKED_SEASON_START ?? '2025-01-08T20:00:00.000Z'
+  const configuredSeasonStart = process.env.RANKED_SEASON_START ?? null
+  const configuredSeasonMs = configuredSeasonStart ? new Date(configuredSeasonStart).getTime() : Number.NaN
+  const seasonStartIso = Number.isNaN(configuredSeasonMs)
+    ? '2025-01-08T20:00:00.000Z'
+    : configuredSeasonStart
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')

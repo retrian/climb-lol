@@ -250,8 +250,14 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     )
   }
 
-  const seasonStartIso = process.env.RANKED_SEASON_START ?? '2025-01-08T20:00:00.000Z'
-  const seasonStartMs = new Date(seasonStartIso).getTime()
+  const configuredSeasonStart = process.env.RANKED_SEASON_START ?? null
+  const configuredSeasonMs = configuredSeasonStart ? new Date(configuredSeasonStart).getTime() : Number.NaN
+  const seasonStartIso = Number.isNaN(configuredSeasonMs)
+    ? '2025-01-08T20:00:00.000Z'
+    : configuredSeasonStart
+  const seasonStartMs = Number.isNaN(configuredSeasonMs)
+    ? new Date(seasonStartIso).getTime()
+    : configuredSeasonMs
 
   const { data: stateRaw } = await supabase
     .from('player_riot_state')
