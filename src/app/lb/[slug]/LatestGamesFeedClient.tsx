@@ -26,6 +26,8 @@ interface Game {
   durationS?: number
   lpChange?: number | null
   lpNote?: string | null
+  rankTier?: string | null
+  rankDivision?: string | null
   endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
