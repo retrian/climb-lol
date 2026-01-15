@@ -529,6 +529,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       durationS: meta.durationS,
       endTs: meta.endTs,
       playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
+      playerIconUrl: representative
+        ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
+        : null,
     }
   })
 
@@ -536,10 +539,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .filter((match) => match.durationS > 0)
     .sort((a, b) => b.durationS - a.durationS)
     .slice(0, 5)
-
-  const fastestNonFfMatch = matchSummaries
-    .filter((match) => match.durationS >= 900)
-    .sort((a, b) => a.durationS - b.durationS)[0]
 
   const longestGamesTop = longestMatches.slice(0, 3)
   const bestKdaPlayersTop = topKdaPlayers.slice(0, 3)
@@ -583,7 +582,12 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             },
             {
               label: 'Total Time Played',
-              value: `${formatDaysHoursCaps(totals.durationS)} (${totals.games} games)`,
+              value: (
+                <span>
+                  {formatDaysHoursCaps(totals.durationS)}{' '}
+                  <span className="text-slate-500 dark:text-slate-400">({totals.games} games)</span>
+                </span>
+              ),
               sub: 'Across all matches',
             },
           ].map((card) => (
@@ -595,37 +599,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 {card.label}
               </div>
               <div className="mt-3 text-3xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
-              <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
-            </div>
-          ))}
-        </section>
-
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {[
-            {
-              label: 'Fastest Game Length (Non-FF)',
-              value: fastestNonFfMatch ? formatMatchDuration(fastestNonFfMatch.durationS) : '—',
-              sub: fastestNonFfMatch ? `By ${fastestNonFfMatch.playerName}` : 'No data yet.',
-            },
-            {
-              label: 'Highest Damage per Minute',
-              value: '—',
-              sub: 'Not tracked yet.',
-            },
-            {
-              label: 'Most Damage in a Game',
-              value: '—',
-              sub: 'Not tracked yet.',
-            },
-          ].map((card) => (
-            <div
-              key={card.label}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                {card.label}
-              </div>
-              <div className="mt-3 text-2xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
               <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
             </div>
           ))}
@@ -845,6 +818,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                       <li key={row.matchId} className="flex items-center justify-between">
                         <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
                           <span className="text-slate-400">{idx + 1}.</span>
+                          {row.playerIconUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={row.playerIconUrl}
+                              alt=""
+                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                            />
+                          ) : (
+                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                          )}
                           <span>{row.playerName}</span>
                         </span>
                         <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
@@ -868,6 +851,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                       <li key={row.puuid} className="flex items-center justify-between">
                         <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
                           <span className="text-slate-400">{idx + 1}.</span>
+                          {row.iconUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={row.iconUrl}
+                              alt=""
+                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                            />
+                          ) : (
+                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                          )}
                           <span>{row.name}</span>
                         </span>
                         <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
