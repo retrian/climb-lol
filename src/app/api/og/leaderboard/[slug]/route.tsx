@@ -1,5 +1,5 @@
 import { ImageResponse } from 'next/og'
-import { createServiceClient } from '@/lib/supabase/service'
+import { createClient } from '@/lib/supabase/server'
 
 export const runtime = 'edge'
 
@@ -21,9 +21,9 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params
-  const admin = createServiceClient()
+  const supabase = await createClient()
 
-  const { data: lb } = await admin
+  const { data: lb } = await supabase
     .from('leaderboards')
     .select('id, name, description, visibility, banner_url')
     .eq('slug', slug)
@@ -33,7 +33,7 @@ export async function GET(
     return new Response('Not found', { status: 404 })
   }
 
-  const { data: playersRaw } = await admin
+  const { data: playersRaw } = await supabase
     .from('leaderboard_players')
     .select('game_name, tag_line, sort_order')
     .eq('leaderboard_id', lb.id)
