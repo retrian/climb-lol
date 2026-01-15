@@ -5,7 +5,7 @@ import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { formatDaysHours, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 import Link from 'next/link'
-import ChampionTable from './ChampionTable'
+import ChampionTable from './stats/ChampionTable'
 
 // --- Configuration ---
 const FALLBACK_SEASON_START = '2026-01-08T20:00:00.000Z'
