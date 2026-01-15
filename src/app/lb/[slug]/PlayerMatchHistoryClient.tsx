@@ -562,12 +562,21 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       setMatches(matchesCache.get(puuid)!)
     } else {
       setLoadingMatches(true)
-      fetch(`/api/player/${puuid}/matches?limit=20`)
+      fetch(`/api/player/${puuid}/matches?limit=50`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
           const list: MatchSummary[] = data.matches ?? []
           // Sort ONCE here
-          list.sort((a, b) => (b.endTs || 0) - (a.endTs || 0))
+          const matchIdToSortKey = (matchId: string) => {
+            const [, raw] = matchId.split('_')
+            const num = Number(raw)
+            return Number.isFinite(num) ? num : 0
+          }
+          list.sort((a, b) => {
+            const aKey = a.endTs ?? matchIdToSortKey(a.matchId)
+            const bKey = b.endTs ?? matchIdToSortKey(b.matchId)
+            return bKey - aKey
+          })
           matchesCache.set(puuid, list)
           setMatches(list)
         })
