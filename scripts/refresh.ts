@@ -164,14 +164,18 @@ type RankEntry = {
   losses: number
 }
 
-type SoloSnapshot = {
-  queue_type: typeof QUEUE_SOLO
+type QueueSnapshot = {
+  queue_type: typeof QUEUE_SOLO | typeof QUEUE_FLEX
   tier: string
   rank: string
   lp: number
   wins: number
   losses: number
   fetched_at: string
+}
+
+type SoloSnapshot = QueueSnapshot & {
+  queue_type: typeof QUEUE_SOLO
 }
 
 const NON_APEX_TIERS = ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND'] as const
@@ -210,7 +214,15 @@ function pickSolo(entries: RankEntry[]): RankEntry | null {
   return entries.find((e) => e.queueType === QUEUE_SOLO) ?? null
 }
 
-async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
+function pickFlex(entries: RankEntry[]): RankEntry | null {
+  return entries.find((e) => e.queueType === QUEUE_FLEX) ?? null
+}
+
+async function syncRankByPuuid(puuid: string): Promise<{
+  solo: SoloSnapshot | null
+  flex: QueueSnapshot | null
+  all: QueueSnapshot[]
+} | null> {
   const entries = await riotFetch<RankEntry[]>(
     `${NA1}/lol/league/v4/entries/by-puuid/${encodeURIComponent(puuid)}`
   )
@@ -238,6 +250,7 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
   }
 
   const solo = pickSolo(entries)
+  const flex = pickFlex(entries)
 
   const upserts = entries
     .filter((e) => e.queueType === QUEUE_SOLO || e.queueType === QUEUE_FLEX)
@@ -261,21 +274,49 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
 
   await upsertRiotState(puuid, { last_rank_sync_at: now, last_error: null })
 
-  if (!solo) return null
+  const snapshots = upserts.map((entry) => ({
+    queue_type: entry.queue_type as typeof QUEUE_SOLO | typeof QUEUE_FLEX,
+    tier: entry.tier,
+    rank: entry.rank,
+    lp: entry.league_points,
+    wins: entry.wins,
+    losses: entry.losses,
+    fetched_at: entry.fetched_at,
+  }))
+
+  const soloSnap = solo
+    ? {
+        queue_type: QUEUE_SOLO,
+        tier: solo.tier,
+        rank: solo.rank,
+        lp: solo.leaguePoints,
+        wins: solo.wins,
+        losses: solo.losses,
+        fetched_at: now,
+      }
+    : null
+
+  const flexSnap = flex
+    ? {
+        queue_type: QUEUE_FLEX,
+        tier: flex.tier,
+        rank: flex.rank,
+        lp: flex.leaguePoints,
+        wins: flex.wins,
+        losses: flex.losses,
+        fetched_at: now,
+      }
+    : null
 
   return {
-    queue_type: QUEUE_SOLO,
-    tier: solo.tier,
-    rank: solo.rank,
-    lp: solo.leaguePoints,
-    wins: solo.wins,
-    losses: solo.losses,
-    fetched_at: now,
+    solo: soloSnap,
+    flex: flexSnap,
+    all: snapshots,
   }
 }
 
-async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
-  const params = new URLSearchParams({ queue: '420', count: '10' })
+async function fetchMatchIdsByQueue(puuid: string, queue: string): Promise<string[]> {
+  const params = new URLSearchParams({ queue, count: '10' })
   if (RANKED_SEASON_START) {
     const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
     if (!Number.isNaN(seasonStartMs)) {
@@ -283,15 +324,26 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
     }
   }
 
-  const ids = await riotFetch<string[]>(
+  return riotFetch<string[]>(
     `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params.toString()}`
   )
+}
+
+async function syncMatchesRankedOnly(
+  puuid: string
+): Promise<{ ids: string[]; newIds: string[]; soloIds: string[] }> {
+  const [soloIds, flexIds] = await Promise.all([
+    fetchMatchIdsByQueue(puuid, '420'),
+    fetchMatchIdsByQueue(puuid, '440'),
+  ])
+
+  const ids = Array.from(new Set([...soloIds, ...flexIds]))
 
   const now = new Date().toISOString()
 
   if (!ids.length) {
     await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
-    return { ids: [], newIds: [] }
+    return { ids: [], newIds: [], soloIds }
   }
 
   const { data: existing, error: exErr } = await supabase.from('matches').select('match_id').in('match_id', ids)
@@ -356,10 +408,10 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
   }
 
   await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
-  return { ids, newIds }
+  return { ids, newIds, soloIds }
 }
 
-async function insertLpHistory(puuid: string, snap: SoloSnapshot) {
+async function insertLpHistory(puuid: string, snap: QueueSnapshot) {
   const { error } = await supabase.from('player_lp_history').insert({
     puuid,
     queue_type: snap.queue_type,
@@ -579,13 +631,17 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
   try {
     await syncSummonerBasics(puuid)
 
-    const { ids } = await syncMatchesRankedOnly(puuid)
+    const { ids, soloIds } = await syncMatchesRankedOnly(puuid)
 
-    const soloSnap = await syncRankByPuuid(puuid)
+    const snapshots = await syncRankByPuuid(puuid)
 
-    if (soloSnap) {
-      await insertLpHistory(puuid, soloSnap)
-      await maybeInsertPerGameLpEvent({ puuid, snap: soloSnap, ids, state })
+    if (snapshots) {
+      for (const snap of snapshots.all) {
+        await insertLpHistory(puuid, snap)
+      }
+      if (snapshots.solo) {
+        await maybeInsertPerGameLpEvent({ puuid, snap: snapshots.solo, ids: soloIds, state })
+      }
     }
 
     const missingTop = !(await hasTopChamps(puuid))

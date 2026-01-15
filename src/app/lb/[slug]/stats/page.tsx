@@ -4,6 +4,7 @@ import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { formatDaysHours, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
+import { getRankedSeasonStartMs } from '@/lib/season'
 import Link from 'next/link'
 import ChampionTable from './ChampionTable'
 
@@ -250,7 +251,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     )
   }
 
-  const seasonStartMs = new Date('2026-01-08T20:00:00.000Z').getTime()
+  const seasonStartMs = getRankedSeasonStartMs()
 
   const { data: stateRaw } = await supabase
     .from('player_riot_state')

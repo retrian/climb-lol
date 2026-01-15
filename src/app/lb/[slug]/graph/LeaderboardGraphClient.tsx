@@ -11,6 +11,7 @@ type PlayerSummary = {
 
 type LpPoint = {
   puuid: string
+  queue_type: string | null
   tier: string | null
   rank: string | null
   lp: number | null
@@ -201,22 +202,23 @@ export default function LeaderboardGraphClient({
       .filter((p): p is NormalizedPoint => p !== null)
   }, [cutoffs, points])
 
-  // Deduplicate points: only keep points where totalGames changed (or LP changed if counts missing)
   const pointsByPlayer = useMemo(() => {
-    const byPlayer = new Map<string, NormalizedPoint[]>()
-    
-    // Group
-    const rawGroups = new Map<string, NormalizedPoint[]>()
+    const byPlayer = new Map<string, { solo: NormalizedPoint[]; flex: NormalizedPoint[] }>()
+
+    const rawGroups = new Map<string, { solo: NormalizedPoint[]; flex: NormalizedPoint[] }>()
     for (const point of normalizedPoints) {
-      const list = rawGroups.get(point.puuid)
-      if (list) list.push(point)
-      else rawGroups.set(point.puuid, [point])
+      const entry = rawGroups.get(point.puuid) ?? { solo: [], flex: [] }
+      if (point.queue_type === 'RANKED_FLEX_SR') {
+        entry.flex.push(point)
+      } else {
+        entry.solo.push(point)
+      }
+      rawGroups.set(point.puuid, entry)
     }
 
-    // Sort & Dedup
-    for (const [puuid, list] of rawGroups.entries()) {
+    const dedupePoints = (list: NormalizedPoint[]) => {
       list.sort((a, b) => a.ts - b.ts)
-      
+
       const processed: NormalizedPoint[] = []
       let lastPoint: NormalizedPoint | null = null
 
@@ -227,35 +229,42 @@ export default function LeaderboardGraphClient({
           continue
         }
 
-        const hasCounts = 
+        const hasCounts =
           typeof point.wins === 'number' && typeof lastPoint.wins === 'number'
 
         let isUpdate = false
-        
+
         if (hasCounts) {
-           // Update if total games increased
-           if (point.totalGames > lastPoint.totalGames) {
-             isUpdate = true
-           }
-        } else {
-           // Fallback if no W/L data
-           if (point.ladderLp !== lastPoint.ladderLp) {
-             isUpdate = true
-           }
+          if (point.totalGames > lastPoint.totalGames) {
+            isUpdate = true
+          }
+        } else if (point.ladderLp !== lastPoint.ladderLp) {
+          isUpdate = true
         }
 
         if (isUpdate) {
-            processed.push(point)
-            lastPoint = point
+          processed.push(point)
+          lastPoint = point
         }
       }
-      byPlayer.set(puuid, processed)
+      return processed
     }
+
+    for (const [puuid, list] of rawGroups.entries()) {
+      byPlayer.set(puuid, {
+        solo: dedupePoints(list.solo),
+        flex: dedupePoints(list.flex),
+      })
+    }
+
     return byPlayer
   }, [normalizedPoints])
 
   const filteredPoints = useMemo(() => {
-    return selectedPuuid ? pointsByPlayer.get(selectedPuuid) ?? [] : []
+    if (!selectedPuuid) return []
+    const entry = pointsByPlayer.get(selectedPuuid)
+    if (!entry) return []
+    return entry.solo.length > 0 ? entry.solo : entry.flex
   }, [pointsByPlayer, selectedPuuid])
 
   const chart = useMemo(() => {

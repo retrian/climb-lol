@@ -4,6 +4,7 @@ import { timeAgo } from '@/lib/timeAgo'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
+import { getRankedSeasonStartIso } from '@/lib/season'
 import FitText from './FitText'
 import Link from 'next/link'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
@@ -961,7 +962,7 @@ export default async function LeaderboardDetail({
 
   // Latest Games
   const { data: latestRaw } = await supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 })
-  const seasonStartIso = '2025-01-08T20:00:00.000Z'
+  const seasonStartIso = getRankedSeasonStartIso()
   
   // Optimization: Map directly to Set to avoid intermediate array creation if possible, 
   // but here we need array for the .in() query. Filter only once.

@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import Link from 'next/link'
+import { getRankedSeasonStartIso } from '@/lib/season'
 
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
   const gn = (player.game_name ?? '').trim()
@@ -203,12 +204,12 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = '2026-01-08T20:00:00.000Z'
+  const seasonStartIso = getRankedSeasonStartIso()
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
-    .select('puuid, tier, rank, lp, wins, losses, fetched_at')
+    .select('puuid, queue_type, tier, rank, lp, wins, losses, fetched_at')
     .in('puuid', puuids)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
+    .in('queue_type', ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR'])
     .gte('fetched_at', seasonStartIso)
     .order('fetched_at', { ascending: true })
 
