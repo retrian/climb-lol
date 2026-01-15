@@ -25,8 +25,8 @@ const AMERICAS = 'https://americas.api.riotgames.com'
 
 const CUTOFF_POLL_MS = 60 * 60 * 1000 // hourly
 
-const QUEUE_SOLO = 'RANKED_SOLO_5x5'
-const QUEUE_FLEX = 'RANKED_FLEX_SR'
+const QUEUE_SOLO = 'RANKED_SOLO_5x5' as const
+const QUEUE_FLEX = 'RANKED_FLEX_SR' as const
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
