@@ -16,7 +16,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
       .from('match_participants')
       .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, matches(game_end_ts, game_duration_s, queue_id)')
       .eq('puuid', puuid)
-      .order('game_end_ts', { referencedTable: 'matches', ascending: false })
+      .order('match_id', { ascending: false })
       .limit(limit)
 
     if (error) {
