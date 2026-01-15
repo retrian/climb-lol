@@ -1,24 +1,95 @@
-import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { getChampionMap, championIconUrl } from '@/lib/champions'
+import { notFound } from 'next/navigation'
+import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
-import { formatDaysHours, getKdaColor } from '@/lib/formatters'
-import { timeAgo } from '@/lib/timeAgo'
+import { compareRanks } from '@/lib/rankSort'
 import Link from 'next/link'
-import ChampionTable from './stats/ChampionTable'
-
-// --- Configuration ---
-const FALLBACK_SEASON_START = '2026-01-08T20:00:00.000Z'
+import LatestGamesFeedClient from './LatestGamesFeedClient'
+import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 
 // --- Types ---
-type Player = {
+
+type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
+
+// Updated to allow Partial for missing players handling
+export interface Player {
   id: string
   puuid: string
   game_name: string | null
   tag_line: string | null
+  role: string | null
+  twitch_url: string | null
+  twitter_url: string | null
+  sort_order: number
 }
 
-type MatchParticipant = {
+interface PlayerRiotState {
+  puuid: string
+  profile_icon_id: number | null
+  summoner_level: number | null
+  last_rank_sync_at: string | null
+}
+
+interface PlayerRankSnapshot {
+  puuid: string
+  queue_type: string
+  tier: string | null
+  rank: string | null
+  league_points: number | null
+  wins: number | null
+  losses: number | null
+  fetched_at: string | null
+}
+
+interface Game {
+  matchId: string
+  puuid: string
+  championId: number
+  win: boolean
+  k: number
+  d: number
+  a: number
+  cs: number
+  endTs?: number
+  durationS?: number
+  queueId?: number
+  lpChange?: number | null
+  lpNote?: string | null
+  endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
+}
+
+interface MatchParticipant {
+  matchId: string
+  puuid: string
+  championId: number
+  kills: number
+  deaths: number
+  assists: number
+  cs: number
+  win: boolean
+}
+
+// Database Response Types
+interface RankCutoffRaw {
+  queue_type: string
+  tier: string
+  cutoff_lp: number
+}
+
+interface LatestMatchRaw {
+  match_id: string
+  fetched_at: string
+  game_end_ts: number | null
+}
+
+interface LpEventRaw {
+  match_id: string
+  puuid: string
+  lp_delta: number | null
+  note: string | null
+}
+
+interface MatchParticipantRaw {
   match_id: string
   puuid: string
   champion_id: number
@@ -29,704 +100,381 @@ type MatchParticipant = {
   win: boolean
 }
 
-type MatchRow = {
-  match_id: string
-  game_duration_s: number | null
-  game_end_ts: number | null
-}
-
-type StatTotals = {
-  games: number
-  wins: number
-  losses: number
-  kills: number
-  deaths: number
-  assists: number
-  cs: number
-  durationS: number
-}
-
-// Types expected by ChampionTable
-type ChampionPlayerRow = {
+interface PlayerBasicRaw {
   puuid: string
-  name: string
-  iconUrl: string | null
-  games: number
-  wins: number
-  losses: number
-  winrate: string
-  kda: { value: number; label: string }
-  avgCs: number
-}
-
-type ChampionRow = {
-  id: number
-  name: string
-  iconUrl: string | null
-  wins: number
-  losses: number
-  winrate: string
-  winrateValue: number
-  games: number
-  kdaLabel: string
-  kdaValue: number
-  avgCs: number
-  players: ChampionPlayerRow[]
+  game_name: string | null
+  tag_line: string | null
 }
 
 // --- Helpers ---
 
-function displayRiotId(player: Player) {
-  const gn = (player.game_name ?? '').trim()
-  if (gn) return gn
-  return player.puuid
+async function safeDb<T>(query: Promise<{ data: T | null; error: any }> | any, fallback: T): Promise<T> {
+  const { data, error } = await query
+  if (error) {
+    console.error('Database Error:', error)
+    return fallback
+  }
+  return (data as T) ?? fallback
 }
 
-function profileIconUrl(profileIconId?: number | null, ddVersion?: string) {
-  if (!profileIconId && profileIconId !== 0) return null
-  const v = ddVersion || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-  return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
+function computeEndType({
+  gameEndedInEarlySurrender,
+  gameEndedInSurrender,
+  gameDurationS,
+  lpChange,
+}: {
+  gameEndedInEarlySurrender?: boolean | null
+  gameEndedInSurrender?: boolean | null
+  gameDurationS?: number
+  lpChange?: number | null
+}): 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' {
+  const normalizedLpChange = typeof lpChange === 'number' && Number.isFinite(lpChange) ? lpChange : null
+
+  if (gameEndedInEarlySurrender === true) {
+    if (typeof gameDurationS === 'number') {
+      return gameDurationS <= 210 ? 'REMAKE' : 'EARLY_SURRENDER'
+    }
+    if (normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
+    return 'REMAKE'
+  }
+
+  if (gameEndedInSurrender === true) return 'SURRENDER'
+
+  if (typeof gameDurationS === 'number') {
+    if (gameDurationS <= 210 && (normalizedLpChange === null || normalizedLpChange === 0)) return 'REMAKE'
+    if (gameDurationS <= 300 && normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
+  }
+
+  return 'NORMAL'
 }
 
-function formatWinrate(wins: number, games: number) {
-  if (!games) return '0%'
-  return `${Math.round((wins / games) * 100)}%`
-}
-
-function formatAverageKda(kills: number, assists: number, deaths: number) {
-  // Prevent division by zero and handle negative numbers gracefully
-  const safeDeaths = Math.max(1, deaths)
-  const kda = (Math.max(0, kills) + Math.max(0, assists)) / safeDeaths
-  return { value: kda, label: kda.toFixed(2) }
+function makeLpKey(matchId: string, puuid: string): string {
+  return `${matchId}-${puuid}`
 }
 
 // --- Components ---
 
-function TeamHeaderCard({
-  name,
-  description,
-  visibility,
-  cutoffs,
-  bannerUrl,
-  actionHref,
-  actionLabel,
-  secondaryActionHref,
-  secondaryActionLabel,
-}: {
-  name: string
-  description?: string | null
-  visibility: string
-  cutoffs: Array<{ label: string; lp: number; icon: string }>
-  bannerUrl: string | null
-  actionHref: string
-  actionLabel: string
-  secondaryActionHref?: string
-  secondaryActionLabel?: string
-}) {
-  return (
+function TeamHeaderCard({ name, description, visibility, bannerUrl, actionHref, actionLabel, secondaryActionHref, secondaryActionLabel, cutoffs }: any) {
+    return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
       <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
-
-      {bannerUrl && (
-        <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" />
-        </div>
-      )}
-
+      {bannerUrl && <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800"><img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" /></div>}
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
           <div className="flex flex-wrap items-center gap-2.5 mb-6">
-            <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
-              {visibility}
-            </span>
-            {actionHref && actionLabel && (
-              <Link
-                href={actionHref}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 17l6-6 4 4 7-7" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 21h18" />
-                </svg>
-                {actionLabel}
-              </Link>
-            )}
-            {secondaryActionHref && secondaryActionLabel && (
-              <Link
-                href={secondaryActionHref}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16l4-4 4 4" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 8l4 4 4-4" />
-                </svg>
-                {secondaryActionLabel}
-              </Link>
-            )}
+            <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">{visibility}</span>
+            {actionHref && actionLabel && <><Link href={actionHref} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500">{actionLabel}</Link>{secondaryActionHref && <Link href={secondaryActionHref} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500">{secondaryActionLabel}</Link>}</>}
           </div>
-
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
-            {name}
-          </h1>
-          {description && (
-            <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">
-              {description}
-            </p>
-          )}
+          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
+          {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
         </div>
-
-        {cutoffs.length > 0 && (
+        {cutoffs && cutoffs.length > 0 && (
           <div className="bg-gradient-to-br from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-6 lg:p-8 lg:w-80 flex flex-col justify-center gap-5 dark:from-slate-950 dark:to-slate-900 dark:border-slate-800">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" />
-              <div className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Rank Cutoffs
-              </div>
-            </div>
-            {cutoffs.map((c) => (
-              <div
-                key={c.label}
-                className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" />
-                <div className="flex-1">
-                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wide dark:text-slate-400">
-                    {c.label}
-                  </div>
-                  <div className="text-lg font-black text-slate-900 dark:text-slate-100">{c.lp} LP</div>
-                </div>
-              </div>
-            ))}
+            <div className="flex items-center gap-2"><div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" /><div className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Rank Cutoffs</div></div>
+            {cutoffs.map((c: any) => (<div key={c.label} className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"><img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" /><div className="flex-1"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide dark:text-slate-400">{c.label}</div><div className="text-lg font-black text-slate-900 dark:text-slate-100">{c.lp} LP</div></div></div>))}
           </div>
         )}
       </div>
     </div>
-  )
+    )
 }
 
-export default async function LeaderboardStatsPage({ params }: { params: Promise<{ slug: string }> }) {
+// --- Main Page Component ---
+
+export default async function LeaderboardDetail({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
   const { slug } = await params
   const supabase = await createClient()
 
   const latestPatch = await getLatestDdragonVersion()
   const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-  const champMap = await getChampionMap(ddVersion)
 
+  // Fetch Leaderboard Metadata
   const { data: lb } = await supabase
     .from('leaderboards')
-    .select('id, user_id, name, visibility, banner_url, description')
+    .select('id, user_id, name, description, visibility, banner_url, updated_at')
     .eq('slug', slug)
     .maybeSingle()
 
   if (!lb) notFound()
 
-  if (lb.visibility === 'PRIVATE') {
-    // Better auth check: check error or user mismatch explicitly
-    const { data, error } = await supabase.auth.getUser()
-    if (error || !data.user || data.user.id !== lb.user_id) {
-      notFound()
+  if ((lb.visibility as Visibility) === 'PRIVATE') {
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user || user.id !== lb.user_id) notFound()
+  }
+
+  // Phase 1: Discovery (Parallel Fetch)
+  const [
+    champMap,
+    playersRaw,
+    cutsRaw,
+    latestRaw
+  ] = await Promise.all([
+    getChampionMap(ddVersion).catch(() => ({})), 
+    safeDb(supabase
+      .from('leaderboard_players')
+      .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
+      .eq('leaderboard_id', lb.id)
+      .order('sort_order', { ascending: true })
+      .limit(50), [] as Player[]
+    ),
+    safeDb(supabase
+      .from('rank_cutoffs')
+      .select('queue_type, tier, cutoff_lp')
+      .in('tier', ['GRANDMASTER', 'CHALLENGER']), [] as RankCutoffRaw[]
+    ),
+    safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 }), [] as any[])
+  ])
+
+  const players: Player[] = playersRaw
+  const top50Puuids = players.map((p) => p.puuid).filter(Boolean)
+  const top50Set = new Set(top50Puuids)
+
+  // Process Latest Games to find ALL PUUIDs involved
+  const latestMatchIds: string[] = []
+  const seenMatchIds = new Set<string>()
+  const gamePuuids = new Set<string>()
+
+  if (latestRaw) {
+    for (const row of latestRaw) {
+      if (row.match_id && !seenMatchIds.has(row.match_id)) {
+        seenMatchIds.add(row.match_id)
+        latestMatchIds.push(row.match_id)
+      }
+      if (row.puuid) gamePuuids.add(row.puuid)
     }
   }
 
-  const { data: playersRaw } = await supabase
-    .from('leaderboard_players')
-    .select('id, puuid, game_name, tag_line')
-    .eq('leaderboard_id', lb.id)
-    .order('sort_order', { ascending: true })
-    .limit(500)
+  const missingPuuids = Array.from(gamePuuids).filter(p => !top50Set.has(p))
+  const allRelevantPuuids = Array.from(new Set([...top50Puuids, ...Array.from(gamePuuids)]))
 
-  const players = (playersRaw ?? []) as Player[]
-  const puuids = players.map((p) => p.puuid)
+  const seasonStartIso = '2025-01-08T20:00:00.000Z'
+  const seasonStartMsLatest = new Date(seasonStartIso).getTime()
 
-  const { data: cutoffsRaw } = await supabase
-    .from('rank_cutoffs')
-    .select('queue_type, tier, cutoff_lp')
-    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+  // Phase 2: Enrichment (Parallel Fetch)
+  const [
+    statesRaw,
+    ranksRaw,
+    champsRaw,
+    missingPlayersRaw,
+    latestMatchesRaw,
+    lpEventsRaw,
+    matchParticipantsRaw
+  ] = await Promise.all([
+    safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[]),
+    safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[]),
+    safeDb(supabase.from('player_top_champions').select('*').in('puuid', top50Puuids), [] as any[]),
+    missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[]) : [],
+    latestMatchIds.length > 0 ? safeDb(supabase.from('matches').select('match_id, fetched_at, game_end_ts').in('match_id', latestMatchIds).gte('fetched_at', seasonStartIso).gte('game_end_ts', seasonStartMsLatest), [] as LatestMatchRaw[]) : [],
+    latestMatchIds.length > 0 ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[]) : [],
+    latestMatchIds.length > 0 ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[]) : []
+  ])
 
-  const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
+  // --- Processing Data ---
 
-  const cutoffsDisplay = [
-    { key: 'GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
-    { key: 'CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
-  ]
-    .map((item) => ({
-      label: item.label,
-      lp: cutoffsByTier.get(item.key),
-      icon: item.icon,
-    }))
-    .filter((item) => item.lp !== undefined) as Array<{ label: string; lp: number; icon: string }>
-
-  if (puuids.length === 0) {
-    return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-        <div className="mx-auto max-w-6xl px-4 py-10 space-y-8">
-          <TeamHeaderCard
-            name={lb.name}
-            description={lb.description}
-            visibility={lb.visibility}
-            cutoffs={cutoffsDisplay}
-            bannerUrl={lb.banner_url}
-            actionHref={`/lb/${slug}`}
-            actionLabel="Back to leaderboard"
-            secondaryActionHref={`/lb/${slug}/graph`}
-            secondaryActionLabel="View graph"
-          />
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            No players found for this leaderboard yet.
-          </div>
-        </div>
-      </main>
-    )
-  }
-
-  const seasonStartMs = new Date(process.env.NEXT_PUBLIC_SEASON_START || FALLBACK_SEASON_START).getTime()
-
-  const { data: stateRaw } = await supabase
-    .from('player_riot_state')
-    .select('puuid, profile_icon_id')
-    .in('puuid', puuids)
-
-  const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
-
-  const { data: participantsRaw } = await supabase
-    .from('match_participants')
-    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win')
-    .in('puuid', puuids)
-
-  const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id)))
-
-  // ✅ BATCHED QUERY FIX: Fetch matches in chunks to avoid URL length limits
-  const matchesRaw: MatchRow[] = []
-  const BATCH_SIZE = 500
+  // 1. Merge Players
+  const allPlayersMap = new Map<string, Player | Partial<Player>>()
+  players.forEach(p => allPlayersMap.set(p.puuid, p))
   
-  if (matchIds.length > 0) {
-    for (let i = 0; i < matchIds.length; i += BATCH_SIZE) {
-      const batch = matchIds.slice(i, i + BATCH_SIZE)
-      const { data } = await supabase
-        .from('matches')
-        .select('match_id, game_duration_s, game_end_ts')
-        .in('match_id', batch)
-      
-      if (data) {
-        matchesRaw.push(...data)
+  missingPlayersRaw.forEach((p) => {
+    if (!allPlayersMap.has(p.puuid)) {
+      allPlayersMap.set(p.puuid, { 
+        ...p, 
+        id: p.puuid, 
+        role: null, 
+        twitch_url: null, 
+        twitter_url: null, 
+        sort_order: 999 
+      })
+    }
+  })
+
+  // 2. Process States
+  const stateBy = new Map<string, PlayerRiotState>()
+  let lastUpdatedIso: string | null = null
+  let maxLastUpdatedTs = 0
+
+  for (const s of statesRaw) {
+    stateBy.set(s.puuid, s)
+    if (s.last_rank_sync_at) {
+      const ts = new Date(s.last_rank_sync_at).getTime()
+      if (ts > maxLastUpdatedTs) {
+        maxLastUpdatedTs = ts
+        lastUpdatedIso = s.last_rank_sync_at
       }
     }
   }
 
-  // Build match Map with CLIENT-SIDE filtering
-  const matchById = new Map<string, { durationS: number; endTs: number }>()
-  
-  for (const row of matchesRaw) {
-    const endTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
-    
-    // ✅ Filter applied here in JavaScript to be safe against BigInt issues
-    if (!endTs || endTs < seasonStartMs) continue
+  // 3. Process Ranks
+  const rankBy = new Map<string, PlayerRankSnapshot | null>()
+  const seasonStartRaw = process.env.RANKED_SEASON_START
+  const seasonStartMs = seasonStartRaw ? new Date(seasonStartRaw).getTime() : 0
+  const queuesByPuuid = new Map<string, { solo: any; flex: any }>()
 
-    matchById.set(row.match_id, {
-      durationS: typeof row.game_duration_s === 'number' ? row.game_duration_s : 0,
-      endTs,
-    })
-  }
-
-  // Type assertion verified by previous query logic
-  const participants = (participantsRaw ?? []).filter((row) => matchById.has(row.match_id)) as MatchParticipant[]
-
-  const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
-
-  const totals: StatTotals = {
-    games: 0,
-    wins: 0,
-    losses: 0,
-    kills: 0,
-    deaths: 0,
-    assists: 0,
-    cs: 0,
-    durationS: 0,
-  }
-
-  const playersTotals = new Map<string, StatTotals>()
-  const championsTotals = new Map<number, StatTotals>()
-  const championPlayers = new Map<number, Map<string, StatTotals>>()
-
-  for (const row of participants) {
-    const matchMeta = matchById.get(row.match_id)!
-    const durationS = matchMeta.durationS
-    const winVal = row.win ? 1 : 0
-    const lossVal = 1 - winVal
-
-    totals.games += 1
-    totals.wins += winVal
-    totals.losses += lossVal
-    totals.kills += row.kills
-    totals.deaths += row.deaths
-    totals.assists += row.assists
-    totals.cs += row.cs
-    totals.durationS += durationS
-
-    let playerTotal = playersTotals.get(row.puuid)
-    if (!playerTotal) {
-      playerTotal = { games: 0, wins: 0, losses: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
-      playersTotals.set(row.puuid, playerTotal)
-    }
-    playerTotal.games += 1
-    playerTotal.wins += winVal
-    playerTotal.losses += lossVal
-    playerTotal.kills += row.kills
-    playerTotal.deaths += row.deaths
-    playerTotal.assists += row.assists
-    playerTotal.cs += row.cs
-    playerTotal.durationS += durationS
-
-    let champTotal = championsTotals.get(row.champion_id)
-    if (!champTotal) {
-      champTotal = { games: 0, wins: 0, losses: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
-      championsTotals.set(row.champion_id, champTotal)
-    }
-    champTotal.games += 1
-    champTotal.wins += winVal
-    champTotal.losses += lossVal
-    champTotal.kills += row.kills
-    champTotal.deaths += row.deaths
-    champTotal.assists += row.assists
-    champTotal.cs += row.cs
-
-    let champPlayers = championPlayers.get(row.champion_id)
-    if (!champPlayers) {
-      champPlayers = new Map<string, StatTotals>()
-      championPlayers.set(row.champion_id, champPlayers)
-    }
-    let champPlayer = champPlayers.get(row.puuid)
-    if (!champPlayer) {
-      champPlayer = { games: 0, wins: 0, losses: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
-      champPlayers.set(row.puuid, champPlayer)
-    }
-    champPlayer.games += 1
-    champPlayer.wins += winVal
-    champPlayer.losses += lossVal
-    champPlayer.kills += row.kills
-    champPlayer.deaths += row.deaths
-    champPlayer.assists += row.assists
-    champPlayer.cs += row.cs
-    champPlayer.durationS += durationS
-  }
-
-  const championLeaderboard = Array.from(championsTotals.entries()).map(([championId, stats]) => {
-    const champion = champMap[championId]
-    const kda = formatAverageKda(stats.kills, stats.assists, stats.deaths)
-    const avgCs = stats.games ? stats.cs / stats.games : 0
-    const winrateValue = stats.games ? stats.wins / stats.games : 0
-
-    const playersStats: ChampionPlayerRow[] = Array.from(championPlayers.get(championId)?.entries() ?? []).map(([puuid, values]) => {
-      const player = playersByPuuid.get(puuid)
-      const playerKda = formatAverageKda(values.kills, values.assists, values.deaths)
-      const playerAvgCs = values.games ? values.cs / values.games : 0
-      return {
-        puuid,
-        name: player ? displayRiotId(player) : puuid,
-        iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
-        games: values.games,
-        wins: values.wins,
-        losses: values.losses,
-        winrate: formatWinrate(values.wins, values.games),
-        kda: playerKda,
-        avgCs: playerAvgCs,
+  for (const r of ranksRaw) {
+    if (r.fetched_at && (!seasonStartMs || new Date(r.fetched_at).getTime() >= seasonStartMs)) {
+      let entry = queuesByPuuid.get(r.puuid)
+      if (!entry) {
+        entry = { solo: null, flex: null }
+        queuesByPuuid.set(r.puuid, entry)
       }
-    })
-
-    playersStats.sort((a, b) => b.games - a.games)
-
-    return {
-      championId,
-      championName: champion?.name ?? 'Unknown',
-      championKey: champion?.id ?? null,
-      games: stats.games,
-      wins: stats.wins,
-      losses: stats.losses,
-      winrate: formatWinrate(stats.wins, stats.games),
-      winrateValue,
-      kda,
-      avgCs,
-      players: playersStats,
+      if (r.queue_type === 'RANKED_SOLO_5x5') entry.solo = r
+      else if (r.queue_type === 'RANKED_FLEX_SR') entry.flex = r
     }
-  })
+  }
 
-  championLeaderboard.sort((a, b) => {
-    if (b.winrateValue !== a.winrateValue) return b.winrateValue - a.winrateValue
-    if (b.games !== a.games) return b.games - a.games
-    if (b.kda.value !== a.kda.value) return b.kda.value - a.kda.value
-    return b.avgCs - a.avgCs
-  })
-
-  // Explicit type annotation for championTableRows
-  const championTableRows: ChampionRow[] = championLeaderboard.map((champ) => ({
-    id: champ.championId,
-    name: champ.championName,
-    iconUrl: champ.championKey ? championIconUrl(ddVersion, champ.championKey) : null,
-    wins: champ.wins,
-    losses: champ.losses,
-    winrate: champ.winrate,
-    winrateValue: champ.winrateValue,
-    games: champ.games,
-    kdaLabel: champ.kda.label,
-    kdaValue: champ.kda.value,
-    avgCs: champ.avgCs,
-    players: champ.players,
-  }))
-
-  const playerLeaderboard = Array.from(playersTotals.entries()).map(([puuid, stats]) => {
-    const player = playersByPuuid.get(puuid)
-    const kda = formatAverageKda(stats.kills, stats.assists, stats.deaths)
-    return {
-      puuid,
-      name: player ? displayRiotId(player) : puuid,
-      iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
-      ...stats,
-      winrate: formatWinrate(stats.wins, stats.games),
-      kda,
-    }
-  })
-
-  const topKills = [...playerLeaderboard].sort((a, b) => b.kills - a.kills).slice(0, 5)
-  const topDeaths = [...playerLeaderboard].sort((a, b) => b.deaths - a.deaths).slice(0, 5)
-  const topAssists = [...playerLeaderboard].sort((a, b) => b.assists - a.assists).slice(0, 5)
-  const topKdaPlayers = [...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value).slice(0, 5)
-  const topWinratePlayers = [...playerLeaderboard].sort((a, b) => b.wins / b.games - a.wins / a.games).slice(0, 5)
-  const topTotalTime = [...playerLeaderboard].sort((a, b) => b.durationS - a.durationS).slice(0, 5)
-
-  const topKillsSingle = [...participants].sort((a, b) => b.kills - a.kills).slice(0, 3)
-  const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
-  const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
-  const topCsSingle = [...participants].sort((a, b) => b.cs - a.cs).slice(0, 3)
-
-  const participantsByMatch = new Map<string, MatchParticipant[]>()
-  for (const row of participants) {
-    const matchParticipants = participantsByMatch.get(row.match_id)
-    if (matchParticipants) {
-      matchParticipants.push(row)
+  for (const pid of allRelevantPuuids) {
+    const entry = queuesByPuuid.get(pid)
+    if (entry) {
+      rankBy.set(pid, entry.solo ?? entry.flex ?? null)
     } else {
-      participantsByMatch.set(row.match_id, [row])
+      rankBy.set(pid, null)
     }
   }
 
-  const longestMatches = Array.from(matchById.entries())
-    .map(([matchId, meta]) => {
-      const matchParticipants = participantsByMatch.get(matchId) ?? []
-      const representative = matchParticipants[0]
-      const player = representative ? playersByPuuid.get(representative.puuid) : null
-      return {
-        matchId,
-        durationS: meta.durationS,
-        endTs: meta.endTs,
-        playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
-        playerIconUrl: representative
-          ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
-          : null,
-      }
-    })
-    .filter((match) => match.durationS > 0)
-    .sort((a, b) => b.durationS - a.durationS)
-    .slice(0, 5)
+  // 4. Sort Top 50 Players
+  const playersSorted = [...players].sort((a, b) => {
+    const rankA = rankBy.get(a.puuid)
+    const rankB = rankBy.get(b.puuid)
+    return compareRanks(rankA ?? undefined, rankB ?? undefined)
+  })
 
-  const noGames = participants.length === 0
+  // 5. Process Champs
+  const champsBy = new Map<string, any[]>()
+  for (const c of champsRaw) {
+    let arr = champsBy.get(c.puuid)
+    if (!arr) {
+      arr = []
+      champsBy.set(c.puuid, arr)
+    }
+    arr.push(c)
+  }
+  for (const arr of champsBy.values()) {
+    arr.sort((a: any, b: any) => b.games - a.games)
+  }
+
+  // 6. Process Cutoffs
+  const cutoffsMap = new Map<string, number>()
+  for (const c of cutsRaw) cutoffsMap.set(`${c.queue_type}::${c.tier}`, c.cutoff_lp)
+
+  const cutoffs = [
+    { key: 'RANKED_SOLO_5x5::CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
+    { key: 'RANKED_SOLO_5x5::GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
+  ].map((i) => ({ label: i.label, lp: cutoffsMap.get(i.key) as number, icon: i.icon })).filter((x) => x.lp !== undefined)
+
+  // 7. Assemble Latest Games
+  const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
+  const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => allowedMatchIds.has(row.match_id))
+
+  const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
+  for (const row of lpEventsRaw) {
+    if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
+      lpByMatchAndPlayer.set(makeLpKey(row.match_id, row.puuid), { delta: row.lp_delta, note: row.note ?? null })
+    }
+  }
+
+  const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
+    const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
+    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+    const durationS = row.game_duration_s ?? row.gameDuration
+    
+    return {
+      matchId: row.match_id,
+      puuid: row.puuid,
+      championId: row.champion_id,
+      win: row.win,
+      k: row.kills ?? 0,
+      d: row.deaths ?? 0,
+      a: row.assists ?? 0,
+      cs: row.cs ?? 0,
+      endTs: row.game_end_ts,
+      durationS,
+      queueId: row.queue_id,
+      lpChange,
+      lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+      endType: computeEndType({
+        gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
+        gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
+        gameDurationS: durationS,
+        lpChange,
+      }),
+    }
+  })
+
+  // 8. Match Participants Map
+  const participantsByMatch = new Map<string, MatchParticipant[]>()
+  for (const row of matchParticipantsRaw) {
+    if (!row.match_id || !row.puuid) continue
+    const entry: MatchParticipant = {
+      matchId: row.match_id,
+      puuid: row.puuid,
+      championId: row.champion_id ?? 0,
+      kills: row.kills ?? 0,
+      deaths: row.deaths ?? 0,
+      assists: row.assists ?? 0,
+      cs: row.cs ?? 0,
+      win: row.win ?? false,
+    }
+    const list = participantsByMatch.get(entry.matchId)
+    if (list) list.push(entry)
+    else participantsByMatch.set(entry.matchId, [entry])
+  }
+
+  // 9. Prepare Client Props
+  // ✅ FIX: Force cast strict record for component compatibility
+  const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
+  const rankByPuuidRecord = Object.fromEntries(rankBy.entries())
+  const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
+
+  const playerCards = playersSorted.map((player, idx) => ({
+    player,
+    index: idx + 1,
+    rankData: rankBy.get(player.puuid) ?? null,
+    stateData: stateBy.get(player.puuid) ?? null,
+    topChamps: champsBy.get(player.puuid) ?? [],
+  }))
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
+      <div className="mx-auto max-w-7xl px-4 py-8 lg:py-12 space-y-10 lg:space-y-12">
         <TeamHeaderCard
           name={lb.name}
           description={lb.description}
           visibility={lb.visibility}
-          cutoffs={cutoffsDisplay}
+          lastUpdated={lastUpdatedIso}
+          cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
-          actionHref={`/lb/${slug}`}
-          actionLabel="Back to leaderboard"
-          secondaryActionHref={`/lb/${slug}/graph`}
-          secondaryActionLabel="View graph"
+          actionHref={`/lb/${slug}/graph`}
+          actionLabel="View graph"
+          secondaryActionHref={`/lb/${slug}/stats`}
+          secondaryActionLabel="View stats"
         />
 
-        {noGames ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            No games found for this leaderboard yet (current season).
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
+          <aside className="lg:col-span-3 lg:sticky lg:top-6 order-2 lg:order-1">
+            <div className="flex items-center gap-2 mb-5">
+              <div className="h-1 w-6 bg-gradient-to-r from-blue-400 to-blue-600 rounded-full" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Latest Activity</h3>
+            </div>
+            <LatestGamesFeedClient
+              games={latestGames}
+              playersByPuuid={playersByPuuidRecord}
+              champMap={champMap}
+              ddVersion={ddVersion}
+              rankByPuuid={rankByPuuidRecord}
+              participantsByMatch={participantsByMatchRecord}
+            />
+          </aside>
+
+          <div className="lg:col-span-9 order-1 lg:order-2 space-y-10 lg:space-y-12">
+            <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
           </div>
-        ) : null}
-
-        <section className="grid gap-4 md:grid-cols-3">
-          {[
-            {
-              label: 'Total Games',
-              value: totals.games.toLocaleString(),
-              sub: 'Combined player games',
-            },
-            {
-              label: 'Total Record',
-              value: `${totals.wins}W - ${totals.losses}L`,
-              sub: formatWinrate(totals.wins, totals.games),
-            },
-            {
-              label: 'Total Play Time',
-              value: formatDaysHours(totals.durationS),
-              sub: 'Across all matches',
-            },
-          ].map((card) => (
-            <div
-              key={card.label}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                {card.label}
-              </div>
-              <div className="mt-3 text-3xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
-              <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
-            </div>
-          ))}
-        </section>
-
-        <section className="space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600" />
-            <h2 className="text-sm font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Champion Analytics
-            </h2>
-          </div>
-
-          <details className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-slate-100 px-6 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Unique Champions
-                </div>
-                <div className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                  {championLeaderboard.length}
-                </div>
-              </div>
-              <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Toggle
-              </span>
-            </summary>
-
-            {noGames ? (
-              <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">No champion data yet.</div>
-            ) : (
-              <ChampionTable rows={championTableRows} />
-            )}
-          </details>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-amber-400 to-amber-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Player Accumulative Rankings
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {[
-                { title: 'Most Total Kills', data: topKills, value: (row: typeof topKills[number]) => row.kills },
-                { title: 'Most Total Deaths', data: topDeaths, value: (row: typeof topDeaths[number]) => row.deaths },
-                {
-                  title: 'Most Total Assists',
-                  data: topAssists,
-                  value: (row: typeof topAssists[number]) => row.assists,
-                },
-              ].map((block) => (
-                <div key={block.title}>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    {block.title}
-                  </div>
-                  {block.data.length === 0 ? (
-                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <ol className="mt-2 space-y-1 text-sm">
-                      {block.data.map((row, idx) => (
-                        <li key={row.puuid} className="flex items-center justify-between">
-                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                            <span className="text-slate-400">{idx + 1}.</span>
-                            {row.iconUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={row.iconUrl}
-                                alt=""
-                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                              />
-                            ) : (
-                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                            )}
-                            <span>{row.name}</span>
-                          </span>
-                          <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                            {block.value(row)}
-                          </span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-rose-400 to-rose-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Single Game High Scores
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {[
-                { title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills' },
-                { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
-                { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
-                { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
-              ].map((block) => (
-                <div key={block.title}>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    {block.title}
-                  </div>
-                  {block.data.length === 0 ? (
-                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <ol className="mt-2 space-y-1 text-sm">
-                      {block.data.map((row, idx) => {
-                        const player = playersByPuuid.get(row.puuid)
-                        const iconUrl = profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion)
-                        const champ = champMap[row.champion_id]
-                        return (
-                          <li key={`${row.match_id}-${row.puuid}`} className="flex items-center justify-between">
-                            <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                              <span className="text-slate-400">{idx + 1}.</span>
-                              {iconUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={iconUrl}
-                                  alt=""
-                                  className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                                />
-                              ) : (
-                                <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                              )}
-                              <span>{player ? displayRiotId(player) : row.puuid}</span>
-                              <span className="text-slate-400"> • {champ?.name ?? 'Unknown'}</span>
-                            </span>
-                            <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                              {row[block.key as keyof typeof row]}
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ol>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
+        </div>
       </div>
     </main>
   )
