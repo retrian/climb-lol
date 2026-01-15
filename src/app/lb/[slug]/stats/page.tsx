@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
-import { formatDaysHours, getKdaColor } from '@/lib/formatters'
+import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 import Link from 'next/link'
 import ChampionTable from './ChampionTable'
@@ -98,6 +98,13 @@ function formatAverageKda(kills: number, assists: number, deaths: number) {
   const safeDeaths = Math.max(1, deaths)
   const kda = (Math.max(0, kills) + Math.max(0, assists)) / safeDeaths
   return { value: kda, label: kda.toFixed(2) }
+}
+
+function formatDaysHoursCaps(totalSeconds: number) {
+  const safeSeconds = Number.isFinite(totalSeconds) && totalSeconds > 0 ? totalSeconds : 0
+  const days = Math.floor(safeSeconds / 86400)
+  const hours = Math.floor((safeSeconds % 86400) / 3600)
+  return `${days}D ${hours.toString().padStart(2, '0')}H`
 }
 
 // --- Components ---
@@ -511,24 +518,32 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     }
   }
 
-  const longestMatches = Array.from(matchById.entries())
-    .map(([matchId, meta]) => {
-      const matchParticipants = participantsByMatch.get(matchId) ?? []
-      const representative = matchParticipants[0]
-      const player = representative ? playersByPuuid.get(representative.puuid) : null
-      return {
-        matchId,
-        durationS: meta.durationS,
-        endTs: meta.endTs,
-        playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
-        playerIconUrl: representative
-          ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
-          : null,
-      }
-    })
+  const matchSummaries = Array.from(matchById.entries()).map(([matchId, meta]) => {
+    const matchParticipants = participantsByMatch.get(matchId) ?? []
+    const representative = matchParticipants[0]
+    const player = representative ? playersByPuuid.get(representative.puuid) : null
+    return {
+      matchId,
+      durationS: meta.durationS,
+      endTs: meta.endTs,
+      playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
+      playerIconUrl: representative
+        ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
+        : null,
+    }
+  })
+
+  const longestMatches = matchSummaries
     .filter((match) => match.durationS > 0)
     .sort((a, b) => b.durationS - a.durationS)
     .slice(0, 5)
+
+  const fastestNonFfMatch = matchSummaries
+    .filter((match) => match.durationS >= 900)
+    .sort((a, b) => a.durationS - b.durationS)[0]
+
+  const longestMatch = longestMatches[0]
+  const bestKdaPlayer = topKdaPlayers[0]
 
   const noGames = participants.length === 0
 
@@ -566,8 +581,8 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               sub: formatWinrate(totals.wins, totals.games),
             },
             {
-              label: 'Total Play Time',
-              value: formatDaysHours(totals.durationS),
+              label: 'Total Time Played',
+              value: `${formatDaysHoursCaps(totals.durationS)} (${totals.games} games)`,
               sub: 'Across all matches',
             },
           ].map((card) => (
@@ -579,6 +594,59 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 {card.label}
               </div>
               <div className="mt-3 text-3xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
+              <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
+            </div>
+          ))}
+        </section>
+
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {[
+            {
+              label: 'Most Vision Score in One Game',
+              value: '—',
+              sub: 'Not tracked yet.',
+            },
+            {
+              label: 'Longest Game Length',
+              value: longestMatch ? formatMatchDuration(longestMatch.durationS) : '—',
+              sub: longestMatch ? `By ${longestMatch.playerName}` : 'No data yet.',
+            },
+            {
+              label: 'Fastest Game Length (Non-FF)',
+              value: fastestNonFfMatch ? formatMatchDuration(fastestNonFfMatch.durationS) : '—',
+              sub: fastestNonFfMatch ? `By ${fastestNonFfMatch.playerName}` : 'No data yet.',
+            },
+            {
+              label: 'Best Overall KDA',
+              value: bestKdaPlayer ? (
+                <span className="flex flex-wrap items-baseline gap-2">
+                  <span className="text-slate-900 dark:text-slate-100">{bestKdaPlayer.name}</span>
+                  <span className={getKdaColor(bestKdaPlayer.kda.value)}>{bestKdaPlayer.kda.label} KDA</span>
+                </span>
+              ) : (
+                '—'
+              ),
+              sub: bestKdaPlayer ? `${bestKdaPlayer.kills}/${bestKdaPlayer.deaths}/${bestKdaPlayer.assists}` : 'No data yet.',
+            },
+            {
+              label: 'Highest Damage per Minute',
+              value: '—',
+              sub: 'Not tracked yet.',
+            },
+            {
+              label: 'Most Damage in a Game',
+              value: '—',
+              sub: 'Not tracked yet.',
+            },
+          ].map((card) => (
+            <div
+              key={card.label}
+              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+            >
+              <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                {card.label}
+              </div>
+              <div className="mt-3 text-2xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
               <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
             </div>
           ))}
