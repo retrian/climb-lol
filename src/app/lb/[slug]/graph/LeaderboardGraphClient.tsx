@@ -1,6 +1,7 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { formatRank } from '@/lib/rankFormat'
 
 // --- Types ---
 type PlayerSummary = {
@@ -257,8 +258,8 @@ export default function LeaderboardGraphClient({
     const last = filteredPoints[filteredPoints.length - 1]
     const delta = last.lpValue - first.lpValue
     return {
-      current: `${last.lpValue} LP`,
-      debut: `${first.lpValue} LP`,
+      current: `${formatRank(last.tier, last.rank, last.lp)} (${last.lpValue} LP)`,
+      debut: `${formatRank(first.tier, first.rank, first.lp)} (${first.lpValue} LP)`,
       delta,
       matches: last.totalGames,
     }
@@ -453,6 +454,7 @@ export default function LeaderboardGraphClient({
             <div className="font-semibold text-slate-900">
                 {tooltip.point.totalGames === 0 ? "Placement" : `Game #${tooltip.point.totalGames}`}
             </div>
+            <div>{formatRank(tooltip.point.tier, tooltip.point.rank, tooltip.point.lp)}</div>
             <div>LP: {tooltip.point.lpValue}</div>
             <div>
               LP change{' '}
