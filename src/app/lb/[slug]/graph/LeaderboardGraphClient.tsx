@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { formatRank } from '@/lib/rankFormat'
 
 // --- Types ---
 type PlayerSummary = {
@@ -26,7 +25,7 @@ type RankCutoffs = {
 }
 
 type NormalizedPoint = LpPoint & {
-  ladderLp: number
+  lpValue: number
   ts: number
   totalGames: number
 }
@@ -44,21 +43,6 @@ const PADDING = { top: 40, right: 30, bottom: 50, left: 110 }
 const INNER_WIDTH = WIDTH - PADDING.left - PADDING.right
 const INNER_HEIGHT = HEIGHT - PADDING.top - PADDING.bottom
 
-const TIER_ORDER_LOW_TO_HIGH = [
-  'IRON',
-  'BRONZE',
-  'SILVER',
-  'GOLD',
-  'PLATINUM',
-  'EMERALD',
-  'DIAMOND',
-  'MASTER',
-  'GRANDMASTER',
-  'CHALLENGER',
-] as const
-
-const DIV_ORDER_LOW_TO_HIGH = ['IV', 'III', 'II', 'I'] as const
-
 // --- Helpers ---
 function formatDelta(delta: number) {
   const rounded = Math.round(delta)
@@ -66,96 +50,22 @@ function formatDelta(delta: number) {
   return `${rounded > 0 ? '+' : ''}${rounded}`
 }
 
-function titleCase(value: string) {
-  return value[0] + value.slice(1).toLowerCase()
-}
-
-function baseMasterLadder() {
-  const diamondIndex = TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')
-  return diamondIndex * 400 + 3 * 100 + 100
-}
-
-function ladderLpWithCutoffs(
-  point: Pick<LpPoint, 'tier' | 'rank' | 'lp'>,
-  cutoffs: RankCutoffs
-) {
-  const tier = (point.tier ?? '').toUpperCase()
-  const div = (point.rank ?? '').toUpperCase()
-  const lp = Math.max(0, point.lp ?? 0)
-
-  const tierIndex = TIER_ORDER_LOW_TO_HIGH.indexOf(tier as any)
-  if (tierIndex === -1) return lp
-
-  const divIndex = DIV_ORDER_LOW_TO_HIGH.indexOf(div as any)
-
-  if (tierIndex <= TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')) {
-    const base = tierIndex * 400
-    const divOffset = divIndex === -1 ? 0 : divIndex * 100
-    return base + divOffset + lp
-  }
-
-  const baseMaster = baseMasterLadder()
-
-  if (tier === 'MASTER') {
-    return baseMaster + lp
-  }
-
-  if (tier === 'GRANDMASTER') {
-    return baseMaster + (cutoffs.grandmaster ?? 0) + lp
-  }
-
-  if (tier === 'CHALLENGER') {
-    return baseMaster + (cutoffs.challenger ?? 0) + lp
-  }
-
-  return baseMaster + lp
-}
-
-function buildLadderTicks(minValue: number, maxValue: number, cutoffs: RankCutoffs) {
-  const ticks: Array<{ value: number; label: string }> = []
-  const baseMaster = baseMasterLadder()
+function buildLpTicks(minValue: number, maxValue: number) {
   const min = Math.floor(minValue)
   const max = Math.ceil(maxValue)
+  const range = Math.max(max - min, 1)
+  const roughStep = range / 5
+  const steps = [25, 50, 100, 200, 500, 1000]
+  const step = steps.find((candidate) => candidate >= roughStep) ?? 1000
+  const start = Math.floor(min / step) * step
+  const ticks: Array<{ value: number; label: string }> = []
 
-  const diamondIndex = TIER_ORDER_LOW_TO_HIGH.indexOf('DIAMOND')
-  for (let tierIndex = 0; tierIndex <= diamondIndex; tierIndex += 1) {
-    for (let divIndex = 0; divIndex < DIV_ORDER_LOW_TO_HIGH.length; divIndex += 1) {
-      const value = tierIndex * 400 + divIndex * 100
-      if (value < min || value > max) continue
-      ticks.push({
-        value,
-        label: `${titleCase(TIER_ORDER_LOW_TO_HIGH[tierIndex])} ${DIV_ORDER_LOW_TO_HIGH[divIndex]}`,
-      })
-    }
+  for (let value = start; value <= max; value += step) {
+    if (value < min) continue
+    ticks.push({ value, label: `${value} LP` })
   }
 
-  const masterCap = baseMaster + (cutoffs.grandmaster ?? 0)
-  const grandmasterCap = baseMaster + (cutoffs.challenger ?? 0)
-
-  const pushRange = (start: number, end: number, label: string) => {
-    const startValue = Math.ceil(start / 50) * 50
-    for (let value = startValue; value <= end; value += 50) {
-      if (value < min || value > max) continue
-      ticks.push({ value, label: `${label} ${value - start} LP` })
-    }
-  }
-
-  if (max >= baseMaster) {
-    pushRange(baseMaster, Math.min(masterCap, max), 'Master')
-    pushRange(masterCap, Math.min(grandmasterCap, max), 'Grandmaster')
-    if (max > grandmasterCap) {
-      pushRange(grandmasterCap, max, 'Challenger')
-    }
-  }
-
-  const unique = new Map<number, string>()
-  for (const tick of ticks) {
-    if (!unique.has(tick.value)) unique.set(tick.value, tick.label)
-  }
-
-  return Array.from(unique.entries())
-    .map(([value, label]) => ({ value, label }))
-    .sort((a, b) => a.value - b.value)
+  return ticks
 }
 
 function buildSmoothPath(points: Array<{ x: number; y: number }>) {
@@ -200,13 +110,13 @@ export default function LeaderboardGraphClient({
         if (Number.isNaN(ts)) return null
         return {
           ...p,
-          ladderLp: ladderLpWithCutoffs(p, cutoffs),
+          lpValue: Math.max(0, p.lp ?? 0),
           ts,
           totalGames: (p.wins ?? 0) + (p.losses ?? 0),
         }
       })
       .filter((p): p is NormalizedPoint => p !== null)
-  }, [cutoffs, points])
+  }, [points])
 
   const pointsByPlayer = useMemo(() => {
     const byPlayer = new Map<string, NormalizedPoint[]>()
@@ -233,7 +143,7 @@ export default function LeaderboardGraphClient({
 
         // Logic Fix: Capture update if Games increased OR if LP changed (e.g. decay)
         const gamesChanged = point.totalGames > lastPoint.totalGames
-        const lpChanged = point.ladderLp !== lastPoint.ladderLp
+        const lpChanged = point.lpValue !== lastPoint.lpValue
 
         if (gamesChanged || lpChanged) {
             processed.push(point)
@@ -251,13 +161,12 @@ export default function LeaderboardGraphClient({
 
   const chart = useMemo(() => {
     if (filteredPoints.length === 0) return null
-    const ladderValues = filteredPoints.map((p) => p.ladderLp)
-    const rawMin = Math.min(...ladderValues)
-    const rawMax = Math.max(...ladderValues)
+    const ladderValues = filteredPoints.map((p) => p.lpValue)
+    const rawMin = Math.min(...ladderValues, cutoffs.grandmaster, cutoffs.challenger)
+    const rawMax = Math.max(...ladderValues, cutoffs.grandmaster, cutoffs.challenger)
 
-    const baseMaster = baseMasterLadder()
-    const bottomPadding = rawMin >= baseMaster ? 20 : 100
-    const topPadding = rawMax >= baseMaster ? 20 : 100
+    const bottomPadding = 20
+    const topPadding = 20
 
     const min = rawMin - bottomPadding
     const max = rawMax + topPadding
@@ -267,7 +176,7 @@ export default function LeaderboardGraphClient({
       max,
       range: max - min || 1,
     }
-  }, [filteredPoints])
+  }, [cutoffs, filteredPoints])
 
   const firstMatch = filteredPoints.length > 0 ? filteredPoints[0].totalGames : 1
   const lastMatch = filteredPoints.length > 0 ? filteredPoints[filteredPoints.length - 1].totalGames : 1
@@ -278,15 +187,34 @@ export default function LeaderboardGraphClient({
     return filteredPoints.map((point) => {
       const normalizedX = (point.totalGames - firstMatch) / matchRange
       const x = PADDING.left + normalizedX * INNER_WIDTH
-      const y = PADDING.top + INNER_HEIGHT - ((point.ladderLp - chart.min) / chart.range) * INNER_HEIGHT
+      const y = PADDING.top + INNER_HEIGHT - ((point.lpValue - chart.min) / chart.range) * INNER_HEIGHT
       return { x, y, point }
     })
   }, [chart, filteredPoints, firstMatch, matchRange])
 
-  const ladderTicks = useMemo(() => {
-    if (!chart) return []
-    return buildLadderTicks(chart.min, chart.max, cutoffs)
+  const cutoffPositions = useMemo(() => {
+    if (!chart) return null
+    const clamp = (value: number) => Math.min(chart.max, Math.max(chart.min, value))
+    const gmValue = clamp(cutoffs.grandmaster)
+    const challValue = clamp(cutoffs.challenger)
+    const gmY = PADDING.top + INNER_HEIGHT - ((gmValue - chart.min) / chart.range) * INNER_HEIGHT
+    const challY = PADDING.top + INNER_HEIGHT - ((challValue - chart.min) / chart.range) * INNER_HEIGHT
+    const topY = PADDING.top
+    const bottomY = PADDING.top + INNER_HEIGHT
+    return {
+      gmY,
+      challY,
+      topY,
+      bottomY,
+      upperY: Math.min(gmY, challY),
+      lowerY: Math.max(gmY, challY),
+    }
   }, [chart, cutoffs])
+
+  const lpTicks = useMemo(() => {
+    if (!chart) return []
+    return buildLpTicks(chart.min, chart.max)
+  }, [chart])
 
   const xTicks = useMemo(() => {
     if (filteredPoints.length === 0) return []
@@ -327,10 +255,10 @@ export default function LeaderboardGraphClient({
     if (filteredPoints.length === 0) return null
     const first = filteredPoints[0]
     const last = filteredPoints[filteredPoints.length - 1]
-    const delta = last.ladderLp - first.ladderLp
+    const delta = last.lpValue - first.lpValue
     return {
-      current: formatRank(last.tier, last.rank, last.lp),
-      debut: formatRank(first.tier, first.rank, first.lp),
+      current: `${last.lpValue} LP`,
+      debut: `${first.lpValue} LP`,
       delta,
       matches: last.totalGames,
     }
@@ -381,7 +309,36 @@ export default function LeaderboardGraphClient({
                 className="fill-white"
               />
 
-              {ladderTicks.map((tick) => {
+              {cutoffPositions ? (
+                <>
+                  <rect
+                    x={PADDING.left}
+                    y={cutoffPositions.topY}
+                    width={INNER_WIDTH}
+                    height={Math.max(0, cutoffPositions.upperY - cutoffPositions.topY)}
+                    className="fill-rose-50"
+                    opacity={0.35}
+                  />
+                  <rect
+                    x={PADDING.left}
+                    y={cutoffPositions.upperY}
+                    width={INNER_WIDTH}
+                    height={Math.max(0, cutoffPositions.lowerY - cutoffPositions.upperY)}
+                    className="fill-amber-50"
+                    opacity={0.35}
+                  />
+                  <rect
+                    x={PADDING.left}
+                    y={cutoffPositions.lowerY}
+                    width={INNER_WIDTH}
+                    height={Math.max(0, cutoffPositions.bottomY - cutoffPositions.lowerY)}
+                    className="fill-emerald-50"
+                    opacity={0.3}
+                  />
+                </>
+              ) : null}
+
+              {lpTicks.map((tick) => {
                 const y = PADDING.top + INNER_HEIGHT - ((tick.value - chart.min) / chart.range) * INNER_HEIGHT
                 return (
                   <g key={`${tick.label}-${tick.value}`}>
@@ -403,6 +360,39 @@ export default function LeaderboardGraphClient({
                   </g>
                 )
               })}
+
+              {cutoffPositions ? (
+                <>
+                  {(['grandmaster', 'challenger'] as const).map((tier) => {
+                    const value = tier === 'grandmaster' ? cutoffs.grandmaster : cutoffs.challenger
+                    const y =
+                      tier === 'grandmaster'
+                        ? cutoffPositions.gmY
+                        : cutoffPositions.challY
+                    const label = tier === 'grandmaster' ? 'GM cutoff (dynamic)' : 'Chall cutoff (dynamic)'
+                    return (
+                      <g key={tier}>
+                        <line
+                          x1={PADDING.left}
+                          x2={WIDTH - PADDING.right}
+                          y1={y}
+                          y2={y}
+                          className="stroke-slate-400"
+                          strokeDasharray="4 4"
+                        />
+                        <text
+                          x={WIDTH - PADDING.right}
+                          y={y - 6}
+                          textAnchor="end"
+                          className="fill-slate-500 text-[10px] font-semibold"
+                        >
+                          {label}
+                        </text>
+                      </g>
+                    )
+                  })}
+                </>
+              ) : null}
 
               {xTicks.map((tick, idx) => (
                 <g key={`${tick.label}-${idx}`}>
@@ -463,15 +453,23 @@ export default function LeaderboardGraphClient({
             <div className="font-semibold text-slate-900">
                 {tooltip.point.totalGames === 0 ? "Placement" : `Game #${tooltip.point.totalGames}`}
             </div>
-            <div>{formatRank(tooltip.point.tier, tooltip.point.rank, tooltip.point.lp)}</div>
+            <div>LP: {tooltip.point.lpValue}</div>
             <div>
               LP change{' '}
               {(() => {
                 const index = filteredPoints.indexOf(tooltip.point)
                 const prev = filteredPoints[index - 1]
                 if (!prev) return '0'
-                return formatDelta(tooltip.point.ladderLp - prev.ladderLp)
+                return formatDelta(tooltip.point.lpValue - prev.lpValue)
               })()}
+            </div>
+            <div>
+              {Math.abs(Math.round(tooltip.point.lpValue - cutoffs.grandmaster))} LP{' '}
+              {tooltip.point.lpValue >= cutoffs.grandmaster ? 'above' : 'below'} GM cutoff
+            </div>
+            <div>
+              {Math.abs(Math.round(tooltip.point.lpValue - cutoffs.challenger))} LP{' '}
+              {tooltip.point.lpValue >= cutoffs.challenger ? 'above' : 'below'} Chall cutoff
             </div>
             {typeof tooltip.point.wins === 'number' && typeof tooltip.point.losses === 'number' ? (
               <div>
