@@ -3,9 +3,9 @@ import { notFound } from 'next/navigation'
 import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
-import Link from 'next/link'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
+import LeaderboardTabs from '@/components/LeaderboardTabs'
 
 // --- Types ---
 
@@ -159,7 +159,7 @@ function makeLpKey(matchId: string, puuid: string): string {
 
 // --- Components ---
 
-function TeamHeaderCard({ name, description, visibility, bannerUrl, actionHref, actionLabel, secondaryActionHref, secondaryActionLabel, cutoffs }: any) {
+function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs }: any) {
     return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
@@ -167,11 +167,10 @@ function TeamHeaderCard({ name, description, visibility, bannerUrl, actionHref, 
       {bannerUrl && <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800"><img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" /></div>}
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
-          <div className="flex flex-wrap items-center gap-2.5 mb-6">
-            <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">{visibility}</span>
-            {actionHref && actionLabel && <><Link href={actionHref} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500">{actionLabel}</Link>{secondaryActionHref && <Link href={secondaryActionHref} className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500">{secondaryActionLabel}</Link>}</>}
+          <div className="mb-4 lg:mb-6">
+            <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
           </div>
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
+          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
         </div>
         {cutoffs && cutoffs.length > 0 && (
@@ -461,14 +460,12 @@ export default async function LeaderboardDetail({
         <TeamHeaderCard
           name={lb.name}
           description={lb.description}
+          slug={slug}
           visibility={lb.visibility}
+          activeTab="overview"
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
-          actionHref={`/lb/${slug}/graph`}
-          actionLabel="View graph"
-          secondaryActionHref={`/lb/${slug}/stats`}
-          secondaryActionLabel="View stats"
         />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
