@@ -159,7 +159,7 @@ function makeLpKey(matchId: string, puuid: string): string {
 
 // --- Components ---
 
-function TeamHeaderCard({ name, description, visibility, bannerUrl, cutoffs }: any) {
+function TeamHeaderCard({ name, description, bannerUrl, cutoffs }: any) {
     return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
@@ -167,10 +167,7 @@ function TeamHeaderCard({ name, description, visibility, bannerUrl, cutoffs }: a
       {bannerUrl && <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800"><img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" /></div>}
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
-          <div className="flex flex-wrap items-center gap-2.5 mb-6">
-            <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">{visibility}</span>
-          </div>
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
+          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
         </div>
         {cutoffs && cutoffs.length > 0 && (
@@ -460,12 +457,11 @@ export default async function LeaderboardDetail({
         <TeamHeaderCard
           name={lb.name}
           description={lb.description}
-          visibility={lb.visibility}
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
         />
-        <LeaderboardTabs slug={slug} activeTab="overview" />
+        <LeaderboardTabs slug={slug} activeTab="overview" visibility={lb.visibility} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
           <aside className="lg:col-span-3 lg:sticky lg:top-6 order-2 lg:order-1">

@@ -43,13 +43,11 @@ function profileIconUrl(profileIconId?: number | null) {
 function TeamHeaderCard({
   name,
   description,
-  visibility,
   cutoffs,
   bannerUrl,
 }: {
   name: string
   description?: string | null
-  visibility: string
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
 }) {
@@ -71,13 +69,7 @@ function TeamHeaderCard({
 
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
-          <div className="flex flex-wrap items-center gap-2.5 mb-6">
-            <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
-              {visibility}
-            </span>
-          </div>
-
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
+          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
             {name}
           </h1>
           {description && (
@@ -171,11 +163,10 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
-            visibility={lb.visibility}
             cutoffs={cutoffsDisplay}
             bannerUrl={lb.banner_url}
           />
-          <LeaderboardTabs slug={slug} activeTab="graph" />
+          <LeaderboardTabs slug={slug} activeTab="graph" visibility={lb.visibility} />
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
             No players found for this leaderboard yet.
           </div>
@@ -217,11 +208,10 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
         <TeamHeaderCard
           name={lb.name}
           description={lb.description}
-          visibility={lb.visibility}
           cutoffs={cutoffsDisplay}
           bannerUrl={lb.banner_url}
         />
-        <LeaderboardTabs slug={slug} activeTab="graph" />
+        <LeaderboardTabs slug={slug} activeTab="graph" visibility={lb.visibility} />
 
         <LeaderboardGraphClient players={playerSummaries} points={(historyRaw as LpHistoryRow[]) ?? []} cutoffs={cutoffs} />
       </div>
