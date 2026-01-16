@@ -52,35 +52,69 @@ function formatDelta(delta: number) {
   return `${rounded > 0 ? '+' : ''}${rounded}`
 }
 
-function buildLpTicks(minValue: number, maxValue: number) {
+const TIER_ORDER = [
+  'IRON',
+  'BRONZE',
+  'SILVER',
+  'GOLD',
+  'PLATINUM',
+  'EMERALD',
+  'DIAMOND',
+  'MASTER',
+  'GRANDMASTER',
+  'CHALLENGER',
+] as const
+
+const DIV_ORDER = ['IV', 'III', 'II', 'I'] as const
+
+function buildLadderTicks(minValue: number, maxValue: number, cutoffs: RankCutoffs) {
   const min = Math.floor(minValue)
   const max = Math.ceil(maxValue)
-  const range = Math.max(max - min, 1)
-  const roughStep = range / 5
-  const steps = [25, 50, 100, 200, 500, 1000]
-  const step = steps.find((candidate) => candidate >= roughStep) ?? 1000
-  const start = Math.floor(min / step) * step
   const ticks: Array<{ value: number; label: string }> = []
+  const baseMaster = baseMasterLadder()
+  const gmCutoff = baseMaster + cutoffs.grandmaster
+  const challCutoff = baseMaster + cutoffs.challenger
 
-  for (let value = start; value <= max; value += step) {
-    if (value < min) continue
-    ticks.push({ value, label: `${value} LP` })
+  const pushDivisionTicks = (tierIndex: number) => {
+    for (let divIndex = 0; divIndex < DIV_ORDER.length; divIndex += 1) {
+      const value = tierIndex * 400 + divIndex * 100
+      if (value < min || value > max) continue
+      const tierLabel = TIER_ORDER[tierIndex]
+      ticks.push({
+        value,
+        label: `${tierLabel} ${DIV_ORDER[divIndex]}`,
+      })
+    }
   }
 
-  return ticks
+  const diamondIndex = TIER_ORDER.indexOf('DIAMOND')
+  for (let tierIndex = 0; tierIndex <= diamondIndex; tierIndex += 1) {
+    pushDivisionTicks(tierIndex)
+  }
+
+  const masterTicks = [
+    { value: baseMaster, label: 'MASTER' },
+    { value: gmCutoff, label: 'GRANDMASTER' },
+    { value: challCutoff, label: 'CHALLENGER' },
+  ]
+
+  for (const tick of masterTicks) {
+    if (tick.value < min || tick.value > max) continue
+    ticks.push(tick)
+  }
+
+  const unique = new Map<number, string>()
+  for (const tick of ticks) {
+    if (!unique.has(tick.value)) unique.set(tick.value, tick.label)
+  }
+
+  return Array.from(unique.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.value - b.value)
 }
 
 function baseMasterLadder() {
-  const tierOrder = [
-    'IRON',
-    'BRONZE',
-    'SILVER',
-    'GOLD',
-    'PLATINUM',
-    'EMERALD',
-    'DIAMOND',
-  ] as const
-  const diamondIndex = tierOrder.indexOf('DIAMOND')
+  const diamondIndex = TIER_ORDER.indexOf('DIAMOND')
   return diamondIndex * 400 + 3 * 100 + 100
 }
 
@@ -92,26 +126,12 @@ function ladderLpWithCutoffs(
   const div = (point.rank ?? '').toUpperCase()
   const lp = Math.max(0, point.lp ?? 0)
 
-  const tierOrder = [
-    'IRON',
-    'BRONZE',
-    'SILVER',
-    'GOLD',
-    'PLATINUM',
-    'EMERALD',
-    'DIAMOND',
-    'MASTER',
-    'GRANDMASTER',
-    'CHALLENGER',
-  ] as const
-  const divOrder = ['IV', 'III', 'II', 'I'] as const
-
-  const tierIndex = tierOrder.indexOf(tier as any)
+  const tierIndex = TIER_ORDER.indexOf(tier as any)
   if (tierIndex === -1) return lp
 
-  const divIndex = divOrder.indexOf(div as any)
+  const divIndex = DIV_ORDER.indexOf(div as any)
 
-  if (tierIndex <= tierOrder.indexOf('DIAMOND')) {
+  if (tierIndex <= TIER_ORDER.indexOf('DIAMOND')) {
     const base = tierIndex * 400
     const divOffset = divIndex === -1 ? 0 : divIndex * 100
     return base + divOffset + lp
@@ -286,10 +306,10 @@ export default function LeaderboardGraphClient({
     }
   }, [chart, cutoffs])
 
-  const lpTicks = useMemo(() => {
+  const ladderTicks = useMemo(() => {
     if (!chart) return []
-    return buildLpTicks(chart.min, chart.max)
-  }, [chart])
+    return buildLadderTicks(chart.min, chart.max, cutoffs)
+  }, [chart, cutoffs])
 
   const xTicks = useMemo(() => {
     if (filteredPoints.length === 0) return []
@@ -413,7 +433,7 @@ export default function LeaderboardGraphClient({
                 </>
               ) : null}
 
-              {lpTicks.map((tick) => {
+              {ladderTicks.map((tick) => {
                 const y = PADDING.top + INNER_HEIGHT - ((tick.value - chart.min) / chart.range) * INNER_HEIGHT
                 return (
                   <g key={`${tick.label}-${tick.value}`}>
