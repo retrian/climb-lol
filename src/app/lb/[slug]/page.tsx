@@ -455,10 +455,7 @@ export default async function LeaderboardDetail({
   }))
 
   return (
-    <main
-      className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 page-transition dark:from-slate-950 dark:via-slate-950 dark:to-slate-900"
-      style={{ viewTransitionName: 'leaderboard-main' }}
-    >
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-7xl px-4 py-8 lg:py-12 space-y-10 lg:space-y-12">
         <TeamHeaderCard
           name={lb.name}

@@ -167,10 +167,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   if (puuids.length === 0) {
     return (
-      <main
-        className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 page-transition dark:from-slate-950 dark:via-slate-950 dark:to-slate-900"
-        style={{ viewTransitionName: 'leaderboard-main' }}
-      >
+      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
         <div className="mx-auto max-w-5xl px-4 py-12 space-y-6">
           <TeamHeaderCard
             name={lb.name}
@@ -217,10 +214,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
   }
 
   return (
-    <main
-      className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 page-transition dark:from-slate-950 dark:via-slate-950 dark:to-slate-900"
-      style={{ viewTransitionName: 'leaderboard-main' }}
-    >
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
         <TeamHeaderCard
           name={lb.name}
