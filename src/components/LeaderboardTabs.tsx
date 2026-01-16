@@ -16,8 +16,7 @@ type LeaderboardTabsProps = {
 
 export default function LeaderboardTabs({ slug, activeTab, visibility }: LeaderboardTabsProps) {
   return (
-    <div className="sticky top-4 z-30" style={{ viewTransitionName: 'leaderboard-tabs' }}>
-      <div className="flex flex-wrap items-center gap-2.5">
+    <div className="flex flex-wrap items-center gap-2.5" style={{ viewTransitionName: 'leaderboard-tabs' }}>
         <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
           {visibility}
         </span>
@@ -49,6 +48,7 @@ export default function LeaderboardTabs({ slug, activeTab, visibility }: Leaderb
               <Link
                 key={tab.id}
                 href={href}
+                scroll={false}
                 className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 transition-all duration-200 hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-white"
               >
                 {content}
@@ -56,7 +56,6 @@ export default function LeaderboardTabs({ slug, activeTab, visibility }: Leaderb
             )
           })}
         </div>
-      </div>
     </div>
   )
 }

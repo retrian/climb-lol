@@ -159,7 +159,7 @@ function makeLpKey(matchId: string, puuid: string): string {
 
 // --- Components ---
 
-function TeamHeaderCard({ name, description, bannerUrl, cutoffs }: any) {
+function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs }: any) {
     return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
@@ -167,6 +167,9 @@ function TeamHeaderCard({ name, description, bannerUrl, cutoffs }: any) {
       {bannerUrl && <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800"><img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" /></div>}
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
+          <div className="mb-4 lg:mb-6">
+            <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
+          </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
         </div>
@@ -452,16 +455,21 @@ export default async function LeaderboardDetail({
   }))
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <main
+      className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 page-transition dark:from-slate-950 dark:via-slate-950 dark:to-slate-900"
+      style={{ viewTransitionName: 'leaderboard-main' }}
+    >
       <div className="mx-auto max-w-7xl px-4 py-8 lg:py-12 space-y-10 lg:space-y-12">
         <TeamHeaderCard
           name={lb.name}
           description={lb.description}
+          slug={slug}
+          visibility={lb.visibility}
+          activeTab="overview"
           lastUpdated={lastUpdatedIso}
           cutoffs={cutoffs}
           bannerUrl={lb.banner_url}
         />
-        <LeaderboardTabs slug={slug} activeTab="overview" visibility={lb.visibility} />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
           <aside className="lg:col-span-3 lg:sticky lg:top-6 order-2 lg:order-1">

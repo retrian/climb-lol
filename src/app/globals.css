@@ -28,3 +28,32 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(leaderboard-main),
+  ::view-transition-new(leaderboard-main) {
+    animation-duration: 220ms;
+    animation-timing-function: ease-in-out;
+  }
+
+  ::view-transition-old(leaderboard-tabs),
+  ::view-transition-new(leaderboard-tabs) {
+    animation-duration: 200ms;
+    animation-timing-function: ease-in-out;
+  }
+
+  .page-transition {
+    animation: page-fade 240ms ease-out;
+  }
+}
+
+@keyframes page-fade {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

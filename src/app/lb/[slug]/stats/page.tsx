@@ -112,11 +112,17 @@ function formatDaysHoursCaps(totalSeconds: number) {
 function TeamHeaderCard({
   name,
   description,
+  slug,
+  visibility,
+  activeTab,
   cutoffs,
   bannerUrl,
 }: {
   name: string
   description?: string | null
+  slug: string
+  visibility: string
+  activeTab: 'overview' | 'graph' | 'stats'
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
 }) {
@@ -134,6 +140,9 @@ function TeamHeaderCard({
 
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
+          <div className="mb-4 lg:mb-6">
+            <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
+          </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
             {name}
           </h1>
@@ -228,15 +237,20 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   if (puuids.length === 0) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+      <main
+        className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 page-transition dark:from-slate-950 dark:via-slate-950 dark:to-slate-900"
+        style={{ viewTransitionName: 'leaderboard-main' }}
+      >
         <div className="mx-auto max-w-6xl px-4 py-10 space-y-8">
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
+            slug={slug}
+            visibility={lb.visibility}
+            activeTab="stats"
             cutoffs={cutoffsDisplay}
             bannerUrl={lb.banner_url}
           />
-          <LeaderboardTabs slug={slug} activeTab="stats" visibility={lb.visibility} />
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
             No players found for this leaderboard yet.
           </div>
@@ -504,15 +518,20 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const noGames = participants.length === 0
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <main
+      className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 page-transition dark:from-slate-950 dark:via-slate-950 dark:to-slate-900"
+      style={{ viewTransitionName: 'leaderboard-main' }}
+    >
       <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
         <TeamHeaderCard
           name={lb.name}
           description={lb.description}
+          slug={slug}
+          visibility={lb.visibility}
+          activeTab="stats"
           cutoffs={cutoffsDisplay}
           bannerUrl={lb.banner_url}
         />
-        <LeaderboardTabs slug={slug} activeTab="stats" visibility={lb.visibility} />
 
         {noGames ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
