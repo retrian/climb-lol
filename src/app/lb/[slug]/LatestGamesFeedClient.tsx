@@ -1,10 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo, memo, useCallback, useEffect } from 'react'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 import MatchDetailsModal from './MatchDetailsModal'
+import { useMatchPrefetch } from './useMatchPrefetch'
 
 interface Player {
   id: string
@@ -118,6 +119,242 @@ function formatLpNote(lpNote: string | null, isRemake: boolean) {
   return 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
 }
 
+// Memoized Game Item Component
+const GameItem = memo(({ 
+  game, 
+  player, 
+  champ, 
+  champSrc, 
+  rankData, 
+  hasMatchDetails,
+  onSelect,
+  onHover
+}: {
+  game: Game
+  player: Player | null
+  champ: any
+  champSrc: string | null
+  rankData: any
+  hasMatchDetails: boolean
+  onSelect: () => void
+  onHover: () => void
+}) => {
+  const opggUrl = useMemo(() => player ? getOpggUrl(player) : null, [player])
+  const name = useMemo(() => player ? displayRiotId(player) : 'Unknown', [player])
+  
+  // Memoize timeAgo calculation - only recalculate if endTs changes
+  const when = useMemo(() => game.endTs ? timeAgo(game.endTs) : '', [game.endTs])
+  
+  const isRemake = game.endType === 'REMAKE'
+  
+  const kdaValue = useMemo(() => game.d > 0 ? (game.k + game.a) / game.d : 99, [game.k, game.a, game.d])
+  const kda = useMemo(() => game.d === 0 ? 'Perfect' : kdaValue.toFixed(1), [game.d, kdaValue])
+  
+  const kdaColor = useMemo(() => {
+    if (isRemake) return 'text-slate-400'
+    if (game.d === 0) return 'text-amber-600 font-black'
+    return getKdaColor(kdaValue)
+  }, [isRemake, game.d, kdaValue])
+  
+  const duration = useMemo(() => formatMatchDuration(game.durationS), [game.durationS])
+  const lpChange = useMemo(() => {
+    const val = typeof game.lpChange === 'number' && !Number.isNaN(game.lpChange) ? game.lpChange : null
+    return val
+  }, [game.lpChange])
+  const lpNote = useMemo(() => game.lpNote?.toUpperCase() ?? null, [game.lpNote])
+  
+  const rankIcon = useMemo(() => getRankIconSrc(rankData?.tier), [rankData?.tier])
+  const rankLabel = useMemo(() => formatTierShort(rankData?.tier, rankData?.rank), [rankData?.tier, rankData?.rank])
+  
+  const lpTitle = useMemo(() => {
+    return lpChange !== null 
+      ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` 
+      : `Rank at match time unavailable. Displaying current rank: ${rankLabel}`
+  }, [lpChange, rankLabel])
+  
+  const lpHoverLabel = useMemo(() => {
+    return lpChange !== null 
+      ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` 
+      : null
+  }, [lpChange])
+  
+  const resultBorderClasses = useMemo(() => {
+    if (isRemake) {
+      return 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
+    }
+    return game.win
+      ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
+      : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
+  }, [isRemake, game.win])
+  
+  return (
+    <div
+      className={`rounded-xl border-l-4 bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${resultBorderClasses}`}
+    >
+      <button
+        type="button"
+        className="group w-full text-left disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-2 rounded-lg dark:focus:ring-offset-slate-900"
+        onClick={onSelect}
+        onMouseEnter={hasMatchDetails ? onHover : undefined}
+        disabled={!hasMatchDetails}
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-11 w-11 shrink-0">
+            {champSrc && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={champSrc}
+                alt=""
+                loading="lazy"
+                className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800"
+              />
+            )}
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              {opggUrl ? (
+                <a
+                  href={opggUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(event) => event.stopPropagation()}
+                  className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+                  title="View on OP.GG"
+                >
+                  {name}
+                </a>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                  {name}
+                </span>
+              )}
+              <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">
+                {when}
+              </span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
+                {champ?.name || 'Unknown'}
+              </span>
+              {lpChange !== null ? (
+                lpNote ? (
+                  <span
+                    title={lpTitle}
+                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${formatLpNote(
+                      lpNote,
+                      isRemake,
+                    )}`}
+                  >
+                    <span className="group-hover:hidden">
+                      {lpNote === 'PROMOTED' || lpNote === 'DEMOTED' ? (
+                        <span className="inline-flex items-center gap-1">
+                          <span className="text-[11px] leading-none">{lpNote === 'PROMOTED' ? '▲' : '▼'}</span>
+                          {rankIcon && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />
+                          )}
+                          <span>{rankLabel}</span>
+                        </span>
+                      ) : (
+                        lpNote
+                      )}
+                    </span>
+                    {lpHoverLabel && (
+                      <span className="hidden group-hover:inline">{lpHoverLabel}</span>
+                    )}
+                  </span>
+                ) : (
+                  <span
+                    title={lpTitle}
+                    className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+                      lpChange >= 0
+                        ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
+                        : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+                    }`}
+                  >
+                    <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                      {lpChange >= 0 ? <path d="M10 4l6 8H4l6-8z" /> : <path d="M10 16l-6-8h12l-6 8z" />}
+                    </svg>
+                    {Math.abs(lpChange)} LP
+                  </span>
+                )
+              ) : (
+                <span
+                  title={lpTitle}
+                  className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
+                >
+                   {rankIcon && (
+                     // eslint-disable-next-line @next/next/no-img-element
+                     <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />
+                   )}
+                  {rankLabel} <span className="text-[9px] opacity-70">(N/A)</span>
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 text-[10px] border-t border-slate-100 pt-2 mt-2 -mb-1 dark:border-slate-800">
+          {duration && (
+            <>
+              <span className="font-semibold text-slate-600 tabular-nums dark:text-slate-300">{duration}</span>
+              <span className="text-slate-300 dark:text-slate-600">•</span>
+            </>
+          )}
+          
+          {isRemake ? (
+            <span className="font-bold text-slate-400 dark:text-slate-500">REMAKE</span>
+          ) : (
+            <>
+              <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200 whitespace-nowrap">
+                {game.k}/{game.d}/{game.a}
+              </span>
+              <span className="text-slate-300 dark:text-slate-600">•</span>
+              <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>{kda} KDA</span>
+              <span className="text-slate-300 dark:text-slate-600">•</span>
+              <span className="font-semibold text-slate-600 tabular-nums whitespace-nowrap dark:text-slate-300">{game.cs} CS</span>
+            </>
+          )}
+          
+          {hasMatchDetails && (
+            <div className="relative ml-auto flex items-center justify-center w-5 h-5 shrink-0">
+              <svg 
+                className="h-4 w-4 text-slate-400 transition-all duration-200 group-hover:text-blue-600 group-hover:translate-x-1 dark:text-slate-500 dark:group-hover:text-blue-400" 
+                viewBox="0 0 20 20" 
+                fill="currentColor"
+              >
+                <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+              </svg>
+              
+              <div className="absolute right-full mr-2 opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity duration-200">
+                <span className="font-medium text-[10px] text-slate-600 whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
+                  View details
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </button>
+    </div>
+  )
+}, (prev, next) => {
+  // Custom comparison function for better memoization
+  return (
+    prev.game.matchId === next.game.matchId &&
+    prev.game.puuid === next.game.puuid &&
+    prev.game.endTs === next.game.endTs &&
+    prev.game.lpChange === next.game.lpChange &&
+    prev.game.lpNote === next.game.lpNote &&
+    prev.hasMatchDetails === next.hasMatchDetails &&
+    prev.player?.id === next.player?.id &&
+    prev.rankData?.tier === next.rankData?.tier &&
+    prev.rankData?.rank === next.rankData?.rank
+  )
+})
+
+GameItem.displayName = 'GameItem'
+
 export default function LatestGamesFeedClient({
   games,
   playersByPuuid,
@@ -125,6 +362,7 @@ export default function LatestGamesFeedClient({
   ddVersion,
   rankByPuuid,
   participantsByMatch,
+  preloadedMatchData = {},
 }: {
   games: Game[]
   playersByPuuid: Record<string, Player>
@@ -132,223 +370,93 @@ export default function LatestGamesFeedClient({
   ddVersion: string
   rankByPuuid: Record<string, any>
   participantsByMatch: Record<string, MatchParticipant[]>
+  preloadedMatchData?: Record<string, { match: any; timeline: any; accounts: Record<string, any> }>
 }) {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
+  const { prefetchMatch, getPrefetchedData } = useMatchPrefetch()
+
+  // Prefetch the first 3 visible games on mount (with priority)
+  useEffect(() => {
+    const visibleGames = games.slice(0, 3)
+    visibleGames.forEach((game, index) => {
+      if (game.matchId && participantsByMatch[game.matchId]?.length > 0) {
+        // Stagger prefetches to avoid overwhelming the network
+        setTimeout(() => {
+          prefetchMatch(game.matchId)
+        }, 300 + (index * 200))
+      }
+    })
+  }, [games, participantsByMatch, prefetchMatch])
+
+  const handleGameHover = useCallback((matchId: string) => {
+    if (matchId && participantsByMatch[matchId]?.length > 0) {
+      prefetchMatch(matchId)
+    }
+  }, [prefetchMatch, participantsByMatch])
+
+  // Memoize the game items data to avoid recalculating on every render
+  const gameItemsData = useMemo(() => {
+    return games.map((g) => {
+      const player = playersByPuuid?.[g.puuid] ?? null
+      const champ = champMap[g.championId]
+      const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
+      const rankData = rankByPuuid?.[g.puuid]
+      const matchParticipants = participantsByMatch[g.matchId] ?? []
+      const hasMatchDetails = matchParticipants.length > 0
+      
+      return {
+        game: g,
+        player,
+        champ,
+        champSrc,
+        rankData,
+        hasMatchDetails,
+      }
+    })
+  }, [games, playersByPuuid, champMap, ddVersion, rankByPuuid, participantsByMatch])
+
+  const handleSelectGame = useCallback((game: Game) => {
+    setSelectedGame(game)
+  }, [])
+
+  const handleCloseModal = useCallback(() => {
+    setSelectedGame(null)
+  }, [])
 
   if (games.length === 0) {
     return (
-      <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-900">
-        <svg className="w-12 h-12 mx-auto text-slate-300 mb-3 dark:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
-          />
-        </svg>
-        <p className="text-sm font-semibold text-slate-500 dark:text-slate-300">No recent matches</p>
+      <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-white p-10 text-center dark:border-slate-700 dark:from-slate-900 dark:to-slate-950">
+        <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center">
+          <svg className="h-8 w-8 text-slate-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <p className="text-sm font-semibold text-slate-600 dark:text-slate-300 mb-1">No recent matches</p>
+        <p className="text-xs text-slate-400 dark:text-slate-500">Check back soon for the latest activity</p>
       </div>
     )
   }
 
+  const selectedParticipants = useMemo(() => {
+    return selectedGame ? participantsByMatch[selectedGame.matchId] ?? [] : []
+  }, [selectedGame, participantsByMatch])
+
   return (
     <>
       <div className="space-y-2.5">
-        {games.map((g) => {
-          const player = playersByPuuid?.[g.puuid] ?? null
-          const opggUrl = player ? getOpggUrl(player) : null
-          const name = player ? displayRiotId(player) : 'Unknown'
-          
-          const when = g.endTs ? timeAgo(g.endTs) : ''
-          const champ = champMap[g.championId]
-          const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
-          
-          const isRemake = g.endType === 'REMAKE'
-
-          const kdaValue = g.d > 0 ? (g.k + g.a) / g.d : 99
-          const kda = g.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
-          
-          const kdaColor = isRemake 
-            ? 'text-slate-400' 
-            : (g.d === 0 ? 'text-amber-600 font-black' : getKdaColor(kdaValue))
-
-          const duration = formatMatchDuration(g.durationS)
-          const lpChange = typeof g.lpChange === 'number' && !Number.isNaN(g.lpChange) ? g.lpChange : null
-          const lpNote = g.lpNote?.toUpperCase() ?? null
-          
-          const rankData = rankByPuuid?.[g.puuid]
-          const rankIcon = getRankIconSrc(rankData?.tier)
-          const rankLabel = formatTierShort(rankData?.tier, rankData?.rank)
-          
-          // Logic Fix: Defined explicit titles for both states
-          const lpTitle = lpChange !== null 
-            ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` 
-            : `Rank at match time unavailable. Displaying current rank: ${rankLabel}`
-          
-          // Logic Fix: Only define hover label if we actually have LP change to show
-          const lpHoverLabel = lpChange !== null 
-            ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` 
-            : null
-
-          const resultBorderClasses = isRemake
-            ? 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
-            : g.win
-              ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
-              : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
-          
-          const matchParticipants = participantsByMatch[g.matchId] ?? []
-          const hasMatchDetails = matchParticipants.length > 0
-
-          return (
-            <div
-              key={`${g.matchId}-${g.puuid}`}
-              className={`rounded-xl border-l-4 bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-md dark:bg-slate-900 ${resultBorderClasses}`}
-            >
-              <button
-                type="button"
-                className="group w-full text-left disabled:cursor-not-allowed disabled:opacity-60"
-                onClick={() => setSelectedGame(g)}
-                disabled={!hasMatchDetails}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="h-11 w-11 shrink-0">
-                    {champSrc && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={champSrc}
-                        alt=""
-                        className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm dark:border-slate-700 dark:bg-slate-800"
-                      />
-                    )}
-                  </div>
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      {opggUrl ? (
-                        <a
-                          href={opggUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(event) => event.stopPropagation()}
-                          className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
-                          title="View on OP.GG"
-                        >
-                          {name}
-                        </a>
-                      ) : (
-                        <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                          {name}
-                        </span>
-                      )}
-                      <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">
-                        {when}
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
-                        {champ?.name || 'Unknown'}
-                      </span>
-                      {lpChange !== null ? (
-                        lpNote ? (
-                          <span
-                            title={lpTitle}
-                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${formatLpNote(
-                              lpNote,
-                              isRemake,
-                            )}`}
-                          >
-                            <span className="group-hover:hidden">
-                              {lpNote === 'PROMOTED' || lpNote === 'DEMOTED' ? (
-                                <span className="inline-flex items-center gap-1">
-                                  <span className="text-[11px] leading-none">{lpNote === 'PROMOTED' ? '▲' : '▼'}</span>
-                                  {rankIcon && (
-                                    // eslint-disable-next-line @next/next/no-img-element
-                                    <img src={rankIcon} alt="" className="h-3 w-3 object-contain" />
-                                  )}
-                                  <span>{rankLabel}</span>
-                                </span>
-                              ) : (
-                                lpNote
-                              )}
-                            </span>
-                            {/* Logic Check: lpHoverLabel is guaranteed to be non-null here because lpChange is checked above */}
-                            <span className="hidden group-hover:inline">{lpHoverLabel}</span>
-                          </span>
-                        ) : (
-                          <span
-                            title={lpTitle}
-                            className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
-                              lpChange >= 0
-                                ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
-                                : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
-                            }`}
-                          >
-                            <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                              {lpChange >= 0 ? <path d="M10 4l6 8H4l6-8z" /> : <path d="M10 16l-6-8h12l-6 8z" />}
-                            </svg>
-                            {Math.abs(lpChange)} LP
-                          </span>
-                        )
-                      ) : (
-                        <span
-                          title={lpTitle}
-                          className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300"
-                        >
-                           {rankIcon && (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={rankIcon} alt="" className="h-3 w-3 object-contain" />
-                          )}
-                          {rankLabel} <span className="text-[9px] opacity-70">(N/A)</span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 text-[10px] border-t border-slate-100 pt-2 mt-2 -mb-1 dark:border-slate-800">
-                  {duration && (
-                    <>
-                      <span className="font-semibold text-slate-600 tabular-nums dark:text-slate-300">{duration}</span>
-                      <span className="text-slate-300 dark:text-slate-600">•</span>
-                    </>
-                  )}
-                  
-                  {isRemake ? (
-                    <span className="font-bold text-slate-400 dark:text-slate-500">REMAKE</span>
-                  ) : (
-                    <>
-                      <span className="font-bold text-slate-700 tabular-nums dark:text-slate-200 whitespace-nowrap">
-                        {g.k}/{g.d}/{g.a}
-                      </span>
-                      <span className="text-slate-300 dark:text-slate-600">•</span>
-                      <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>{kda} KDA</span>
-                      <span className="text-slate-300 dark:text-slate-600">•</span>
-                      <span className="font-semibold text-slate-600 tabular-nums whitespace-nowrap dark:text-slate-300">{g.cs} CS</span>
-                    </>
-                  )}
-                  
-                  {hasMatchDetails && (
-                    <div className="relative ml-auto flex items-center justify-center w-5 h-5 shrink-0">
-                      <svg 
-                        className="h-4 w-4 text-slate-400 transition-all duration-200 group-hover:text-blue-600 group-hover:translate-x-1 dark:text-slate-500 dark:group-hover:text-blue-400" 
-                        viewBox="0 0 20 20" 
-                        fill="currentColor"
-                      >
-                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                      </svg>
-                      
-                      <div className="absolute right-full mr-2 opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity duration-200">
-                        <span className="font-medium text-[10px] text-slate-600 whitespace-nowrap bg-white px-2 py-1 rounded shadow-sm border border-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700">
-                          View details
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </button>
-            </div>
-          )
-        })}
+        {gameItemsData.map((item) => (
+          <GameItem
+            key={`${item.game.matchId}-${item.game.puuid}`}
+            game={item.game}
+            player={item.player}
+            champ={item.champ}
+            champSrc={item.champSrc}
+            rankData={item.rankData}
+            hasMatchDetails={item.hasMatchDetails}
+            onSelect={() => handleSelectGame(item.game)}
+            onHover={() => handleGameHover(item.game.matchId)}
+          />
+        ))}
       </div>
       
       <MatchDetailsModal
@@ -357,9 +465,11 @@ export default function LatestGamesFeedClient({
         focusedPuuid={selectedGame?.puuid ?? null}
         champMap={champMap}
         ddVersion={ddVersion}
-        // The line below is now valid, so we removed the @ts-expect-error comment
-        participants={selectedGame ? participantsByMatch[selectedGame.matchId] ?? [] : []}
-        onClose={() => setSelectedGame(null)}
+        participants={selectedParticipants}
+        onClose={handleCloseModal}
+        preloadedData={selectedGame && preloadedMatchData[selectedGame.matchId] 
+          ? preloadedMatchData[selectedGame.matchId]
+          : selectedGame ? getPrefetchedData(selectedGame.matchId) : undefined}
       />
     </>
   )

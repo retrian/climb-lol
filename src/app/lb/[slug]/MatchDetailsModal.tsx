@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, memo, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, memo, useCallback, useTransition } from 'react'
 import { createPortal } from 'react-dom'
 import { formatMatchDuration } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
@@ -125,18 +125,31 @@ const Icon = memo(({ src, alt, size = "h-6 w-6", rounded = "rounded", className 
 
 // --- VIRTUALIZED Player Row with transform optimization ---
 const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonVersion, spellMap, runeMap, getPlayerName, teamColor, isRtl, maxDmg, isPreview }: any) => {
-  const cs = p.totalMinionsKilled + p.neutralMinionsKilled
-  const s1 = spellMap.get(p.summoner1Id); const s2 = spellMap.get(p.summoner2Id)
+  const cs = useMemo(() => p.totalMinionsKilled + p.neutralMinionsKilled, [p.totalMinionsKilled, p.neutralMinionsKilled])
+  const s1 = useMemo(() => spellMap.get(p.summoner1Id), [spellMap, p.summoner1Id])
+  const s2 = useMemo(() => spellMap.get(p.summoner2Id), [spellMap, p.summoner2Id])
   const isFocused = focusedPuuid === p.puuid
   // Fallback for duration in preview mode (avoid division by zero if duration missing)
   const duration = match?.info?.gameDuration ?? 1
-  const csPerMin = (cs / (duration / 60)).toFixed(1)
-  const dmgDisplay = p.totalDamageDealtToChampions >= 1000 ? (p.totalDamageDealtToChampions/1000).toFixed(1) + 'k' : p.totalDamageDealtToChampions
+  const csPerMin = useMemo(() => (cs / (duration / 60)).toFixed(1), [cs, duration])
+  const dmgDisplay = useMemo(() => {
+    return p.totalDamageDealtToChampions >= 1000 
+      ? (p.totalDamageDealtToChampions/1000).toFixed(1) + 'k' 
+      : p.totalDamageDealtToChampions
+  }, [p.totalDamageDealtToChampions])
+  
+  const championImage = useMemo(() => {
+    return getChampionImageFull(staticData.champions[p.championId] ?? champMap[p.championId])
+  }, [staticData.champions, champMap, p.championId])
+  
+  const championIconSrc = useMemo(() => {
+    return championImage ? getChampionIconUrl(ddragonVersion, championImage) : null
+  }, [ddragonVersion, championImage])
   
   return (
     <div className={`group relative flex items-center gap-2 rounded-lg border p-1.5 transition-all ${isFocused ? 'bg-amber-50 border-amber-500/30 ring-1 ring-amber-500/20 dark:bg-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm dark:bg-slate-900 dark:border-transparent dark:hover:bg-slate-800 dark:hover:border-slate-700'} ${isRtl ? 'flex-row-reverse text-right' : ''}`} style={{ willChange: 'transform' }}>
       {/* Champion Icon: Uses champMap which is available instantly from parent */}
-      <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[p.championId] ?? champMap[p.championId])!)} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
+      <Icon src={championIconSrc || undefined} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
       
       <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
         <div className={`truncate text-xs font-medium w-full ${isFocused ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{getPlayerName(p).split('#')[0]}</div>
@@ -161,7 +174,16 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
         {!isPreview ? (
           <>
             <div className={`flex text-[9px] font-medium text-slate-500 mb-0.5 ${isRtl ? 'justify-start' : 'justify-end'}`}><span>{dmgDisplay}</span></div>
-            <div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 relative"><div className={`h-1 rounded-full absolute top-0 ${teamColor} ${isRtl ? 'right-0' : 'left-0'}`} style={{ width: `${(p.totalDamageDealtToChampions / maxDmg) * 100}%`, willChange: 'width' }} /></div>
+            <div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 relative">
+              <div 
+                className={`h-1 rounded-full absolute top-0 ${teamColor} ${isRtl ? 'right-0' : 'left-0'}`} 
+                style={{ 
+                  width: `${maxDmg > 0 ? (p.totalDamageDealtToChampions / maxDmg) * 100 : 0}%`, 
+                  willChange: 'width',
+                  transition: 'width 0.2s ease-out'
+                }} 
+              />
+            </div>
           </>
         ) : <div className="h-1 w-12 rounded-full bg-slate-100 dark:bg-slate-800 mx-auto" />}
       </div>
@@ -180,11 +202,28 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
       </div>
     </div>
   )
-}, (prev, next) => prev.p.puuid === next.p.puuid && prev.focusedPuuid === next.focusedPuuid && prev.ddragonVersion === next.ddragonVersion && prev.isPreview === next.isPreview)
+}, (prev, next) => {
+  // Optimized comparison - only re-render if critical props change
+  return (
+    prev.p.puuid === next.p.puuid &&
+    prev.p.kills === next.p.kills &&
+    prev.p.deaths === next.p.deaths &&
+    prev.p.assists === next.p.assists &&
+    prev.p.totalMinionsKilled === next.p.totalMinionsKilled &&
+    prev.p.neutralMinionsKilled === next.p.neutralMinionsKilled &&
+    prev.p.totalDamageDealtToChampions === next.p.totalDamageDealtToChampions &&
+    prev.p.championId === next.p.championId &&
+    prev.focusedPuuid === next.focusedPuuid &&
+    prev.ddragonVersion === next.ddragonVersion &&
+    prev.isPreview === next.isPreview &&
+    prev.maxDmg === next.maxDmg &&
+    prev.match?.info?.gameDuration === next.match?.info?.gameDuration
+  )
+})
 
 // --- Main Component ---
-export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose, participants }: {
-  open: boolean; matchId: string | null; focusedPuuid: string | null; champMap: any; ddVersion: string; onClose: () => void; participants: MatchParticipant[]
+export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose, participants, preloadedData }: {
+  open: boolean; matchId: string | null; focusedPuuid: string | null; champMap: any; ddVersion: string; onClose: () => void; participants: MatchParticipant[]; preloadedData?: { match?: Promise<any> | any; timeline?: Promise<any> | any; accounts?: Promise<Record<string, any>> | Record<string, any> }
 }) {
   const [mounted, setMounted] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'analysis' | 'build'>('overview')
@@ -213,12 +252,73 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     // Reset state but keep participants prop data active
     setActiveTab('overview'); setMatch(null); setTimeline(null); setAccounts({}); setError(null); setLoading(true); setDdragonVersion(ddVersion)
     
-    fetch(`/api/riot/match/${matchId}`)
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(d => setMatch(d.match))
-      .catch(() => setError('Match details unavailable.'))
-      .finally(() => setLoading(false))
-  }, [open, matchId, ddVersion])
+    // Check if we have preloaded data (server-side preloaded - instant!)
+    if (preloadedData?.match) {
+      // Handle both resolved values and promises
+      const matchDataPromise = preloadedData.match instanceof Promise 
+        ? preloadedData.match 
+        : Promise.resolve(preloadedData.match)
+      
+      matchDataPromise
+        .then((matchData) => {
+          if (matchData) {
+            setMatch(matchData)
+            setLoading(false)
+            
+            // Also use preloaded timeline and accounts if available
+            if (preloadedData.timeline) {
+              const timelinePromise = preloadedData.timeline instanceof Promise
+                ? preloadedData.timeline
+                : Promise.resolve(preloadedData.timeline)
+              timelinePromise.then((timelineData) => {
+                if (timelineData) setTimeline(timelineData)
+              }).catch(() => {})
+            }
+            
+            if (preloadedData.accounts) {
+              const accountsPromise = preloadedData.accounts instanceof Promise
+                ? preloadedData.accounts
+                : Promise.resolve(preloadedData.accounts)
+              accountsPromise.then((accountsData) => {
+                if (accountsData) setAccounts(accountsData)
+              }).catch(() => {})
+            }
+            return
+          }
+        })
+        .catch(() => {
+          // Fall through to normal fetch if preload failed
+        })
+    }
+    
+    // Use AbortController to cancel requests if modal closes
+    const abortController = new AbortController()
+    
+    // Only fetch if we don't have preloaded data or preload failed
+    if (!preloadedData?.match) {
+      fetch(`/api/riot/match/${matchId}`, { signal: abortController.signal })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+          if (!abortController.signal.aborted) {
+            setMatch(d.match)
+          }
+        })
+        .catch((err) => {
+          if (!abortController.signal.aborted && err.name !== 'AbortError') {
+            setError('Match details unavailable.')
+          }
+        })
+        .finally(() => {
+          if (!abortController.signal.aborted) {
+            setLoading(false)
+          }
+        })
+    }
+    
+    return () => {
+      abortController.abort()
+    }
+  }, [open, matchId, ddVersion, preloadedData])
 
   useEffect(() => {
     if (!open || !match) return
@@ -226,34 +326,80 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [open, match, ddVersion])
 
   useEffect(() => {
+    if (!open) return
+    
     // If no match loaded yet, we can't really load specific version assets easily, 
     // but we can default to ddVersion (latest) for the preview icons
     const patch = match ? ddragonVersion : ddVersion
-    if (STATIC_CACHE.has(patch)) { setStaticData(STATIC_CACHE.get(patch)!); return }
+    if (STATIC_CACHE.has(patch)) { 
+      setStaticData(STATIC_CACHE.get(patch)!); 
+      return 
+    }
+    
+    // Use AbortController to cancel if modal closes
+    const abortController = new AbortController()
     
     // Only fetch static data if we have a match OR if we are just opening it (using default version)
     // We want this to run for preview too so champ icons map correctly
     Promise.all([
-      fetch(buildStaticUrl(patch, 'data/en_US/item.json')),
-      fetch(buildStaticUrl(patch, 'data/en_US/summoner.json')),
-      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/runesReforged.json`),
-      fetch(buildStaticUrl(patch, 'data/en_US/champion.json'))
+      fetch(buildStaticUrl(patch, 'data/en_US/item.json'), { signal: abortController.signal }),
+      fetch(buildStaticUrl(patch, 'data/en_US/summoner.json'), { signal: abortController.signal }),
+      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/runesReforged.json`, { signal: abortController.signal }),
+      fetch(buildStaticUrl(patch, 'data/en_US/champion.json'), { signal: abortController.signal })
     ]).then(async ([i, s, r, c]) => {
+        if (abortController.signal.aborted) return
         if (!i.ok || !s.ok || !r.ok || !c.ok) throw new Error()
         const d = { items: (await i.json()).data, spells: (await s.json()).data, runes: await r.json(), champions: buildChampionMap((await c.json()).data) }
-        STATIC_CACHE.set(patch, d); setStaticData(d)
-    }).catch(() => setStaticData(EMPTY_STATIC))
+        STATIC_CACHE.set(patch, d)
+        if (!abortController.signal.aborted) {
+          setStaticData(d)
+        }
+    }).catch((err) => {
+      if (err.name !== 'AbortError' && !abortController.signal.aborted) {
+        setStaticData(EMPTY_STATIC)
+      }
+    })
+    
+    return () => {
+      abortController.abort()
+    }
   }, [open, match, ddragonVersion, ddVersion])
 
   useEffect(() => {
     if (!open || !match) return
-    fetch(`/api/riot/match/${match.metadata.matchId}/timeline`).then(r => r.ok ? r.json() : null).then(d => d && setTimeline(d.timeline))
-    Promise.all(match.metadata.participants.map(puuid => 
-      fetch(`/api/riot/account/${puuid}`).then(r => r.ok ? r.json() : null).then(d => [puuid, d?.account] as const).catch(() => [puuid, null] as const)
-    )).then(entries => {
-      const accs: Record<string, AccountResponse> = {}; entries.forEach(([id, a]) => { if (a) accs[id] = a })
+    
+    // Use AbortController to cancel requests if modal closes
+    const abortController = new AbortController()
+    
+    // Load timeline and accounts in parallel but with cancellation support
+    Promise.all([
+      fetch(`/api/riot/match/${match.metadata.matchId}/timeline`, { signal: abortController.signal })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => d && !abortController.signal.aborted ? d.timeline : null)
+        .catch(() => null),
+      Promise.all(match.metadata.participants.map(puuid => 
+        fetch(`/api/riot/account/${puuid}`, { signal: abortController.signal })
+          .then(r => r.ok ? r.json() : null)
+          .then(d => [puuid, d?.account] as const)
+          .catch(() => [puuid, null] as const)
+      ))
+    ]).then(([timelineData, accountEntries]) => {
+      if (abortController.signal.aborted) return
+      
+      if (timelineData) setTimeline(timelineData)
+      
+      const accs: Record<string, AccountResponse> = {}
+      accountEntries.forEach(([id, a]) => { if (a) accs[id] = a })
       setAccounts(accs)
+    }).catch((err) => {
+      if (err.name !== 'AbortError') {
+        // Silently handle errors for timeline/accounts as they're not critical
+      }
     })
+    
+    return () => {
+      abortController.abort()
+    }
   }, [open, match])
 
   const spellMap = useMemo(() => {
@@ -307,7 +453,17 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
         taken: a.taken + p.totalDamageTaken, vision: a.vision + p.visionScore, cs: a.cs + p.totalMinionsKilled + p.neutralMinionsKilled
       }), { kills: 0, gold: 0, damage: 0, taken: 0, vision: 0, cs: 0 })
       
-      list.forEach(p => (p as any)._kp = totals.kills ? Math.round(((p.kills + p.assists)/totals.kills)*100) : 0)
+      // Calculate KP more efficiently
+      const killsTotal = totals.kills
+      if (killsTotal > 0) {
+        list.forEach(p => {
+          (p as any)._kp = Math.round(((p.kills + p.assists) / killsTotal) * 100)
+        })
+      } else {
+        list.forEach(p => {
+          (p as any)._kp = 0
+        })
+      }
       
       return totals
     }
@@ -332,8 +488,15 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   const groupedBuildOrder = useMemo(() => {
     if (!timeline || !focusedParticipant) return []
     const groups: { timeLabel: string; items: any[] }[] = []
+    // Process frames more efficiently by checking item existence first
+    const itemsSet = new Set(Object.keys(staticData.items).map(Number))
     timeline.info.frames.forEach((frame, index) => {
-      const buys = frame.events.filter(e => e.type === 'ITEM_PURCHASED' && e.participantId === focusedParticipant.participantId && e.itemId !== 0 && staticData.items[e.itemId])
+      const buys = frame.events.filter(e => 
+        e.type === 'ITEM_PURCHASED' && 
+        e.participantId === focusedParticipant.participantId && 
+        e.itemId !== 0 && 
+        itemsSet.has(e.itemId)
+      )
       if (buys.length > 0) groups.push({ timeLabel: `${index} min`, items: buys })
     })
     return groups
@@ -344,8 +507,12 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     return acc ? `${acc.gameName} #${acc.tagLine}` : p.riotIdGameName ? `${p.riotIdGameName} #${p.riotIdTagline}` : p.summonerName || 'Unknown'
   }, [accounts])
 
+  const [isPending, startTransition] = useTransition()
+  
   const handleTabChange = useCallback((tab: 'overview' | 'analysis' | 'build') => {
-    requestAnimationFrame(() => setActiveTab(tab))
+    startTransition(() => {
+      setActiveTab(tab)
+    })
   }, [])
 
   if (!open || !mounted) return null

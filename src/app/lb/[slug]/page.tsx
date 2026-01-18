@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
+import { fetchMatchDetails } from '@/lib/riot/fetchMatchDetails'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
@@ -185,6 +186,16 @@ function TeamHeaderCard({ name, description, slug, visibility, activeTab, banner
 }
 
 // --- Main Page Component ---
+
+export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
+  const { slug } = await params
+  return {
+    other: {
+      // Prefetch DNS for Riot API domains
+      'dns-prefetch': 'https://ddragon.leagueoflegends.com',
+    },
+  }
+}
 
 export default async function LeaderboardDetail({
   params,
@@ -440,11 +451,39 @@ export default async function LeaderboardDetail({
     else participantsByMatch.set(entry.matchId, [entry])
   }
 
-  // 9. Prepare Client Props
+  // 9. Preload match details for top 3 games (server-side)
+  const preloadedMatchData = new Map<string, any>()
+  const top3MatchIds = latestGames.slice(0, 3)
+    .filter(g => g.matchId && participantsByMatch.has(g.matchId))
+    .map(g => g.matchId)
+  
+  // Preload match data in parallel (non-blocking - don't fail if some fail)
+  const matchDetailsPromises = top3MatchIds.map(async (matchId) => {
+    try {
+      const details = await fetchMatchDetails(matchId)
+      if (details.match) {
+        preloadedMatchData.set(matchId, details)
+      }
+    } catch (error) {
+      // Silently fail - we'll fetch on demand if needed
+      console.error(`Failed to preload match ${matchId}:`, error)
+    }
+  })
+  
+  // Wait for all preloads to complete (but don't block rendering)
+  await Promise.allSettled(matchDetailsPromises)
+
+  // 10. Prepare Client Props
   // ✅ FIX: Force cast strict record for component compatibility
   const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
   const rankByPuuidRecord = Object.fromEntries(rankBy.entries())
   const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
+  
+  // Convert preloaded data to a plain object for client
+  const preloadedMatchDataRecord: Record<string, any> = {}
+  preloadedMatchData.forEach((value, key) => {
+    preloadedMatchDataRecord[key] = value
+  })
 
   const playerCards = playersSorted.map((player, idx) => ({
     player,
@@ -470,9 +509,9 @@ export default async function LeaderboardDetail({
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
           <aside className="lg:col-span-3 lg:sticky lg:top-6 order-2 lg:order-1">
-            <div className="flex items-center gap-2 mb-5">
-              <div className="h-1 w-6 bg-gradient-to-r from-blue-400 to-blue-600 rounded-full" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Latest Activity</h3>
+            <div className="flex items-center gap-2 mb-6">
+              <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
             </div>
             <LatestGamesFeedClient
               games={latestGames}
@@ -481,10 +520,11 @@ export default async function LeaderboardDetail({
               ddVersion={ddVersion}
               rankByPuuid={rankByPuuidRecord}
               participantsByMatch={participantsByMatchRecord}
+              preloadedMatchData={preloadedMatchDataRecord}
             />
           </aside>
 
-          <div className="lg:col-span-9 order-1 lg:order-2 space-y-10 lg:space-y-12">
+          <div className="lg:col-span-9 order-1 lg:order-2 space-y-8 lg:space-y-10">
             <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
           </div>
         </div>

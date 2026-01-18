@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getRiotApiKey } from '@/lib/riot/getRiotApiKey'
+import { riotFetchWithRetry } from '@/lib/riot/riotFetchWithRetry'
 
 const ROUTING_BY_PLATFORM: Record<string, string> = {
   NA1: 'americas',
@@ -26,35 +27,22 @@ function getRoutingFromMatchId(matchId: string) {
   return ROUTING_BY_PLATFORM[platform] ?? null
 }
 
-async function riotFetch<T>(url: string, apiKey: string): Promise<T> {
-  const res = await fetch(url, {
-    headers: {
-      'X-Riot-Token': apiKey,
-    },
-    next: { revalidate: 30 },
-  })
-
-  if (!res.ok) {
-    const body = await res.text()
-    throw new Error(`Riot fetch failed ${res.status}: ${body.slice(0, 200)}`)
-  }
-
-  return res.json() as Promise<T>
-}
-
 export async function GET(_: Request, { params }: { params: Promise<{ matchId: string }> }) {
   try {
     const { matchId } = await params
     const routing = getRoutingFromMatchId(matchId)
     if (!routing) return NextResponse.json({ error: 'Unsupported match id' }, { status: 400 })
     const apiKey = getRiotApiKey()
-    const match = await riotFetch(
+    const match = await riotFetchWithRetry(
       `https://${routing}.api.riotgames.com/lol/match/v5/matches/${matchId}`,
       apiKey,
+      { maxRetries: 3, retryDelay: 2000 }
     )
     return NextResponse.json({ match })
   } catch (error) {
-    console.error(error)
-    return NextResponse.json({ error: 'Failed to fetch match' }, { status: 500 })
+    console.error('[Riot Match API]', error)
+    const errorMessage = error instanceof Error ? error.message : 'Failed to fetch match'
+    const status = errorMessage.includes('Rate limit') ? 429 : 500
+    return NextResponse.json({ error: errorMessage }, { status })
   }
 }

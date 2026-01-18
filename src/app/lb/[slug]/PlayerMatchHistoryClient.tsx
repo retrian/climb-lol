@@ -332,12 +332,22 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 
 
   return (
-    <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen(card)} className="group flex items-center gap-3 lg:gap-4 rounded-2xl border border-slate-200 bg-white px-4 lg:px-6 py-4 transition-all hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 cursor-pointer">
+    <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen(card)} className="group flex items-center gap-3 lg:gap-4 rounded-2xl border border-slate-200 bg-white px-4 lg:px-6 py-4 transition-all hover:border-slate-300 hover:shadow-xl hover:-translate-y-1 hover:scale-[1.01] duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-2 dark:focus:ring-offset-slate-900">
       <div className="w-8 shrink-0 flex justify-center">
-        <span className="text-sm font-black text-slate-400 group-hover:text-slate-600 transition-colors dark:text-slate-500 dark:group-hover:text-slate-300">{card.index}</span>
+        {card.index <= 3 ? (
+          <div className={`flex items-center justify-center h-6 w-6 rounded-full ${
+            card.index === 1 ? 'bg-gradient-to-br from-amber-400 to-amber-600 text-white shadow-md' :
+            card.index === 2 ? 'bg-gradient-to-br from-slate-300 to-slate-500 text-white shadow-md' :
+            'bg-gradient-to-br from-amber-600 to-amber-800 text-white shadow-md'
+          }`}>
+            <span className="text-xs font-black">{card.index}</span>
+          </div>
+        ) : (
+          <span className="text-sm font-black text-slate-400 group-hover:text-slate-600 transition-colors dark:text-slate-500 dark:group-hover:text-slate-300">{card.index}</span>
+        )}
       </div>
       <div className="flex items-center gap-3 min-w-0 flex-1">
-        <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
+        <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
           <img loading="lazy" decoding="async" src={profileIconUrl(card.stateData?.profile_icon_id, ddVersion) || ''} alt="" className="h-full w-full object-cover" />
         </div>
         <div className="min-w-0 flex-1">
