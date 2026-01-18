@@ -226,13 +226,20 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [open, match, ddVersion])
 
   useEffect(() => {
-    // If no match loaded yet, we can't really load specific version assets easily, 
-    // but we can default to ddVersion (latest) for the preview icons
+    if (!open) return
+    // If no match loaded yet, we can't really load specific version assets easily,
+    // but we can default to ddVersion (latest) for the preview icons.
     const patch = match ? ddragonVersion : ddVersion
-    if (STATIC_CACHE.has(patch)) { setStaticData(STATIC_CACHE.get(patch)!); return }
-    
-    // Only fetch static data if we have a match OR if we are just opening it (using default version)
-    // We want this to run for preview too so champ icons map correctly
+    if (STATIC_CACHE.has(patch)) {
+      setStaticData(STATIC_CACHE.get(patch)!)
+      return
+    }
+
+    if (!match && activeTab === 'overview') {
+      setStaticData(EMPTY_STATIC)
+      return
+    }
+
     Promise.all([
       fetch(buildStaticUrl(patch, 'data/en_US/item.json')),
       fetch(buildStaticUrl(patch, 'data/en_US/summoner.json')),
@@ -243,17 +250,45 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
         const d = { items: (await i.json()).data, spells: (await s.json()).data, runes: await r.json(), champions: buildChampionMap((await c.json()).data) }
         STATIC_CACHE.set(patch, d); setStaticData(d)
     }).catch(() => setStaticData(EMPTY_STATIC))
-  }, [open, match, ddragonVersion, ddVersion])
+  }, [open, match, ddragonVersion, ddVersion, activeTab])
+
+  useEffect(() => {
+    if (!open || !match || activeTab !== 'build' || timeline) return
+    fetch(`/api/riot/match/${match.metadata.matchId}/timeline`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setTimeline(d.timeline))
+  }, [open, match, activeTab, timeline])
 
   useEffect(() => {
     if (!open || !match) return
-    fetch(`/api/riot/match/${match.metadata.matchId}/timeline`).then(r => r.ok ? r.json() : null).then(d => d && setTimeline(d.timeline))
-    Promise.all(match.metadata.participants.map(puuid => 
-      fetch(`/api/riot/account/${puuid}`).then(r => r.ok ? r.json() : null).then(d => [puuid, d?.account] as const).catch(() => [puuid, null] as const)
-    )).then(entries => {
-      const accs: Record<string, AccountResponse> = {}; entries.forEach(([id, a]) => { if (a) accs[id] = a })
-      setAccounts(accs)
-    })
+    let cancelled = false
+
+    const run = () => {
+      Promise.all(match.metadata.participants.map(puuid =>
+        fetch(`/api/riot/account/${puuid}`).then(r => r.ok ? r.json() : null).then(d => [puuid, d?.account] as const).catch(() => [puuid, null] as const)
+      )).then(entries => {
+        if (cancelled) return
+        const accs: Record<string, AccountResponse> = {}
+        entries.forEach(([id, a]) => { if (a) accs[id] = a })
+        setAccounts(accs)
+      })
+    }
+
+    const idle = (window as any).requestIdleCallback as ((cb: () => void, opts?: { timeout: number }) => number) | undefined
+    const cancelIdle = (window as any).cancelIdleCallback as ((id: number) => void) | undefined
+    if (idle) {
+      const id = idle(run, { timeout: 1500 })
+      return () => {
+        cancelled = true
+        cancelIdle?.(id)
+      }
+    }
+
+    const timer = window.setTimeout(run, 250)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [open, match])
 
   const spellMap = useMemo(() => {

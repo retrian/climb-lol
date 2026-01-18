@@ -607,46 +607,6 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
   }, [])
 
-  useEffect(() => {
-    if (!open || !matches.length) return
-    
-    let cancelled = false
-    const queue = matches.map(m => m.matchId).filter(id => !matchDetailCache.has(id))
-    
-    if (!queue.length) return
-
-    const processBatch = async () => {
-      while (queue.length && !cancelled) {
-        const batch = queue.splice(0, 3)
-        await Promise.allSettled(batch.map(async id => {
-          if (matchDetailCache.has(id) || fetchingMatches.current.has(id)) return
-          fetchingMatches.current.add(id)
-          try {
-            const res = await fetch(`/api/match/${id}`)
-            if (res.ok) {
-              const data = await res.json()
-              if (data?.match) {
-                matchDetailCache.set(id, data.match)
-                if (!cancelled) setMatchDetails(prev => ({ ...prev, [id]: data.match }))
-              }
-            }
-          } finally {
-            fetchingMatches.current.delete(id)
-          }
-        }))
-        await new Promise(r => setTimeout(r, 500))
-      }
-    }
-
-    const timer = setTimeout(processBatch, 1000)
-    // 1. Critical Race Condition Fix: Clear fetchingMatches set on unmount/re-run
-    return () => { 
-        cancelled = true; 
-        clearTimeout(timer);
-        fetchingMatches.current.clear();
-    }
-  }, [open, matches])
-
   const handleOpen = useCallback((card: PlayerCard) => {
     setSelectedPlayer(card)
     setOpen(true)
@@ -658,6 +618,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setSummary(null)
     setMatches([])
     setExpandedMatchId(null)
+    fetchingMatches.current.clear()
     // 2. Memory Leak Fix: Clear heavy detail state
     setMatchDetails({})
   }, [])
