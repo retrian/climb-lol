@@ -3,12 +3,14 @@
 import { useCallback, useRef } from 'react'
 
 // Global prefetch cache - shared across all instances
-const prefetchCache = new Map<string, {
+type PrefetchCacheEntry = {
   match?: Promise<any> | any
   timeline?: Promise<any> | any
   accounts?: Promise<Record<string, any>> | Record<string, any>
   timestamp: number
-}>()
+}
+
+const prefetchCache = new Map<string, PrefetchCacheEntry>()
 
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
@@ -41,7 +43,7 @@ export function useMatchPrefetch() {
     prefetchingRef.current.add(matchId)
 
     // Create cache entry
-    const cacheEntry = {
+    const cacheEntry: PrefetchCacheEntry = {
       timestamp: Date.now(),
     }
     prefetchCache.set(matchId, cacheEntry)
