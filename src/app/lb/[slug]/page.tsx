@@ -3,7 +3,6 @@ import { notFound } from 'next/navigation'
 import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { compareRanks } from '@/lib/rankSort'
-import { fetchMatchDetails } from '@/lib/riot/fetchMatchDetails'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
@@ -281,8 +280,12 @@ export default async function LeaderboardDetail({
     lpEventsRaw,
     matchParticipantsRaw
   ] = await Promise.all([
-    safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[]),
-    safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[]),
+    allRelevantPuuids.length > 0
+      ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[])
+      : ([] as PlayerRiotState[]),
+    allRelevantPuuids.length > 0
+      ? safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[])
+      : ([] as PlayerRankSnapshot[]),
     top50Puuids.length > 0 ? safeDb(
       supabase
         .from('match_participants')
@@ -293,8 +296,12 @@ export default async function LeaderboardDetail({
     ) : [],
     missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[]) : [],
     latestMatchIds.length > 0 ? safeDb(supabase.from('matches').select('match_id, fetched_at, game_end_ts').in('match_id', latestMatchIds).gte('fetched_at', seasonStartIso).gte('game_end_ts', seasonStartMsLatest), [] as LatestMatchRaw[]) : [],
-    latestMatchIds.length > 0 ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[]) : [],
-    latestMatchIds.length > 0 ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[]) : []
+    latestMatchIds.length > 0 && allRelevantPuuids.length > 0
+      ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[])
+      : ([] as LpEventRaw[]),
+    latestMatchIds.length > 0
+      ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[])
+      : ([] as MatchParticipantRaw[])
   ])
 
   // --- Processing Data ---
@@ -451,39 +458,13 @@ export default async function LeaderboardDetail({
     else participantsByMatch.set(entry.matchId, [entry])
   }
 
-  // 9. Preload match details for top 3 games (server-side)
-  const preloadedMatchData = new Map<string, any>()
-  const top3MatchIds = latestGames.slice(0, 3)
-    .filter(g => g.matchId && participantsByMatch.has(g.matchId))
-    .map(g => g.matchId)
-  
-  // Preload match data in parallel (non-blocking - don't fail if some fail)
-  const matchDetailsPromises = top3MatchIds.map(async (matchId) => {
-    try {
-      const details = await fetchMatchDetails(matchId)
-      if (details.match) {
-        preloadedMatchData.set(matchId, details)
-      }
-    } catch (error) {
-      // Silently fail - we'll fetch on demand if needed
-      console.error(`Failed to preload match ${matchId}:`, error)
-    }
-  })
-  
-  // Wait for all preloads to complete (but don't block rendering)
-  await Promise.allSettled(matchDetailsPromises)
-
-  // 10. Prepare Client Props
+  // 9. Prepare Client Props
   // ✅ FIX: Force cast strict record for component compatibility
   const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
   const rankByPuuidRecord = Object.fromEntries(rankBy.entries())
   const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
   
-  // Convert preloaded data to a plain object for client
   const preloadedMatchDataRecord: Record<string, any> = {}
-  preloadedMatchData.forEach((value, key) => {
-    preloadedMatchDataRecord[key] = value
-  })
 
   const playerCards = playersSorted.map((player, idx) => ({
     player,

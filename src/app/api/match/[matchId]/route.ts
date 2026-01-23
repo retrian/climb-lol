@@ -27,9 +27,43 @@ function getRoutingFromMatchId(matchId: string) {
   return ROUTING_BY_PLATFORM[platform] ?? null
 }
 
+const MATCH_CACHE = new Map<string, { value: any; expiresAt: number }>()
+const MATCH_CACHE_TTL_MS = 2 * 60 * 1000
+const MATCH_CACHE_MAX = 100
+const CACHE_CONTROL = 'public, s-maxage=120, stale-while-revalidate=300'
+
+function buildCacheHeaders(isHit: boolean) {
+  return {
+    'Cache-Control': CACHE_CONTROL,
+    'X-Cache': isHit ? 'HIT' : 'MISS',
+  }
+}
+
+function getCachedMatch(matchId: string) {
+  const entry = MATCH_CACHE.get(matchId)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    MATCH_CACHE.delete(matchId)
+    return null
+  }
+  return entry.value
+}
+
+function setCachedMatch(matchId: string, value: any) {
+  MATCH_CACHE.set(matchId, { value, expiresAt: Date.now() + MATCH_CACHE_TTL_MS })
+  if (MATCH_CACHE.size <= MATCH_CACHE_MAX) return
+  const overflow = MATCH_CACHE.size - MATCH_CACHE_MAX
+  const keys = Array.from(MATCH_CACHE.keys()).slice(0, overflow)
+  keys.forEach((key) => MATCH_CACHE.delete(key))
+}
+
 export async function GET(_: Request, { params }: { params: Promise<{ matchId: string }> }) {
   try {
     const { matchId } = await params
+    const cached = getCachedMatch(matchId)
+    if (cached) {
+      return NextResponse.json({ match: cached }, { headers: buildCacheHeaders(true) })
+    }
     const routing = getRoutingFromMatchId(matchId)
     if (!routing) return NextResponse.json({ error: 'Unsupported match id' }, { status: 400 })
     const apiKey = getRiotApiKey()
@@ -38,7 +72,8 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
       apiKey,
       { maxRetries: 3, retryDelay: 2000 }
     )
-    return NextResponse.json({ match })
+    setCachedMatch(matchId, match)
+    return NextResponse.json({ match }, { headers: buildCacheHeaders(false) })
   } catch (error) {
     console.error('[Match API]', error)
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch match'

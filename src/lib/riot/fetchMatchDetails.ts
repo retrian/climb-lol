@@ -20,6 +20,31 @@ const ROUTING_BY_PLATFORM: Record<string, string> = {
   VN2: 'sea',
 }
 
+const MATCH_DETAILS_CACHE = new Map<
+  string,
+  { value: MatchDetails; expiresAt: number }
+>()
+const MATCH_DETAILS_TTL_MS = 5 * 60 * 1000
+const MATCH_DETAILS_MAX = 50
+
+function getCachedMatchDetails(matchId: string): MatchDetails | null {
+  const entry = MATCH_DETAILS_CACHE.get(matchId)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    MATCH_DETAILS_CACHE.delete(matchId)
+    return null
+  }
+  return entry.value
+}
+
+function setCachedMatchDetails(matchId: string, value: MatchDetails) {
+  MATCH_DETAILS_CACHE.set(matchId, { value, expiresAt: Date.now() + MATCH_DETAILS_TTL_MS })
+  if (MATCH_DETAILS_CACHE.size <= MATCH_DETAILS_MAX) return
+  const overflow = MATCH_DETAILS_CACHE.size - MATCH_DETAILS_MAX
+  const keys = Array.from(MATCH_DETAILS_CACHE.keys()).slice(0, overflow)
+  keys.forEach((key) => MATCH_DETAILS_CACHE.delete(key))
+}
+
 function getRoutingFromMatchId(matchId: string) {
   const platform = matchId.split('_')[0]?.toUpperCase()
   if (!platform) return null
@@ -43,14 +68,21 @@ export interface MatchDetails {
 }
 
 export async function fetchMatchDetails(matchId: string): Promise<MatchDetails> {
+  const cached = getCachedMatchDetails(matchId)
+  if (cached) return cached
+
   const routing = getRoutingFromMatchId(matchId)
   if (!routing) {
-    return { match: null, timeline: null, accounts: {} }
+    const empty = { match: null, timeline: null, accounts: {} }
+    setCachedMatchDetails(matchId, empty)
+    return empty
   }
 
   const apiKey = getRiotApiKey()
   if (!apiKey) {
-    return { match: null, timeline: null, accounts: {} }
+    const empty = { match: null, timeline: null, accounts: {} }
+    setCachedMatchDetails(matchId, empty)
+    return empty
   }
 
   // Fetch match data
@@ -60,7 +92,9 @@ export async function fetchMatchDetails(matchId: string): Promise<MatchDetails> 
   )
 
   if (!match) {
-    return { match: null, timeline: null, accounts: {} }
+    const empty = { match: null, timeline: null, accounts: {} }
+    setCachedMatchDetails(matchId, empty)
+    return empty
   }
 
   // Fetch timeline and accounts in parallel
@@ -94,9 +128,11 @@ export async function fetchMatchDetails(matchId: string): Promise<MatchDetails> 
     }
   })
 
-  return {
+  const result = {
     match,
     timeline: timeline || null,
     accounts,
   }
+  setCachedMatchDetails(matchId, result)
+  return result
 }

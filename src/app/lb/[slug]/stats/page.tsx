@@ -27,6 +27,7 @@ type MatchParticipant = {
   assists: number
   cs: number
   win: boolean
+  vision_score?: number | null
 }
 
 type MatchRow = {
@@ -267,7 +268,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const { data: participantsRaw } = await supabase
     .from('match_participants')
-    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win')
+    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score')
     .in('puuid', puuids)
 
   const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id)))
@@ -475,7 +476,10 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
   const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
   const topCsSingle = [...participants].sort((a, b) => b.cs - a.cs).slice(0, 3)
-  const topVisionSingle: MatchParticipant[] = []
+  const topVisionSingle = [...participants]
+    .filter((row) => typeof row.vision_score === 'number')
+    .sort((a, b) => (b.vision_score ?? 0) - (a.vision_score ?? 0))
+    .slice(0, 3)
 
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   for (const row of participants) {
@@ -664,7 +668,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
                 { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
                 { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
-                { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision' },
+                 { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision_score' },
               ].map((block) => (
                 <div key={block.title}>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">

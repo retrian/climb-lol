@@ -8,7 +8,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
 
     const { searchParams } = new URL(request.url)
     const limitParam = searchParams.get('limit')
-    const limit = Math.min(Math.max(Number(limitParam ?? 50), 1), 50)
+    const limit = Math.min(Math.max(Number(limitParam ?? 20), 1), 20)
 
     const supabase = await createClient()
 

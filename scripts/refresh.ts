@@ -335,6 +335,7 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
         assists: Number(part.assists ?? 0),
         cs: Number((part.totalMinionsKilled ?? 0) + (part.neutralMinionsKilled ?? 0)),
         win: Boolean(part.win),
+        vision_score: Number(part.visionScore ?? 0),
       })
     }
 

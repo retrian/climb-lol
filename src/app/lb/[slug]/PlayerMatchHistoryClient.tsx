@@ -118,10 +118,48 @@ const QUEUE_LABELS: Record<number, string> = {
   430: 'Normal Blind', 450: 'ARAM',
 }
 
-const summaryCache = new Map<string, any>()
-const matchesCache = new Map<string, MatchSummary[]>()
-const matchDetailCache = new Map<string, MatchDetailResponse>()
-const staticCache = new Map<string, StaticDataState>()
+const summaryCache = new Map<string, { value: any; expiresAt: number }>()
+const matchesCache = new Map<string, { value: MatchSummary[]; expiresAt: number }>()
+const matchDetailCache = new Map<string, { value: MatchDetailResponse; expiresAt: number }>()
+const staticCache = new Map<string, { value: StaticDataState; expiresAt: number }>()
+const MAX_CACHE_ENTRIES = 50
+const CACHE_TTL_MS = {
+  summary: 5 * 60 * 1000,
+  matches: 5 * 60 * 1000,
+  matchDetail: 10 * 60 * 1000,
+  static: 24 * 60 * 60 * 1000,
+}
+
+function pruneCache<T>(cache: Map<string, { value: T; expiresAt: number }>) {
+  const now = Date.now()
+  for (const [key, entry] of cache.entries()) {
+    if (entry.expiresAt <= now) cache.delete(key)
+  }
+  if (cache.size <= MAX_CACHE_ENTRIES) return
+  const overflow = cache.size - MAX_CACHE_ENTRIES
+  const keys = Array.from(cache.keys()).slice(0, overflow)
+  keys.forEach((key) => cache.delete(key))
+}
+
+function getCacheValue<T>(cache: Map<string, { value: T; expiresAt: number }>, key: string): T | null {
+  const entry = cache.get(key)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    cache.delete(key)
+    return null
+  }
+  return entry.value
+}
+
+function setCacheValue<T>(
+  cache: Map<string, { value: T; expiresAt: number }>,
+  key: string,
+  value: T,
+  ttlMs: number
+) {
+  cache.set(key, { value, expiresAt: Date.now() + ttlMs })
+  pruneCache(cache)
+}
 
 // --- Pure Helper Functions ---
 const DD_VERSION = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
@@ -200,10 +238,12 @@ function buildRuneMap(runes: Array<any>) {
 
 // --- Hooks ---
 function useStaticData(ddVersion: string, active: boolean) {
-  const [data, setData] = useState<StaticDataState>(() => staticCache.get(ddVersion) || { spells: {}, runes: [] })
+  const [data, setData] = useState<StaticDataState>(() => {
+    return getCacheValue(staticCache, ddVersion) ?? { spells: {}, runes: [] }
+  })
 
   useEffect(() => {
-    if (!active || staticCache.has(ddVersion)) return
+    if (!active || getCacheValue(staticCache, ddVersion)) return
 
     let mounted = true
     Promise.all([
@@ -212,7 +252,7 @@ function useStaticData(ddVersion: string, active: boolean) {
     ])
       .then(([spellsData, runes]) => {
         const payload = { spells: spellsData.data, runes }
-        staticCache.set(ddVersion, payload)
+        setCacheValue(staticCache, ddVersion, payload, CACHE_TTL_MS.static)
         if (mounted) setData(payload)
       })
       .catch(() => mounted && setData({ spells: {}, runes: [] }))
@@ -522,6 +562,10 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const [activeTab, setActiveTab] = useState<'matches' | 'stats' | 'champions'>('matches')
   const [expandedMatchId, setExpandedMatchId] = useState<string | null>(null)
   const [matchDetails, setMatchDetails] = useState<Record<string, MatchDetailResponse>>({})
+  const [imagesReady, setImagesReady] = useState(true)
+  const initialImagesReady = useRef(false)
+  const preloadIdRef = useRef(0)
+  const imagesTimeoutRef = useRef<number | null>(null)
   
   const modalRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -547,20 +591,120 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [open])
 
   useEffect(() => {
+    if (!open || activeTab !== 'matches') return
+    initialImagesReady.current = false
+    setImagesReady(false)
+  }, [open, activeTab, selectedPlayer])
+
+  useEffect(() => {
+    if (!open || activeTab !== 'matches') {
+      if (imagesTimeoutRef.current !== null) {
+        window.clearTimeout(imagesTimeoutRef.current)
+        imagesTimeoutRef.current = null
+      }
+      return
+    }
+
+    if (imagesTimeoutRef.current !== null) {
+      window.clearTimeout(imagesTimeoutRef.current)
+    }
+
+    imagesTimeoutRef.current = window.setTimeout(() => {
+      setImagesReady(true)
+      initialImagesReady.current = true
+      imagesTimeoutRef.current = null
+    }, 3000)
+
+    return () => {
+      if (imagesTimeoutRef.current !== null) {
+        window.clearTimeout(imagesTimeoutRef.current)
+        imagesTimeoutRef.current = null
+      }
+    }
+  }, [open, activeTab, selectedPlayer, loadingMatches])
+
+  useEffect(() => {
+    if (!open || activeTab !== 'matches') {
+      setImagesReady(true)
+      initialImagesReady.current = false
+      return
+    }
+
+    if (loadingMatches) {
+      setImagesReady(false)
+      return
+    }
+
+    if (initialImagesReady.current) return
+
+    const run = async () => {
+      const localId = ++preloadIdRef.current
+      setImagesReady(false)
+
+      await new Promise(requestAnimationFrame)
+
+      const container = modalRef.current
+      if (!container) {
+        if (preloadIdRef.current === localId) setImagesReady(true)
+        return
+      }
+
+      const srcs = Array.from(container.querySelectorAll('img'))
+        .map((img) => img.currentSrc || img.src)
+        .filter((src) => !!src)
+
+      const uniqueSrcs = Array.from(new Set(srcs))
+      if (uniqueSrcs.length === 0) {
+        if (preloadIdRef.current === localId) {
+          setImagesReady(true)
+          initialImagesReady.current = true
+        }
+        return
+      }
+
+      const preloadPromise = Promise.allSettled(
+        uniqueSrcs.map(
+          (src) =>
+            new Promise<void>((resolve) => {
+              const img = new Image()
+              img.onload = () => resolve()
+              img.onerror = () => resolve()
+              img.src = src
+            })
+        )
+      )
+
+      const timeoutPromise = new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 3000)
+      })
+
+      await Promise.race([preloadPromise, timeoutPromise])
+
+      if (preloadIdRef.current === localId) {
+        setImagesReady(true)
+        initialImagesReady.current = true
+      }
+    }
+
+    run()
+  }, [open, activeTab, matches, loadingMatches])
+
+  useEffect(() => {
     if (!open || !selectedPlayer) return
 
     const puuid = selectedPlayer.player.puuid
     setActiveTab('matches')
     setExpandedMatchId(null)
 
-    if (summaryCache.has(puuid)) {
-      setSummary(summaryCache.get(puuid))
+    const cachedSummary = getCacheValue(summaryCache, puuid)
+    if (cachedSummary) {
+      setSummary(cachedSummary)
     } else {
       setLoadingSummary(true)
       fetch(`/api/player/${puuid}/summary`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
-          summaryCache.set(puuid, data)
+          setCacheValue(summaryCache, puuid, data, CACHE_TTL_MS.summary)
           setSummary(data)
         })
         .catch(() => setSummary(null))
@@ -568,11 +712,12 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
 
     // 3. Inefficient Sorting Fix: Use cached if available, otherwise fetch -> sort -> cache
-    if (matchesCache.has(puuid)) {
-      setMatches(matchesCache.get(puuid)!)
+    const cachedMatches = getCacheValue(matchesCache, puuid)
+    if (cachedMatches) {
+      setMatches(cachedMatches)
     } else {
       setLoadingMatches(true)
-      fetch(`/api/player/${puuid}/matches?limit=50`)
+      fetch(`/api/player/${puuid}/matches?limit=20`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
           const list: MatchSummary[] = data.matches ?? []
@@ -587,7 +732,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
             const bKey = b.endTs ?? matchIdToSortKey(b.matchId)
             return bKey - aKey
           })
-          matchesCache.set(puuid, list)
+          setCacheValue(matchesCache, puuid, list, CACHE_TTL_MS.matches)
           setMatches(list)
         })
         .catch(() => setMatches([]))
@@ -596,8 +741,9 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [open, selectedPlayer])
 
   const ensureMatchDetail = useCallback(async (matchId: string) => {
-    if (matchDetailCache.has(matchId)) {
-      setMatchDetails(prev => ({ ...prev, [matchId]: matchDetailCache.get(matchId)! }))
+    const cachedDetail = getCacheValue(matchDetailCache, matchId)
+    if (cachedDetail) {
+      setMatchDetails(prev => ({ ...prev, [matchId]: cachedDetail }))
       return
     }
     if (fetchingMatches.current.has(matchId)) return
@@ -608,7 +754,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       if (res.ok) {
         const data = await res.json()
         if (data?.match) {
-          matchDetailCache.set(matchId, data.match)
+          setCacheValue(matchDetailCache, matchId, data.match, CACHE_TTL_MS.matchDetail)
           setMatchDetails(prev => ({ ...prev, [matchId]: data.match }))
         }
       }
@@ -629,17 +775,17 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       while (queue.length && !cancelled) {
         const batch = queue.splice(0, 3)
         await Promise.allSettled(batch.map(async id => {
-          if (matchDetailCache.has(id) || fetchingMatches.current.has(id)) return
-          fetchingMatches.current.add(id)
-          try {
-            const res = await fetch(`/api/match/${id}`)
-            if (res.ok) {
-              const data = await res.json()
-              if (data?.match) {
-                matchDetailCache.set(id, data.match)
-                if (!cancelled) setMatchDetails(prev => ({ ...prev, [id]: data.match }))
+          if (getCacheValue(matchDetailCache, id) || fetchingMatches.current.has(id)) return
+            fetchingMatches.current.add(id)
+            try {
+              const res = await fetch(`/api/match/${id}`)
+              if (res.ok) {
+                const data = await res.json()
+                if (data?.match) {
+                  setCacheValue(matchDetailCache, id, data.match, CACHE_TTL_MS.matchDetail)
+                  if (!cancelled) setMatchDetails(prev => ({ ...prev, [id]: data.match }))
+                }
               }
-            }
           } finally {
             fetchingMatches.current.delete(id)
           }
@@ -725,7 +871,22 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       {open && selectedPlayer && createPortal(
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={handleClose}>
             {/* 4. Backdrop Click Fix: Stop propagation on content click */}
-            <div ref={modalRef} role="dialog" aria-modal="true" className="flex h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
+            <div ref={modalRef} role="dialog" aria-modal="true" className="relative flex h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
+              {!imagesReady && activeTab === 'matches' && (
+                <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 backdrop-blur dark:bg-slate-950/80">
+                  <div className="flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                      />
+                    </svg>
+                    Loading match images…
+                  </div>
+                </div>
+              )}
               <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-5 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4">
@@ -774,7 +935,10 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
               </div>
               <div className="flex-1 overflow-hidden">
                 {activeTab === 'matches' && (
-                  <div className="h-full overflow-y-auto px-6 py-5 space-y-3">
+                  <div
+                    className="h-full overflow-y-auto px-6 py-5 space-y-3 overscroll-contain"
+                    style={{ contentVisibility: 'auto', containIntrinsicSize: '1200px' }}
+                  >
                     {loadingMatches ? <MatchDetailSkeleton /> : !matches.length ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">No matches available.</div>
                     ) : matches.map(match => <MatchRow key={match.matchId} match={match} champMap={champMap} ddVersion={ddVersion} detail={matchDetails[match.matchId] || null} isExpanded={expandedMatchId === match.matchId} onExpand={toggleExpand} spellMap={spellMap} runeMap={runeMap} />)}

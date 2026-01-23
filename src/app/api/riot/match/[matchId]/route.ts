@@ -21,6 +21,14 @@ const ROUTING_BY_PLATFORM: Record<string, string> = {
   VN2: 'sea',
 }
 
+const CACHE_CONTROL = 'public, s-maxage=120, stale-while-revalidate=300'
+
+function buildCacheHeaders() {
+  return {
+    'Cache-Control': CACHE_CONTROL,
+  }
+}
+
 function getRoutingFromMatchId(matchId: string) {
   const platform = matchId.split('_')[0]?.toUpperCase()
   if (!platform) return null
@@ -38,7 +46,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
       apiKey,
       { maxRetries: 3, retryDelay: 2000 }
     )
-    return NextResponse.json({ match })
+    return NextResponse.json({ match }, { headers: buildCacheHeaders() })
   } catch (error) {
     console.error('[Riot Match API]', error)
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch match'

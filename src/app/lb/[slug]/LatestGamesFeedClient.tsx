@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, memo, useCallback, useEffect } from 'react'
+import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
@@ -374,24 +374,16 @@ export default function LatestGamesFeedClient({
 }) {
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
   const { prefetchMatch, getPrefetchedData } = useMatchPrefetch()
+  const prefetchedMatches = useRef<Set<string>>(new Set())
+  const prefetchTimers = useRef<number[]>([])
 
-  // Prefetch the first 3 visible games on mount (with priority)
-  useEffect(() => {
-    const visibleGames = games.slice(0, 3)
-    visibleGames.forEach((game, index) => {
-      if (game.matchId && participantsByMatch[game.matchId]?.length > 0) {
-        // Stagger prefetches to avoid overwhelming the network
-        setTimeout(() => {
-          prefetchMatch(game.matchId)
-        }, 300 + (index * 200))
-      }
-    })
-  }, [games, participantsByMatch, prefetchMatch])
+  // Prefetch on hover only; avoid eager network work on initial page load
 
   const handleGameHover = useCallback((matchId: string) => {
-    if (matchId && participantsByMatch[matchId]?.length > 0) {
-      prefetchMatch(matchId)
-    }
+    if (!matchId || participantsByMatch[matchId]?.length === 0) return
+    if (prefetchedMatches.current.has(matchId)) return
+    prefetchMatch(matchId)
+    prefetchedMatches.current.add(matchId)
   }, [prefetchMatch, participantsByMatch])
 
   // Memoize the game items data to avoid recalculating on every render
