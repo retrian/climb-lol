@@ -19,8 +19,12 @@ export async function GET(request: NextRequest) {
       Location: redirectUrl.toString(),
     },
   })
-  const cookieDomain = getSupabaseCookieDomain()
+  const host = request.headers.get('host')
+  const resolvedHost = host?.split(':')[0] ?? null
+  const fallbackDomain = resolvedHost?.endsWith('cwf.lol') ? '.cwf.lol' : null
+  const cookieDomain = getSupabaseCookieDomain() ?? fallbackDomain
   const cookieNameBase = getSupabaseCookieNameBase()
+  console.info('[auth/callback] host:', host)
   console.info('[auth/callback] cookieDomain:', cookieDomain ?? '(unset)')
 
   const { url, key } = getSupabaseConfig()

@@ -5,8 +5,11 @@ import { getSupabaseConfig, getSupabaseCookieDomain } from './config'
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request: { headers: request.headers } })
   const { url, key } = getSupabaseConfig()
-  const cookieDomain = getSupabaseCookieDomain()
-  console.info('[middleware] host:', request.headers.get('host'))
+  const host = request.headers.get('host')
+  const resolvedHost = host?.split(':')[0] ?? null
+  const fallbackDomain = resolvedHost?.endsWith('cwf.lol') ? '.cwf.lol' : null
+  const cookieDomain = getSupabaseCookieDomain() ?? fallbackDomain
+  console.info('[middleware] host:', host)
   console.info('[middleware] incoming cookies:', request.cookies.getAll().map((c) => c.name))
 
   const supabase = createServerClient(
