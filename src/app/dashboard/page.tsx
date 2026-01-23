@@ -427,7 +427,7 @@ export default async function DashboardPage({
   }
 
   // --- JSX Render ---
-  const shareUrl = lb ? `http://localhost:3000/lb/${lb.slug}` : null
+  const shareUrl = lb ? `https://cwf.lol/lb/${lb.slug}` : null
   const playerCount = players?.length ?? 0
 
   return (
