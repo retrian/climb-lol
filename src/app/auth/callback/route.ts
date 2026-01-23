@@ -28,12 +28,11 @@ export async function GET(request: NextRequest) {
   console.info('[auth/callback] cookieNameBase:', cookieNameBase ?? '(unset)')
   console.info('[auth/callback] incoming cookies:', request.cookies.getAll().map(c => c.name))
 
-  // We'll create the response AFTER exchanging the code
-  let supabaseResponse = NextResponse.next({
-    request: {
-      headers: request.headers,
-    },
-  })
+  // Create the redirect response
+  const response = NextResponse.redirect(redirectUrl)
+  
+  // Collect cookies that Supabase wants to set
+  const cookiesToSet: Array<{name: string, value: string, options: any}> = []
 
   const { url, key } = getSupabaseConfig()
   const supabase = createServerClient(url, key, {
@@ -43,10 +42,11 @@ export async function GET(request: NextRequest) {
         console.info('[auth/callback] getAll cookies called, returning:', cookies.map(c => c.name))
         return cookies
       },
-      setAll(cookiesToSet) {
-        console.info('[auth/callback] setAll called with', cookiesToSet.length, 'cookies')
+      setAll(cookiesFromSupabase) {
+        console.info('[auth/callback] setAll called with', cookiesFromSupabase.length, 'cookies')
         
-        cookiesToSet.forEach(({ name, value, options }) => {
+        // Store cookies to set them later
+        cookiesFromSupabase.forEach(({ name, value, options }) => {
           const finalName = cookieNameBase
             ? name.replace(/^sb-[^-]+/, cookieNameBase)
             : name
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
             secure: true,
           }
           
-          console.info('[auth/callback] Setting cookie:', {
+          console.info('[auth/callback] Queuing cookie:', {
             originalName: name,
             finalName,
             valueLength: value?.length || 0,
@@ -66,8 +66,7 @@ export async function GET(request: NextRequest) {
             ...resolvedOptions
           })
           
-          // Set cookies on our response object
-          supabaseResponse.cookies.set(finalName, value, resolvedOptions)
+          cookiesToSet.push({ name: finalName, value, options: resolvedOptions })
         })
       },
     },
@@ -94,25 +93,12 @@ export async function GET(request: NextRequest) {
     expiresAt: data.session?.expires_at
   })
   
-  // Log cookies that were set
-  const setCookies = supabaseResponse.cookies.getAll()
-  console.info('[auth/callback] Response cookies:', setCookies.map(c => ({
-    name: c.name,
-    valueLength: c.value.length,
-  })))
-
-  // Now create the final redirect response and copy all cookies
-  const response = NextResponse.redirect(redirectUrl)
+  console.info('[auth/callback] Setting', cookiesToSet.length, 'cookies on response')
   
-  setCookies.forEach(cookie => {
-    response.cookies.set(cookie.name, cookie.value, {
-      path: '/',
-      ...(cookieDomain ? { domain: cookieDomain } : {}),
-      sameSite: 'lax',
-      secure: true,
-      httpOnly: false,
-      maxAge: 34560000, // 1 year
-    })
+  // Now set all the collected cookies on the response
+  cookiesToSet.forEach(({ name, value, options }) => {
+    console.info('[auth/callback] Setting cookie on response:', name)
+    response.cookies.set(name, value, options)
   })
 
   response.headers.set('cache-control', 'no-store')
