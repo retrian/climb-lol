@@ -13,7 +13,12 @@ export async function GET(request: NextRequest) {
   // Optional: Support 'next' parameter for post-auth redirect
   const next = requestUrl.searchParams.get('next') || '/dashboard'
   const redirectUrl = new URL(next, requestUrl.origin)
-  const response = NextResponse.redirect(redirectUrl)
+  const response = new NextResponse(null, {
+    status: 302,
+    headers: {
+      Location: redirectUrl.toString(),
+    },
+  })
   const cookieDomain = getSupabaseCookieDomain()
   const cookieNameBase = getSupabaseCookieNameBase()
   console.info('[auth/callback] cookieDomain:', cookieDomain ?? '(unset)')
