@@ -4,6 +4,7 @@ import Script from 'next/script'
 import { createClient } from '@/lib/supabase/server'
 import { AuthButtons } from '@/app/_components/AuthButtons'
 import { SpeedInsights } from '@vercel/speed-insights/next'
+import { Analytics } from '@vercel/analytics/next'
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -82,6 +83,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </div>
         </footer>
         <SpeedInsights />
+        <Analytics />
       </body>
     </html>
   )
