@@ -1,8 +1,33 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
+import { useSearchParams } from 'next/navigation'
+import { useEffect, useMemo, useState } from 'react'
 
 export default function SignInPage() {
+  const searchParams = useSearchParams()
+  const [hashError, setHashError] = useState<string | null>(null)
+  const [hashErrorDescription, setHashErrorDescription] = useState<string | null>(null)
+  const queryError = searchParams.get('error')
+  const queryErrorDescription = searchParams.get('error_description')
+  const error = useMemo(() => {
+    const raw = queryError ?? hashError
+    return raw ? decodeURIComponent(raw) : null
+  }, [queryError, hashError])
+  const errorDescription = useMemo(() => {
+    const raw = queryErrorDescription ?? hashErrorDescription
+    return raw ? decodeURIComponent(raw) : null
+  }, [queryErrorDescription, hashErrorDescription])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const hash = window.location.hash
+    if (!hash || !hash.startsWith('#')) return
+    const params = new URLSearchParams(hash.slice(1))
+    setHashError(params.get('error'))
+    setHashErrorDescription(params.get('error_description'))
+  }, [])
+
   const signIn = async () => {
     const supabase = createClient()
     const origin = window.location.origin
@@ -23,6 +48,13 @@ export default function SignInPage() {
           <p className="mt-2 text-gray-600 dark:text-slate-300">
             Sign in to create and manage your leaderboard.
           </p>
+          {error ? (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-950/30 dark:text-red-200">
+              <div className="font-semibold">Sign-in error</div>
+              <div>{error}</div>
+              {errorDescription ? <div className="mt-1 text-xs">{errorDescription}</div> : null}
+            </div>
+          ) : null}
 
           <button
             onClick={signIn}
