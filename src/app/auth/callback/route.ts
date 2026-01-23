@@ -40,6 +40,8 @@ export async function GET(request: NextRequest) {
           response.cookies.set(finalName, value, {
             ...options,
             domain: cookieDomain ?? options?.domain,
+            sameSite: 'lax',
+            secure: true,
           })
         })
       },
