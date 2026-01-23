@@ -114,8 +114,15 @@ async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
 
   if (res.status === 429) {
     const retryAfter = Number(res.headers.get('Retry-After') ?? '1')
-    const backoff = Math.min(30_000, retryAfter * 1000 * (attempt + 1))
+    // Wait the full retry-after time as specified by Riot
+    const backoff = Math.max(retryAfter * 1000, 1000)
     console.warn('[riotFetch] 429 retryAfter=', retryAfter, 'backoff=', backoff, 'url=', url)
+    
+    // Only retry a limited number of times to avoid infinite loops
+    if (attempt >= 3) {
+      throw new Error(`Rate limited after ${attempt + 1} attempts. Wait before retrying.`)
+    }
+    
     await sleep(backoff)
     return riotFetch<T>(url, attempt + 1)
   }
@@ -124,6 +131,9 @@ async function riotFetch<T>(url: string, attempt = 0): Promise<T> {
     const t = await res.text().catch(() => '')
     if (res.status === 401) {
       throw new Error('Riot API key invalid or missing. Check RIOT_API_KEY (no quotes).')
+    }
+    if (res.status === 403) {
+      throw new Error('Riot API key forbidden. Key may be expired or blocked.')
     }
     console.error('[riotFetch] FAIL', res.status, url, t.slice(0, 200))
     throw new Error(`Riot ${res.status}: ${t}`.slice(0, 240))
@@ -339,7 +349,7 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
       })
     }
 
-    await sleep(150)
+    await sleep(500)
   }
 
   if (matchUpserts.length > 0) {
@@ -631,7 +641,7 @@ async function main() {
 
   for (const puuid of ordered) {
     await refreshOnePlayer(puuid, stateMap.get(puuid))
-    await sleep(250)
+    await sleep(1000)
   }
 
   console.log('Done.')
