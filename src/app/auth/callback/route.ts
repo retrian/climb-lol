@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
   // Optional: Support 'next' parameter for post-auth redirect
   const next = requestUrl.searchParams.get('next') || '/dashboard'
   const redirectUrl = new URL(next, requestUrl.origin)
-  const response = NextResponse.next()
+  const response = NextResponse.redirect(redirectUrl)
 
   const { url, key } = getSupabaseConfig()
   const supabase = createServerClient(url, key, {
@@ -36,10 +36,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=oauth_failed`)
   }
 
-  const redirectResponse = NextResponse.redirect(redirectUrl)
-  response.cookies.getAll().forEach(({ name, value, ...options }) => {
-    redirectResponse.cookies.set(name, value, options)
-  })
-  redirectResponse.headers.set('cache-control', 'no-store')
-  return redirectResponse
+  response.headers.set('cache-control', 'no-store')
+  return response
 }
