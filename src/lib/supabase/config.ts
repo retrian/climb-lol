@@ -11,9 +11,18 @@ export function getSupabaseConfig() {
 }
 
 export function getSupabaseCookieDomain() {
-  return process.env.SUPABASE_COOKIE_DOMAIN ?? process.env.NEXT_PUBLIC_SUPABASE_COOKIE_DOMAIN
+  const envDomain = process.env.SUPABASE_COOKIE_DOMAIN ?? process.env.NEXT_PUBLIC_SUPABASE_COOKIE_DOMAIN
+  
+  // Ensure leading dot for subdomain support
+  if (envDomain && !envDomain.startsWith('.')) {
+    return `.${envDomain}`
+  }
+  
+  return envDomain
 }
 
 export function getSupabaseCookieNameBase() {
-  return process.env.NEXT_PUBLIC_SUPABASE_COOKIE_NAME
+  // Return undefined to let Supabase use default cookie names
+  // Custom names can cause issues with cookie handling
+  return undefined
 }
