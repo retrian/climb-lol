@@ -33,7 +33,8 @@ export async function GET(request: NextRequest) {
 
   if (error) {
     console.error('[auth/callback] OAuth exchange failed:', error.message)
-    return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=oauth_failed`)
+    const message = encodeURIComponent(error.message || 'oauth_failed')
+    return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=${message}`)
   }
 
   response.headers.set('cache-control', 'no-store')
