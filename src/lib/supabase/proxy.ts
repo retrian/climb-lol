@@ -6,6 +6,8 @@ export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request: { headers: request.headers } })
   const { url, key } = getSupabaseConfig()
   const cookieDomain = getSupabaseCookieDomain()
+  console.info('[middleware] host:', request.headers.get('host'))
+  console.info('[middleware] incoming cookies:', request.cookies.getAll().map((c) => c.name))
 
   const supabase = createServerClient(
     url,
@@ -28,7 +30,12 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  await supabase.auth.getSession()
+  const { data, error } = await supabase.auth.getSession()
+  if (error) {
+    console.warn('[middleware] getSession error:', error.message)
+  } else {
+    console.info('[middleware] session user:', data.session?.user?.id ?? '(none)')
+  }
   
   return response
 }
