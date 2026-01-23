@@ -77,32 +77,34 @@ export async function GET(request: NextRequest) {
 
   // Manually set session cookies from the session data
   if (data.session) {
-    const { access_token, refresh_token } = data.session
     const projectRef = url.match(/https:\/\/([^.]+)\.supabase\.co/)?.[1] || 'unknown'
     
     console.info('[auth/callback] Manually setting session cookies')
     
-    // Set access token
-    response.cookies.set(`sb-${projectRef}-auth-token`, access_token, {
-      path: '/',
-      ...(cookieDomain ? { domain: cookieDomain } : {}),
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      sameSite: 'lax',
-      secure: true,
-      httpOnly: false,
-    })
+    // Store the entire session as JSON (chunked if needed)
+    const sessionString = JSON.stringify(data.session)
+    const chunkSize = 3180 // Max cookie size per chunk
+    const chunks = Math.ceil(sessionString.length / chunkSize)
     
-    // Set refresh token
-    response.cookies.set(`sb-${projectRef}-auth-token-refresh`, refresh_token, {
-      path: '/',
-      ...(cookieDomain ? { domain: cookieDomain } : {}),
-      maxAge: 60 * 60 * 24 * 365, // 1 year
-      sameSite: 'lax',
-      secure: true,
-      httpOnly: false,
-    })
+    console.info('[auth/callback] Session size:', sessionString.length, 'bytes, chunks:', chunks)
     
-    console.info('[auth/callback] Manually set cookies:', response.cookies.getAll().map(c => c.name))
+    for (let i = 0; i < chunks; i++) {
+      const chunk = sessionString.slice(i * chunkSize, (i + 1) * chunkSize)
+      const cookieName = `sb-${projectRef}-auth-token${chunks > 1 ? `.${i}` : ''}`
+      
+      response.cookies.set(cookieName, chunk, {
+        path: '/',
+        ...(cookieDomain ? { domain: cookieDomain } : {}),
+        maxAge: 60 * 60 * 24 * 365, // 1 year
+        sameSite: 'lax',
+        secure: true,
+        httpOnly: false,
+      })
+      
+      console.info('[auth/callback] Set chunk:', cookieName, 'size:', chunk.length)
+    }
+    
+    console.info('[auth/callback] Final cookies:', response.cookies.getAll().map(c => c.name))
   }
 
   response.headers.set('cache-control', 'no-store')
