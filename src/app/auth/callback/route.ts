@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
   const response = NextResponse.redirect(redirectUrl)
   const cookieDomain = getSupabaseCookieDomain()
   const cookieNameBase = getSupabaseCookieNameBase()
+  console.info('[auth/callback] cookieDomain:', cookieDomain ?? '(unset)')
 
   const { url, key } = getSupabaseConfig()
   const supabase = createServerClient(url, key, {
@@ -37,11 +38,15 @@ export async function GET(request: NextRequest) {
           const finalName = cookieNameBase
             ? name.replace(/^sb-[^-]+/, cookieNameBase)
             : name
-          response.cookies.set(finalName, value, {
+          const resolvedOptions = {
             ...options,
             domain: cookieDomain ?? options?.domain,
-            sameSite: 'lax',
+            sameSite: 'lax' as const,
             secure: true,
+          }
+          console.info('[auth/callback] set-cookie:', finalName, resolvedOptions)
+          response.cookies.set(finalName, value, {
+            ...resolvedOptions,
           })
         })
       },
@@ -57,6 +62,7 @@ export async function GET(request: NextRequest) {
   }
 
   console.info('[auth/callback] exchangeCodeForSession ok')
+  console.info('[auth/callback] response set-cookie header:', response.headers.get('set-cookie'))
 
   response.headers.set('cache-control', 'no-store')
   return response
