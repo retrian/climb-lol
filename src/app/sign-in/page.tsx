@@ -22,8 +22,10 @@ export default function SignInPage() {
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
+    console.info('[sign-in] location:', window.location.href)
     if (!hash || !hash.startsWith('#')) return
     const params = new URLSearchParams(hash.slice(1))
+    console.info('[sign-in] hash params:', Object.fromEntries(params.entries()))
     setHashError(params.get('error'))
     setHashErrorDescription(params.get('error_description'))
   }, [])
@@ -31,6 +33,7 @@ export default function SignInPage() {
   const signIn = async () => {
     const supabase = createClient()
     const origin = window.location.origin
+    console.info('[sign-in] signInWithOAuth redirectTo:', `${origin}/auth/callback`)
 
     await supabase.auth.signInWithOAuth({
       provider: 'google',
