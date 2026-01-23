@@ -3,8 +3,5 @@ import { getSupabaseConfig } from './config'
 
 export function createClient() {
   const { url, key } = getSupabaseConfig()
-  return createBrowserClient(
-    url,
-    key
-  )
+  return createBrowserClient(url, key)
 }

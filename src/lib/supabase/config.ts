@@ -9,3 +9,11 @@ export function getSupabaseConfig() {
 
   return { url, key }
 }
+
+export function getSupabaseCookieDomain() {
+  return process.env.SUPABASE_COOKIE_DOMAIN ?? process.env.NEXT_PUBLIC_SUPABASE_COOKIE_DOMAIN
+}
+
+export function getSupabaseCookieNameBase() {
+  return process.env.NEXT_PUBLIC_SUPABASE_COOKIE_NAME
+}
