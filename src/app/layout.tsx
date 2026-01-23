@@ -1,6 +1,7 @@
 import './globals.css'
 import Link from 'next/link'
 import Script from 'next/script'
+import { Analytics } from '@vercel/analytics/next'
 import { createClient } from '@/lib/supabase/server'
 import { AuthButtons } from '@/app/_components/AuthButtons'
 
@@ -80,6 +81,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             </div>
           </div>
         </footer>
+        <Analytics />
       </body>
     </html>
   )
