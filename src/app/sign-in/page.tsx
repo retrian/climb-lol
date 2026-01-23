@@ -1,8 +1,12 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
+import { useSearchParams } from 'next/navigation'
 
 export default function SignInPage() {
+  const searchParams = useSearchParams()
+  const error = searchParams.get('error')
+
   const signIn = async () => {
     const supabase = createClient()
     const origin = window.location.origin
@@ -23,6 +27,11 @@ export default function SignInPage() {
           <p className="mt-2 text-gray-600 dark:text-slate-300">
             Sign in to create and manage your leaderboard.
           </p>
+          {error ? (
+            <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-500/40 dark:bg-red-950/30 dark:text-red-200">
+              Sign-in error: {error}
+            </div>
+          ) : null}
 
           <button
             onClick={signIn}
