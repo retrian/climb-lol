@@ -284,44 +284,70 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
   }
 }
 
-async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
-  const params = new URLSearchParams({ queue: '420', count: '10' })
-  if (RANKED_SEASON_START) {
-    const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
-    if (!Number.isNaN(seasonStartMs)) {
-      params.set('startTime', Math.floor(seasonStartMs / 1000).toString())
-    }
-  }
+const MATCHLIST_PAGE_SIZE = Math.min(Math.max(Number(process.env.MATCHLIST_PAGE_SIZE ?? 100), 1), 100)
+const MATCHLIST_MAX_PAGES = Math.max(Number(process.env.MATCHLIST_MAX_PAGES ?? 5), 1)
+const MATCHLIST_QUEUE = (process.env.MATCHLIST_QUEUE ?? '').trim()
+const MATCHDETAIL_MAX_PER_RUN = Math.max(Number(process.env.MATCHDETAIL_MAX_PER_RUN ?? 60), 1)
+const MATCHDETAIL_SLEEP_MS = Math.max(Number(process.env.MATCHDETAIL_SLEEP_MS ?? 400), 0)
 
-  const ids = await riotFetch<string[]>(
+async function fetchMatchIdsPage(puuid: string, start: number, count: number): Promise<string[]> {
+  const params = new URLSearchParams({ start: String(start), count: String(count) })
+  if (MATCHLIST_QUEUE) params.set('queue', MATCHLIST_QUEUE)
+  return riotFetch<string[]>(
     `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params.toString()}`
   )
+}
 
+async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
   const now = new Date().toISOString()
+
+  const ids: string[] = []
+  const idsSet = new Set<string>()
+  const matchIdsToFetch = new Set<string>()
+  let consecutiveFullPages = 0
+
+  for (let page = 0; page < MATCHLIST_MAX_PAGES; page += 1) {
+    const start = page * MATCHLIST_PAGE_SIZE
+    const pageIds = await fetchMatchIdsPage(puuid, start, MATCHLIST_PAGE_SIZE)
+    if (!pageIds.length) break
+
+    for (const id of pageIds) {
+      if (!idsSet.has(id)) {
+        idsSet.add(id)
+        ids.push(id)
+      }
+    }
+
+    const { data: existingParticipants, error: participantsErr } = await supabase
+      .from('match_participants')
+      .select('match_id')
+      .in('match_id', pageIds)
+      .eq('puuid', puuid)
+    if (participantsErr) throw participantsErr
+
+    const existingParticipantsSet = new Set((existingParticipants ?? []).map((r) => r.match_id))
+    const missing = pageIds.filter((id) => !existingParticipantsSet.has(id))
+
+    if (missing.length === 0) consecutiveFullPages += 1
+    else consecutiveFullPages = 0
+
+    for (const id of missing) matchIdsToFetch.add(id)
+
+    if (consecutiveFullPages >= 2) break
+  }
 
   if (!ids.length) {
     await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
     return { ids: [], newIds: [] }
   }
 
-  const { data: existing, error: exErr } = await supabase.from('matches').select('match_id').in('match_id', ids)
-  if (exErr) throw exErr
-  const existingSet = new Set((existing ?? []).map((r) => r.match_id))
-  const newIds = ids.filter((id) => !existingSet.has(id))
-
-  const { data: existingParticipants, error: participantsErr } = await supabase
-    .from('match_participants')
-    .select('match_id')
-    .in('match_id', ids)
-    .eq('puuid', puuid)
-  if (participantsErr) throw participantsErr
-  const existingParticipantsSet = new Set((existingParticipants ?? []).map((r) => r.match_id))
-  const matchIdsToFetch = ids.filter((id) => !existingParticipantsSet.has(id))
+  const matchIdsArray = Array.from(matchIdsToFetch)
+  const limitedIds = matchIdsArray.slice(0, MATCHDETAIL_MAX_PER_RUN)
 
   const matchUpserts = []
   const participantUpserts = []
 
-  for (const matchId of matchIdsToFetch) {
+  for (const matchId of limitedIds) {
     const match = await riotFetch<any>(`${AMERICAS}/lol/match/v5/matches/${encodeURIComponent(matchId)}`)
 
     const info = match.info
@@ -349,7 +375,7 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
       })
     }
 
-    await sleep(500)
+    if (MATCHDETAIL_SLEEP_MS > 0) await sleep(MATCHDETAIL_SLEEP_MS)
   }
 
   if (matchUpserts.length > 0) {
@@ -367,7 +393,7 @@ async function syncMatchesRankedOnly(puuid: string): Promise<{ ids: string[]; ne
   }
 
   await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
-  return { ids, newIds }
+  return { ids, newIds: limitedIds }
 }
 
 async function insertLpHistory(puuid: string, snap: SoloSnapshot) {
@@ -590,7 +616,7 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
   try {
     await syncSummonerBasics(puuid)
 
-    const { ids } = await syncMatchesRankedOnly(puuid)
+    const { ids } = await syncMatchesAll(puuid)
 
     const soloSnap = await syncRankByPuuid(puuid)
 
