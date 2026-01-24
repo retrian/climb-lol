@@ -106,6 +106,17 @@ type AttachedLeaderboard = {
   leaderboard: LeaderboardRow | null
 }
 
+type SupabaseClient = Awaited<ReturnType<typeof createClient>>
+
+async function getOwnedClub(client: SupabaseClient, slug: string, userId: string) {
+  return client
+    .from('clubs')
+    .select('id, slug')
+    .eq('slug', slug)
+    .eq('owner_user_id', userId)
+    .maybeSingle()
+}
+
 function MemberBadge({ role }: { role?: string | null }) {
   if (!role) return null
   const normalized = role.toUpperCase()
@@ -221,15 +232,6 @@ export default async function ClubDetailPage({
   const leaderboardCount = attachedLeaderboards.filter((item) => item.leaderboard).length
   const updatedLabel = formatDate(club.updated_at ?? club.created_at)
 
-  async function getOwnedClub(client: Awaited<ReturnType<typeof createClient>>, userId: string) {
-    return client
-      .from('clubs')
-      .select('id, slug')
-      .eq('slug', slug)
-      .eq('owner_user_id', userId)
-      .maybeSingle()
-  }
-
   async function updateClubHome(formData: FormData) {
     'use server'
 
@@ -263,7 +265,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'home', err: 'Only the club owner can edit settings' }))
 
     const nextSlug = buildClubSlug(prefixInput, tagInput)
@@ -304,7 +306,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'home', err: 'Only the club owner can update the banner' }))
 
     const ext = extFromType(file.type)
@@ -351,7 +353,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'home', err: 'Only the club owner can delete this club' }))
 
     const { error: membersError } = await supabase.from('club_members').delete().eq('club_id', ownedClub.id)
@@ -386,7 +388,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Only the club owner can manage members' }))
 
     let gameName = ''
@@ -446,7 +448,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Only the club owner can manage members' }))
 
     const { data: member } = await supabase
@@ -485,7 +487,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Only the club owner can attach leaderboards' }))
 
     const { data: leaderboard, error: leaderboardError } = await supabase
@@ -538,7 +540,7 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, user.id)
+    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
     if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Only the club owner can manage leaderboards' }))
 
     const { error } = await supabase.from('club_leaderboards').delete().eq('id', linkId).eq('club_id', ownedClub.id)
