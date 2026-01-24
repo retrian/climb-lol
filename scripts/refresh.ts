@@ -181,7 +181,7 @@ async function syncAccountIdentity(puuid: string) {
 
   const now = new Date().toISOString()
 
-  await Promise.all([
+  const [lbRes, clubRes, playerRes] = await Promise.all([
     supabase
       .from('leaderboard_players')
       .update({ game_name: gameName, tag_line: tagLine, updated_at: now })
@@ -193,12 +193,13 @@ async function syncAccountIdentity(puuid: string) {
     supabase
       .from('players')
       .upsert({ puuid, game_name: gameName, tag_line: tagLine, updated_at: now }, { onConflict: 'puuid' }),
-    upsertRiotState(puuid, { last_account_sync_at: now })
-  ]).then((results) => {
-    for (const result of results) {
-      if ('error' in result && result.error) throw result.error
-    }
-  })
+  ])
+
+  if (lbRes.error) throw lbRes.error
+  if (clubRes.error) throw clubRes.error
+  if (playerRes.error) throw playerRes.error
+
+  await upsertRiotState(puuid, { last_account_sync_at: now })
 }
 
 type RankEntry = {
