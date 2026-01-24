@@ -165,6 +165,42 @@ async function syncSummonerBasics(puuid: string) {
   return data.id
 }
 
+type RiotAccount = {
+  gameName?: string | null
+  tagLine?: string | null
+}
+
+async function syncAccountIdentity(puuid: string) {
+  const account = await riotFetch<RiotAccount>(
+    `${AMERICAS}/riot/account/v1/accounts/by-puuid/${encodeURIComponent(puuid)}`
+  )
+
+  const gameName = String(account?.gameName ?? '').trim()
+  const tagLine = String(account?.tagLine ?? '').trim()
+  if (!gameName || !tagLine) return
+
+  const now = new Date().toISOString()
+
+  await Promise.all([
+    supabase
+      .from('leaderboard_players')
+      .update({ game_name: gameName, tag_line: tagLine, updated_at: now })
+      .eq('puuid', puuid),
+    supabase
+      .from('club_members')
+      .update({ game_name: gameName, tag_line: tagLine, updated_at: now })
+      .eq('player_puuid', puuid),
+    supabase
+      .from('players')
+      .upsert({ puuid, game_name: gameName, tag_line: tagLine, updated_at: now }, { onConflict: 'puuid' }),
+    upsertRiotState(puuid, { last_account_sync_at: now })
+  ]).then((results) => {
+    for (const result of results) {
+      if ('error' in result && result.error) throw result.error
+    }
+  })
+}
+
 type RankEntry = {
   queueType: string
   tier: string
@@ -614,6 +650,7 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
   console.log('[player] refresh', puuid.slice(0, 12))
 
   try {
+    await syncAccountIdentity(puuid)
     await syncSummonerBasics(puuid)
 
     const { ids } = await syncMatchesAll(puuid)
