@@ -44,11 +44,11 @@ export async function updateSession(request: NextRequest) {
     },
   })
 
-  const { data, error } = await supabase.auth.getSession()
+  const { data, error } = await supabase.auth.getUser()
   if (error) {
-    console.warn('[middleware] getSession error:', error.message)
+    console.warn('[middleware] getUser error:', error.message)
   } else {
-    console.info('[middleware] session user:', data.session?.user?.id ?? '(none)')
+    console.info('[middleware] session user:', data.user?.id ?? '(none)')
   }
   
   return response
