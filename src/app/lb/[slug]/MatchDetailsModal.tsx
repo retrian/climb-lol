@@ -51,8 +51,15 @@ interface StaticDataState {
 // --- Constants ---
 const QUEUE_LABELS: Record<number, string> = { 420: 'Ranked Solo', 440: 'Ranked Flex', 450: 'ARAM' }
 const SHARD_MAP: Record<number, string> = { 
-  5001: 'StatModsHealthScalingIcon.png', 5002: 'StatModsArmorIcon.png', 5003: 'StatModsMagicResIcon.png', 
-  5005: 'StatModsAttackSpeedIcon.png', 5007: 'StatModsCDRScalingIcon.png', 5008: 'StatModsAdaptiveForceIcon.png' 
+  5001: 'StatModsHealthPlusIcon.png',
+  5002: 'StatModsArmorIcon.png',
+  5003: 'StatModsMagicResIcon.png',
+  5005: 'StatModsAttackSpeedIcon.png',
+  5007: 'StatModsCDRIcon.png',
+  5008: 'StatModsAdaptiveForceIcon.png',
+  5010: 'StatModsTenacityIcon.png',
+  5011: 'StatModsHealthPlusIcon.png',
+  5013: 'StatModsHealthPlusIcon.png'
 }
 const FALLBACK_ICON = 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"><rect width="100%" height="100%" rx="6" ry="6" fill="#cbd5e1"/></svg>`)
 const EMPTY_STATIC: StaticDataState = { items: {}, spells: {}, runes: [], champions: {} }
@@ -156,7 +163,14 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
   return (
     <div className={`group relative flex items-center gap-2 rounded-lg border p-1.5 transition-all ${isFocused ? 'bg-amber-50 border-amber-500/30 ring-1 ring-amber-500/20 dark:bg-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm dark:bg-slate-900 dark:border-transparent dark:hover:bg-slate-800 dark:hover:border-slate-700'} ${isRtl ? 'flex-row-reverse text-right' : ''}`} style={{ willChange: 'transform' }}>
       {/* Champion Icon: Uses champMap which is available instantly from parent */}
-      <Icon src={championIconSrc || undefined} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
+      <div className="relative shrink-0">
+        <Icon src={championIconSrc || undefined} size="h-9 w-9" rounded="rounded-md" className={`${isFocused ? "ring-amber-500/40" : ""}`} />
+        {Number.isFinite(p.champLevel) && p.champLevel > 0 && (
+          <span className="absolute -bottom-1 -right-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-slate-900 px-1 text-[9px] font-bold text-white ring-1 ring-slate-200 dark:bg-slate-200 dark:text-slate-900 dark:ring-slate-700">
+            {p.champLevel}
+          </span>
+        )}
+      </div>
       
         <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
         <div className={`truncate text-xs font-medium w-full ${isFocused ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{getPlayerName(p).split('#')[0]}</div>
@@ -165,7 +179,7 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
         <div className={`flex gap-0.5 mt-0.5 ${isPreview ? 'opacity-30' : ''}`}>
           {isRtl ? (
             <>
-              <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
+              <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="p-[1px]" ring={false} />
               <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
               <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
               <Icon src={s1 && buildStaticUrl(ddragonVersion, `img/spell/${s1.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
@@ -177,7 +191,7 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
               <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
               <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
               <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
-              <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
+              <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="p-[1px]" ring={false} />
             </>
           )}
         </div>
@@ -608,13 +622,25 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                   {/* Banner Section */}
                   <div className={`relative flex flex-wrap items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900 ${focusedParticipant.win ? 'shadow-emerald-500/5 dark:shadow-emerald-900/5' : 'shadow-rose-500/5 dark:shadow-rose-900/5'}`}>
                     <div className="flex items-center gap-4">
-                      <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId])!)} size="h-14 w-14" rounded="rounded-xl" className="shadow-lg ring-2 ring-slate-100 dark:ring-slate-800" />
+                      <div className="relative">
+                        <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[focusedParticipant.championId] ?? champMap[focusedParticipant.championId])!)} size="h-14 w-14" rounded="rounded-xl" className="shadow-lg ring-2 ring-slate-100 dark:ring-slate-800" />
+                        {Number.isFinite(focusedParticipant.champLevel) && focusedParticipant.champLevel > 0 && (
+                          <span className="absolute -bottom-1 -right-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-slate-900 px-1 text-[10px] font-bold text-white ring-1 ring-slate-200 dark:bg-slate-200 dark:text-slate-900 dark:ring-slate-700">
+                            {focusedParticipant.champLevel}
+                          </span>
+                        )}
+                      </div>
                       <div>
                         <div className="text-xl font-bold text-slate-900 tracking-tight dark:text-slate-100">{getPlayerName(focusedParticipant)}</div>
                         <div className="flex items-center gap-3 text-sm text-slate-500 mt-0.5 dark:text-slate-400">
                           <span className="font-mono font-medium text-slate-700 dark:text-slate-200">{focusedParticipant.kills}/{focusedParticipant.deaths}/{focusedParticipant.assists}</span>
-                          {!isPreview && <span>{focusedParticipant.goldEarned.toLocaleString()} <span className="text-amber-500 dark:text-amber-400">G</span></span>}
-                          <span>{((focusedParticipant.totalMinionsKilled + focusedParticipant.neutralMinionsKilled) / ((match?.info.gameDuration || 60) / 60)).toFixed(1)} CS/m</span>
+                          {!isPreview && null}
+                          <span>
+                            {focusedParticipant.deaths > 0
+                              ? (focusedParticipant.kills / focusedParticipant.deaths).toFixed(2)
+                              : 'Perfect'}{' '}
+                            KD
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -751,15 +777,27 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                             </div>
                             <div className="w-full h-[1px] bg-slate-200 dark:bg-slate-800" />
                             <div className="flex items-center gap-4">
-                              {focusedRunes.s && <Icon src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.s.icon}`} size="h-8 w-8" rounded="rounded-full" className="grayscale opacity-60" />}
+                              {focusedRunes.s && <Icon src={`https://ddragon.leagueoflegends.com/cdn/img/${focusedRunes.s.icon}`} size="h-8 w-8" rounded="rounded-full" />}
                               <div className="flex gap-2">
                                 {focusedRunes.sec.map((r, i) => r && <Icon key={i} src={`https://ddragon.leagueoflegends.com/cdn/img/${r.icon}`} size="h-7 w-7" rounded="rounded-full" className="bg-slate-100 dark:bg-slate-800" />)}
                               </div>
                               <div className="w-[1px] h-6 bg-slate-200 dark:bg-slate-800 mx-2" />
                               <div className="flex gap-1.5">
-                                {focusedParticipant.perks?.statPerks && Object.values(focusedParticipant.perks.statPerks).map((p, i) => (
-                                  <Icon key={`shard-${i}`} src={SHARD_MAP[p] ? getShardIconUrl(SHARD_MAP[p]) : null} size="h-6 w-6" rounded="rounded-full" className="bg-slate-100 ring-1 ring-slate-200 p-1 dark:bg-slate-800 dark:ring-slate-700" />
-                                ))}
+                                {focusedParticipant.perks?.statPerks && [
+                                  focusedParticipant.perks.statPerks.offense,
+                                  focusedParticipant.perks.statPerks.flex,
+                                  focusedParticipant.perks.statPerks.defense
+                                ].map((p, i) => {
+                                  const icon = runeMap.get(p)?.icon
+                                  const src = icon
+                                    ? `https://ddragon.leagueoflegends.com/cdn/img/${icon}`
+                                    : SHARD_MAP[p]
+                                      ? getShardIconUrl(SHARD_MAP[p])
+                                      : null
+                                  return (
+                                    <Icon key={`shard-${i}`} src={src} size="h-6 w-6" rounded="rounded-full" className="bg-slate-100 ring-1 ring-slate-200 p-1 dark:bg-slate-800 dark:ring-slate-700" />
+                                  )
+                                })}
                               </div>
                             </div>
                           </div>
