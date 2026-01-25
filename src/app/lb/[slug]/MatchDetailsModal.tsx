@@ -264,7 +264,9 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
     prev.ddragonVersion === next.ddragonVersion &&
     prev.isPreview === next.isPreview &&
     prev.maxDmg === next.maxDmg &&
-    prev.match?.info?.gameDuration === next.match?.info?.gameDuration
+    prev.match?.info?.gameDuration === next.match?.info?.gameDuration &&
+    prev.spellMap.size === next.spellMap.size &&
+    prev.runeMap.size === next.runeMap.size
   )
 })
 
@@ -795,7 +797,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                                       ? getShardIconUrl(SHARD_MAP[p])
                                       : null
                                   return (
-                                    <Icon key={`shard-${i}`} src={src} size="h-6 w-6" rounded="rounded-full" className="bg-slate-100 ring-1 ring-slate-200 p-1 dark:bg-slate-800 dark:ring-slate-700" />
+                                    <Icon key={`shard-${i}`} src={src} size="h-7 w-7" rounded="rounded-full" className="bg-slate-100 ring-1 ring-slate-200 p-1 dark:bg-slate-800 dark:ring-slate-700" />
                                   )
                                 })}
                               </div>

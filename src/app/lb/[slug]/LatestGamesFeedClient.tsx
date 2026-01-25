@@ -43,25 +43,6 @@ interface MatchParticipant {
   win: boolean
 }
 
-const REGION_MAP: Record<string, string> = {
-  NA1: 'na',
-  EUW1: 'euw',
-  EUN1: 'eune',
-  KR: 'kr',
-  JP1: 'jp',
-  BR1: 'br',
-  LA1: 'lan',
-  LA2: 'las',
-  OC1: 'oce',
-  TR1: 'tr',
-  RU: 'ru',
-  PH2: 'ph',
-  SG2: 'sg',
-  TH2: 'th',
-  TW2: 'tw',
-  VN2: 'vn',
-}
-
 function getRankIconSrc(tier?: string | null) {
   if (!tier) return '/images/UNRANKED_SMALL.jpg'
   return `/images/${tier.toUpperCase()}_SMALL.jpg`
@@ -103,16 +84,6 @@ function displayRiotId(p: Player) {
   return 'Unknown Player'
 }
 
-function getOpggUrl(player: Player) {
-  const gn = (player.game_name ?? '').trim()
-  const tl = (player.tag_line ?? '').trim()
-  if (!gn || !tl) return null
-
-  const region = REGION_MAP[tl.toUpperCase()] ?? 'na'
-  const riotId = `${gn}-${tl}`
-  return `https://op.gg/lol/summoners/${region}/${encodeURIComponent(riotId)}`
-}
-
 function formatLpNote(lpNote: string | null, isRemake: boolean) {
   if (lpNote === 'PROMOTED') return 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
   if (isRemake) return 'text-slate-500 bg-slate-100 dark:text-slate-200 dark:bg-slate-700/40'
@@ -139,7 +110,6 @@ const GameItem = memo(({
   onSelect: () => void
   onHover: () => void
 }) => {
-  const opggUrl = useMemo(() => player ? getOpggUrl(player) : null, [player])
   const name = useMemo(() => player ? displayRiotId(player) : 'Unknown', [player])
   
   // Memoize timeAgo calculation - only recalculate if endTs changes
@@ -213,22 +183,12 @@ const GameItem = memo(({
 
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
-              {opggUrl ? (
-                <a
-                  href={opggUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={(event) => event.stopPropagation()}
-                  className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
-                  title="View on OP.GG"
-                >
-                  {name}
-                </a>
-              ) : (
-                <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                  {name}
-                </span>
-              )}
+              <span
+                className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+                title="View match history"
+              >
+                {name}
+              </span>
               <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">
                 {when}
               </span>

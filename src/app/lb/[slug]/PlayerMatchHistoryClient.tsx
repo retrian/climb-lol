@@ -109,12 +109,6 @@ interface StaticDataState {
 }
 
 // --- Constants & Caches ---
-const REGION_MAP: Record<string, string> = {
-  NA1: 'na', EUW1: 'euw', EUN1: 'eune', KR: 'kr', JP1: 'jp', BR1: 'br',
-  LA1: 'lan', LA2: 'las', OC1: 'oce', TR1: 'tr', RU: 'ru', PH2: 'ph',
-  SG2: 'sg', TH2: 'th', TW2: 'tw', VN2: 'vn',
-}
-
 const QUEUE_LABELS: Record<number, string> = {
   420: 'Ranked Solo/Duo', 440: 'Ranked Flex', 400: 'Normal Draft',
   430: 'Normal Blind', 450: 'ARAM',
@@ -174,13 +168,6 @@ function displayRiotId(p: Player) {
   const gn = (p.game_name ?? '').trim()
   const tl = (p.tag_line ?? '').trim()
   return gn && tl ? `${gn} #${tl}` : p.puuid
-}
-
-function getOpggUrl(player: Player) {
-  const gn = (player.game_name ?? '').trim()
-  const tl = (player.tag_line ?? '').trim()
-  if (!gn || !tl) return null
-  return `https://op.gg/lol/summoners/${REGION_MAP[tl.toUpperCase()] ?? 'na'}/${encodeURIComponent(`${gn}-${tl}`)}`
 }
 
 function getRankIconSrc(tier?: string | null) {
@@ -309,7 +296,6 @@ const PodiumCard = memo(({ card, rank, ddVersion, onOpen, champMap }: { card: Pl
   const rankData = card.rankData
   const winrate = useMemo(() => formatWinrate(rankData?.wins, rankData?.losses), [rankData?.wins, rankData?.losses])
   const icon = useMemo(() => profileIconUrl(card.stateData?.profile_icon_id, ddVersion), [card.stateData?.profile_icon_id, ddVersion])
-  const opggUrl = useMemo(() => getOpggUrl(card.player), [card.player])
   const displayId = useMemo(() => displayRiotId(card.player), [card.player])
   
   const styles = useMemo(() => {
@@ -350,11 +336,16 @@ const PodiumCard = memo(({ card, rank, ddVersion, onOpen, champMap }: { card: Pl
           {icon ? <img loading="lazy" decoding="async" src={icon} alt="" className="h-full w-full object-cover" /> : <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />}
         </div>
         <div className="mt-4 text-center w-full px-2">
-          {opggUrl ? (
-            <a href={opggUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex max-w-full items-center justify-center gap-1 text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400">
-              <FitText text={displayId} className="block max-w-full whitespace-nowrap font-bold" minScale={0.65} />
-            </a>
-          ) : <FitText text={displayId} className="block max-w-full whitespace-nowrap font-bold text-slate-900 dark:text-slate-100" minScale={0.65} />}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpen(card)
+            }}
+            className="inline-flex max-w-full items-center justify-center gap-1 text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+          >
+            <FitText text={displayId} className="block max-w-full whitespace-nowrap font-bold" minScale={0.65} />
+          </button>
           {card.player.role && <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 mt-1 dark:text-slate-400">{card.player.role}</div>}
         </div>
         <div className="mt-5 flex flex-col items-center gap-3 w-full">
@@ -386,7 +377,6 @@ PodiumCard.displayName = 'PodiumCard'
 const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerCard, ddVersion: string, onOpen: (c: PlayerCard) => void, champMap: any }) => {
   const rankData = card.rankData
   const winrate = useMemo(() => formatWinrate(rankData?.wins, rankData?.losses), [rankData?.wins, rankData?.losses])
-  const opggUrl = useMemo(() => getOpggUrl(card.player), [card.player])
   const displayId = useMemo(() => displayRiotId(card.player), [card.player])
 
   // ✅ add this
@@ -419,11 +409,16 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
           <img loading="lazy" decoding="async" src={profileIconUrl(card.stateData?.profile_icon_id, ddVersion) || ''} alt="" className="h-full w-full object-cover" />
         </div>
         <div className="min-w-0 flex-1">
-          {opggUrl ? (
-            <a href={opggUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="inline-flex max-w-full items-center text-slate-900 transition-colors hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400">
-              <FitText text={displayId} className="block max-w-full whitespace-nowrap font-bold" minScale={0.65} />
-            </a>
-          ) : <FitText text={displayId} className="block max-w-full whitespace-nowrap font-bold text-slate-900 group-hover:text-slate-700 transition-colors dark:text-slate-100 dark:group-hover:text-white" minScale={0.65} />}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpen(card)
+            }}
+            className="inline-flex max-w-full items-center text-slate-900 transition-colors hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
+          >
+            <FitText text={displayId} className="block max-w-full whitespace-nowrap font-bold" minScale={0.65} />
+          </button>
           {card.player.role && <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide mt-0.5 dark:text-slate-500">{card.player.role}</div>}
         </div>
       </div>
@@ -966,10 +961,23 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
 
   useEffect(() => {
     if (!open || prefetchMatchIds.length === 0) return
-    
+
     let cancelled = false
-    const queue = prefetchMatchIds.filter((id) => !matchDetailCache.has(id))
-    
+    const cachedDetails: Record<string, MatchDetailResponse> = {}
+    const queue: string[] = []
+    prefetchMatchIds.forEach((id) => {
+      const cached = getCacheValue(matchDetailCache, id)
+      if (cached) {
+        cachedDetails[id] = cached
+      } else {
+        queue.push(id)
+      }
+    })
+
+    if (Object.keys(cachedDetails).length > 0) {
+      setMatchDetails((prev) => ({ ...cachedDetails, ...prev }))
+    }
+
     if (!queue.length) return
 
     const processBatch = async () => {

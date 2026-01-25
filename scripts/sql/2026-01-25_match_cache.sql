@@ -9,3 +9,5 @@ create table if not exists match_cache (
 
 create index if not exists match_cache_match_fetched_at_idx on match_cache (match_fetched_at desc);
 create index if not exists match_cache_timeline_fetched_at_idx on match_cache (timeline_fetched_at desc);
+
+create index if not exists match_cache_updated_at_idx on match_cache (updated_at desc);

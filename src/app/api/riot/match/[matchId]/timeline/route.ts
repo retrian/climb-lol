@@ -23,6 +23,9 @@ const ROUTING_BY_PLATFORM: Record<string, string> = {
 }
 
 const CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600'
+const TIMELINE_CACHE = new Map<string, { value: any; expiresAt: number }>()
+const TIMELINE_CACHE_TTL_MS = 2 * 60 * 1000
+const TIMELINE_CACHE_MAX = 100
 const TIMELINE_DB_TTL_MS = 24 * 60 * 60 * 1000
 const TIMELINE_IN_FLIGHT = new Map<string, Promise<any>>()
 
@@ -31,6 +34,24 @@ function buildCacheHeaders(status: 'HIT' | 'HIT-DB' | 'HIT-INFLIGHT' | 'MISS') {
     'Cache-Control': CACHE_CONTROL,
     'X-Cache': status,
   }
+}
+
+function getCachedTimeline(matchId: string) {
+  const entry = TIMELINE_CACHE.get(matchId)
+  if (!entry) return null
+  if (entry.expiresAt <= Date.now()) {
+    TIMELINE_CACHE.delete(matchId)
+    return null
+  }
+  return entry.value
+}
+
+function setCachedTimeline(matchId: string, value: any) {
+  TIMELINE_CACHE.set(matchId, { value, expiresAt: Date.now() + TIMELINE_CACHE_TTL_MS })
+  if (TIMELINE_CACHE.size <= TIMELINE_CACHE_MAX) return
+  const overflow = TIMELINE_CACHE.size - TIMELINE_CACHE_MAX
+  const keys = Array.from(TIMELINE_CACHE.keys()).slice(0, overflow)
+  keys.forEach((key) => TIMELINE_CACHE.delete(key))
 }
 
 function isFresh(timestamp: string | null | undefined, ttlMs: number) {
@@ -88,8 +109,13 @@ function getRoutingFromMatchId(matchId: string) {
 export async function GET(_: Request, { params }: { params: Promise<{ matchId: string }> }) {
   try {
     const { matchId } = await params
+    const cached = getCachedTimeline(matchId)
+    if (cached) {
+      return NextResponse.json({ timeline: cached }, { headers: buildCacheHeaders('HIT') })
+    }
     const dbCached = await getDbCachedTimeline(matchId)
     if (dbCached) {
+      setCachedTimeline(matchId, dbCached)
       return NextResponse.json({ timeline: dbCached }, { headers: buildCacheHeaders('HIT-DB') })
     }
 
@@ -108,6 +134,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
         apiKey,
         { maxRetries: 3, retryDelay: 2000 }
       )
+      setCachedTimeline(matchId, timeline)
       await upsertDbTimeline(matchId, timeline)
       return timeline
     })().finally(() => {
