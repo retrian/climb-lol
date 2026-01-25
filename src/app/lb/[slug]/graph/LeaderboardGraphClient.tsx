@@ -324,7 +324,7 @@ function buildSmoothPath(points: Array<{ x: number; y: number }>) {
 }
 
 function describeProgression(first: NormalizedPoint, last: NormalizedPoint) {
-  const diff = Math.round((last.lpValue ?? 0) - (first.lpValue ?? 0))
+  const diff = Math.round((last.ladderValue ?? 0) - (first.ladderValue ?? 0))
   if (diff === 0) return "0 LP"
   return `${diff > 0 ? "+" : ""}${diff} LP`
 }
