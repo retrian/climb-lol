@@ -33,17 +33,6 @@ export async function GET(
     return new Response('Not found', { status: 404 })
   }
 
-  const { data: playersRaw } = await supabase
-    .from('leaderboard_players')
-    .select('game_name, tag_line, sort_order')
-    .eq('leaderboard_id', lb.id)
-    .order('sort_order', { ascending: true })
-    .limit(6)
-
-  const players = (playersRaw ?? [])
-    .map((player) => formatPlayerName(player.game_name, player.tag_line))
-    .filter((name): name is string => Boolean(name))
-
   const title = lb.name?.trim() || 'Leaderboard'
   const description =
     lb.description?.trim() || 'Custom League of Legends leaderboard with live rank updates.'
@@ -110,31 +99,7 @@ export async function GET(
             <span style={{ fontSize: 28, color: '#e2e8f0', lineHeight: 1.4 }}>{description}</span>
           </div>
 
-          {players.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <span style={{ fontSize: 22, color: '#cbd5f5', letterSpacing: '0.12em' }}>
-                TOP PLAYERS
-              </span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                {players.map((player) => (
-                  <span
-                    key={player}
-                    style={{
-                      padding: '10px 16px',
-                      borderRadius: 999,
-                      background: 'rgba(15, 23, 42, 0.6)',
-                      border: '1px solid rgba(148, 163, 184, 0.4)',
-                      fontSize: 22,
-                    }}
-                  >
-                    {player}
-                  </span>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div style={{ fontSize: 22, color: '#cbd5f5' }}>No players yet — be the first.</div>
-          )}
+          <div style={{ fontSize: 22, color: '#cbd5f5' }}>CWF.LOL leaderboard preview</div>
         </div>
       </div>
     ),
