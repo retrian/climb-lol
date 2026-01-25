@@ -70,7 +70,8 @@ function clamp(n: number, min: number, max: number) {
 function formatDelta(delta: number) {
   const rounded = Math.round(delta)
   if (rounded === 0) return "0"
-  return `${rounded > 0 ? "+" : ""}${rounded}`
+  const sign = rounded > 0 ? "+" : "-"
+  return `${sign} ${Math.abs(rounded)}`
 }
 
 function baseMasterLadder() {
@@ -245,69 +246,38 @@ function buildLadderTicksAdaptive(minValue: number, maxValue: number, cutoffs: R
   return range > 1400 ? buildLadderTicksCoarse(minValue, maxValue, cutoffs) : buildLadderTicksFine(minValue, maxValue, cutoffs)
 }
 
-// --- Downsampling (caps points, preserves shape) ---
-function downsamplePoints(points: NormalizedPoint[], target = 160) {
+// --- Smart sampling (UX-friendly) ---
+function smartSampleByGames(points: NormalizedPoint[]) {
   const n = points.length
-  if (n <= target) return points
+  if (n <= 2) return points
+
+  const lastGames = points[n - 1]?.totalGames ?? 0
+
+  if (lastGames < 100) return points
+
+  const step = lastGames <= 300 ? 3 : lastGames <= 600 ? 5 : 10
 
   const keep = new Set<number>()
   keep.add(0)
   keep.add(n - 1)
 
-  const bigJump = 80 // ladderValue jump threshold (captures big events)
-
-  for (let i = 1; i < n - 1; i += 1) {
+  for (let i = 1; i < n; i += 1) {
     const prev = points[i - 1]
     const cur = points[i]
-    const next = points[i + 1]
 
-    // Tier/division change
+    if (cur.totalGames % step === 0) keep.add(i)
+
     const tierChanged =
       (prev.tier ?? "").toUpperCase() !== (cur.tier ?? "").toUpperCase() ||
       (prev.rank ?? "").toUpperCase() !== (cur.rank ?? "").toUpperCase()
     if (tierChanged) keep.add(i)
 
-    // Turning points (trend direction change)
-    const d1 = cur.ladderValue - prev.ladderValue
-    const d2 = next.ladderValue - cur.ladderValue
-    if (d1 !== 0 && d2 !== 0 && Math.sign(d1) !== Math.sign(d2)) keep.add(i)
-
-    // Big jump/drop
-    if (Math.abs(d1) >= bigJump) keep.add(i)
-
-    // Decay / off-game changes (same games but ladder changed)
     if (cur.totalGames === prev.totalGames && cur.ladderValue !== prev.ladderValue) keep.add(i)
   }
 
-  // Fill with even sampling
-  const desired = target
-  const step = (n - 1) / (desired - 1)
-
-  for (let k = 0; k < desired; k += 1) {
-    const idx = Math.round(k * step)
-    keep.add(idx)
-  }
-
-  let indices = Array.from(keep).sort((a, b) => a - b)
-
-  // If still too many, evenly resample indices
-  if (indices.length > desired) {
-    const step2 = (indices.length - 1) / (desired - 1)
-    const picked: number[] = []
-    for (let k = 0; k < desired; k += 1) {
-      picked.push(indices[Math.round(k * step2)])
-    }
-    // Ensure unique + sorted
-    indices = Array.from(new Set(picked)).sort((a, b) => a - b)
-    // If uniqueness shrank too much, pad lightly
-    while (indices.length < desired) {
-      const candidate = Math.floor(Math.random() * n)
-      indices.push(candidate)
-      indices = Array.from(new Set(indices)).sort((a, b) => a - b)
-    }
-  }
-
-  return indices.map((i) => points[i])
+  return Array.from(keep)
+    .sort((a, b) => a - b)
+    .map((i) => points[i])
 }
 
 function buildSmoothPath(points: Array<{ x: number; y: number }>) {
@@ -405,12 +375,9 @@ export default function LeaderboardGraphClient({
 
   const rawFiltered = useMemo(() => (selectedPuuid ? pointsByPlayer.get(selectedPuuid) ?? [] : []), [pointsByPlayer, selectedPuuid])
 
-  // FIX: Downsample for performance + readability
+  // Smart sampling: plot by games-played thresholds
   const filteredPoints = useMemo(() => {
-    if (rawFiltered.length <= 180) return rawFiltered
-    // dynamic target: more width -> more points, but keep it sane
-    const target = rawFiltered.length > 800 ? 140 : 160
-    return downsamplePoints(rawFiltered, target)
+    return smartSampleByGames(rawFiltered)
   }, [rawFiltered])
 
   const chart = useMemo(() => {
@@ -547,54 +514,27 @@ export default function LeaderboardGraphClient({
       ? { left: x, top: y + 14, transform: "translateX(-50%)" }
       : { left: x, top: y - 12, transform: "translate(-50%, -100%)" }
 
-    const dotColor = colorForPoint(cur)
-
     return (
       <div
         className="pointer-events-none absolute z-10 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-lg"
         style={style as any}
       >
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: dotColor }} />
-          <div className="font-semibold text-slate-900">
-            {cur.totalGames === 0 ? "Placement" : `Game #${cur.totalGames}`}
-          </div>
+        <div className="font-semibold text-slate-900">
+          {cur.totalGames === 0 ? "Placement" : `Game #${cur.totalGames}`}
         </div>
 
-        <div className="mt-1">{formatRank(cur.tier, cur.rank, cur.lp)}</div>
-
-        <div className="mt-1 flex items-center gap-2 text-slate-600">
-          <span>LP {cur.lpValue}</span>
-          <span className="text-slate-300">•</span>
-          <span>Δ {formatDelta(lpChange)}</span>
-          {gamesSpan > 1 ? (
-            <>
-              <span className="text-slate-300">•</span>
-              <span>span +{gamesSpan} games</span>
-            </>
-          ) : null}
+        <div className={`mt-1 ${lpChange >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+          {formatDelta(lpChange)} LP
         </div>
-
-        {typeof cur.wins === "number" && typeof cur.losses === "number" ? (
-          <div className="mt-1 text-slate-500">
-            Record {cur.wins}W-{cur.losses}L
-          </div>
-        ) : null}
-
-        {isMasterPlus ? (
-          <div className="mt-2 text-[10px] text-slate-500">
-            Floors: GM {cutoffs.grandmaster} LP • Chall {cutoffs.challenger} LP (slot-limited tiers)
-          </div>
-        ) : null}
       </div>
     )
   })()
 
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="space-y-1">
-        <h2 className="text-2xl font-semibold text-slate-900">LP Graph by Player</h2>
-        <p className="text-sm text-slate-500">Rank progression by total games played</p>
+        <h2 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">LP Graph by Player</h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400">Rank progression by total games played</p>
       </div>
 
       <div className="mt-6">
@@ -609,7 +549,7 @@ export default function LeaderboardGraphClient({
                 className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
                   isActive
                     ? "border-blue-500 bg-blue-500 text-white shadow-sm"
-                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600"
                 }`}
               >
                 {player.name}
@@ -619,7 +559,10 @@ export default function LeaderboardGraphClient({
         </div>
       </div>
 
-      <div ref={wrapRef} className="relative mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div
+        ref={wrapRef}
+        className="relative mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950"
+      >
         {chart ? (
           <>
             <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="h-auto w-full">
@@ -629,7 +572,7 @@ export default function LeaderboardGraphClient({
                 width={INNER_WIDTH}
                 height={INNER_HEIGHT}
                 rx={16}
-                className="fill-white"
+                className="fill-white dark:fill-slate-900"
               />
 
               {/* Subtle Master+ bands (kept clean; not rainbow everywhere) */}
@@ -672,7 +615,7 @@ export default function LeaderboardGraphClient({
                       x2={WIDTH - PADDING.right}
                       y1={y}
                       y2={y}
-                      className="stroke-slate-200"
+                      className="stroke-slate-200 dark:stroke-slate-800"
                     />
                     <text
                       x={PADDING.left - 12}
@@ -687,44 +630,22 @@ export default function LeaderboardGraphClient({
                 )
               })}
 
-              {/* Floor lines */}
-              {cutoffPositions ? (
-                <>
-                  {[
-                    { key: "chall", y: cutoffPositions.challY, label: `Chall floor: ${cutoffs.challenger} LP` },
-                    { key: "gm", y: cutoffPositions.gmY, label: `GM floor: ${cutoffs.grandmaster} LP` },
-                  ].map((c) => {
-                    const labelW = 160
-                    const labelH = 18
-                    const labelX = WIDTH - PADDING.right - 6
-                    const rectX = labelX - labelW
-                    const rectY = clamp(c.y - 24, PADDING.top + 4, PADDING.top + INNER_HEIGHT - labelH - 4)
-                    const textY = rectY + 13
-
-                    return (
-                      <g key={c.key}>
-                        <line
-                          x1={PADDING.left}
-                          x2={WIDTH - PADDING.right}
-                          y1={c.y}
-                          y2={c.y}
-                          className="stroke-slate-400"
-                          strokeDasharray="4 4"
-                        />
-                        <rect x={rectX} y={rectY} width={labelW} height={labelH} rx={8} className="fill-white" opacity={0.92} />
-                        <text x={labelX} y={textY} textAnchor="end" className="fill-slate-600 text-[10px] font-semibold">
-                          {c.label}
-                        </text>
-                      </g>
-                    )
-                  })}
-                </>
-              ) : null}
 
               {xTicks.map((tick, idx) => (
                 <g key={`${tick.label}-${idx}`}>
-                  <line x1={tick.x} x2={tick.x} y1={PADDING.top} y2={PADDING.top + INNER_HEIGHT} className="stroke-slate-100" />
-                  <text x={tick.x} y={HEIGHT - 16} textAnchor="middle" className="fill-slate-400 text-[10px] font-semibold">
+                  <line
+                    x1={tick.x}
+                    x2={tick.x}
+                    y1={PADDING.top}
+                    y2={PADDING.top + INNER_HEIGHT}
+                    className="stroke-slate-100 dark:stroke-slate-900"
+                  />
+                  <text
+                    x={tick.x}
+                    y={HEIGHT - 16}
+                    textAnchor="middle"
+                    className="fill-slate-400 text-[10px] font-semibold dark:fill-slate-500"
+                  >
                     {tick.label}
                   </text>
                 </g>
@@ -754,13 +675,13 @@ export default function LeaderboardGraphClient({
               })}
             </svg>
 
-            <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-              <span>Total Games</span>
-              <span>{activePlayer?.name ?? "Player"} selection</span>
-            </div>
-          </>
-        ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500">
+              <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                <span>Total Games</span>
+                <span>{activePlayer?.name ?? "Player"} selection</span>
+              </div>
+            </>
+          ) : (
+          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
             No ranking history available.
           </div>
         )}
@@ -768,7 +689,7 @@ export default function LeaderboardGraphClient({
         {tooltipRender}
       </div>
 
-      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5">
+      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5 dark:border-slate-800 dark:bg-slate-950">
         <div className="grid gap-6 text-center sm:grid-cols-2 lg:grid-cols-4">
           {[
             { label: "Current Rank", value: summary?.current ?? "—" },
@@ -777,8 +698,10 @@ export default function LeaderboardGraphClient({
             { label: "Matches", value: summary?.matches.toString() ?? "—" },
           ].map((item) => (
             <div key={item.label}>
-              <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{item.label}</div>
-              <div className="mt-2 text-lg font-bold text-slate-900">{item.value}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+                {item.label}
+              </div>
+              <div className="mt-2 text-lg font-bold text-slate-900 dark:text-slate-100">{item.value}</div>
             </div>
           ))}
         </div>

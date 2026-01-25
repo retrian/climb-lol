@@ -48,6 +48,7 @@ interface MatchSummary {
   endTs?: number | null
   durationS?: number | null
   queueId?: number | null
+  visionScore?: number | null
 }
 
 interface MatchDetailResponse {
@@ -85,6 +86,7 @@ interface RiotParticipant {
   item4: number
   item5: number
   item6: number
+  roleBoundItem?: number
   summoner1Id: number
   summoner2Id: number
   perks?: {
@@ -212,6 +214,14 @@ function buildItemIconUrl(version: string, id: number) {
 
 function formatCsPerMin(cs: number, durationS?: number | null) {
   return durationS ? (cs / (durationS / 60)).toFixed(1) : '0.0'
+}
+
+function formatHoursMinutes(totalSeconds: number) {
+  const totalMinutes = Math.max(0, Math.floor(totalSeconds / 60))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours <= 0) return `${minutes}m`
+  return `${hours}h ${minutes}m`
 }
 
 function buildSpellMap(spells: Record<string, any>) {
@@ -467,7 +477,17 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
     const secondaryStyle = runeSecondary?.style ? runeMap?.get(runeSecondary.style) : null
     const spell1 = participant ? spellMap?.get(participant.summoner1Id) : null
     const spell2 = participant ? spellMap?.get(participant.summoner2Id) : null
-    const items = participant ? [participant.item0, participant.item1, participant.item2, participant.item3, participant.item4, participant.item5, participant.item6] : []
+    const items = participant ? [participant.item0, participant.item1, participant.item2, participant.item3, participant.item4, participant.item5, participant.item6, participant.roleBoundItem ?? 0] : []
+    const killParticipationPct = useMemo(() => {
+      if (!detail?.info?.participants?.length) return null
+      const teamId = participant?.teamId
+      if (!teamId) return null
+      const teamKills = detail.info.participants
+        .filter(p => p.teamId === teamId)
+        .reduce((sum, p) => sum + (p.kills ?? 0), 0)
+      if (!teamKills) return null
+      return Math.round(((match.k + match.a) / teamKills) * 100)
+    }, [detail?.info?.participants, participant?.teamId, match.k, match.a])
   
     const rowBg = match.win ? 'bg-emerald-50/80 dark:bg-emerald-500/10' : 'bg-rose-50/80 dark:bg-rose-500/10'
     const rowBorder = match.win ? 'border-emerald-200/80 dark:border-emerald-500/30' : 'border-rose-200/80 dark:border-rose-500/30'
@@ -475,46 +495,69 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
   
     return (
       <div className={`rounded-2xl border ${rowBorder} ${rowBg} shadow-sm`}>
-        <button type="button" onClick={() => onExpand(match.matchId)} className="w-full px-4 py-3 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
+        <button type="button" onClick={() => onExpand(match.matchId)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
           <div className={`flex items-center gap-3 text-xs text-slate-500 ${rowAccent} border-l-4 pl-3 min-w-0`}>
-            <div className="flex flex-col w-[140px] shrink-0">
-              <span className={`text-sm font-bold ${resultColor}`}>{resultLabel}</span>
-              <span className="text-[11px] font-semibold text-slate-400">{queueLabel}</span>
-              <span className="text-[11px] text-slate-400">{when} • {durationLabel}</span>
+            <div className="flex flex-col w-[130px] shrink-0 leading-tight">
+              <span className={`text-[12px] font-black uppercase tracking-wide ${resultColor}`}>{resultLabel}</span>
+              <span className="text-[10px] text-slate-400 uppercase tracking-wide">{durationLabel}</span>
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{queueLabel}</span>
+              <span className="text-[10px] text-slate-400">{when}</span>
             </div>
-            <div className="flex items-center gap-2 w-[160px] shrink-0">
+            <div className="flex items-center gap-3 w-[190px] shrink-0">
               {champSrc ? (
                 <div className="relative">
-                  <img loading="lazy" decoding="async" src={champSrc} alt="" className="h-11 w-11 rounded-lg border-2 border-slate-200 shadow-sm dark:border-slate-700" />
+                  <img loading="lazy" decoding="async" src={champSrc} alt="" className="h-[50px] w-[50px] rounded-lg border-2 border-slate-200 shadow-sm dark:border-slate-700" />
                   <span className="absolute -bottom-2 -right-2 rounded-full bg-slate-900 px-1.5 text-[10px] font-bold text-white shadow dark:bg-slate-100 dark:text-slate-900">{participant?.champLevel ?? '—'}</span>
                 </div>
-              ) : <div className="h-11 w-11 rounded-lg bg-slate-200 dark:bg-slate-800" />}
-              <div className="min-w-0">
-                <div className="text-sm font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap truncate">{champion?.name ?? 'Unknown'}</div>
-                <div className={`text-[11px] font-semibold ${kdaColor} whitespace-nowrap`}>{match.k}/{match.d}/{match.a} • {kdaLabel} KDA</div>
+              ) : <div className="h-[50px] w-[50px] rounded-lg bg-slate-200 dark:bg-slate-800" />}
+              <div className="mt-1 grid grid-cols-[24px_24px] grid-rows-2 gap-1">
+                {spell1 ? (
+                  <img loading="lazy" decoding="async" src={buildSpellIconUrl(ddVersion, spell1) ?? ''} alt="" className="h-6 w-6 rounded-md border border-slate-200 dark:border-slate-700" />
+                ) : (
+                  <div className="h-6 w-6 rounded-md bg-slate-200 dark:bg-slate-800" />
+                )}
+                {keystone ? (
+                  <img loading="lazy" decoding="async" src={buildRuneIconUrl(keystone.icon) ?? ''} alt="" className="h-6 w-6 rounded-full bg-slate-100 dark:bg-slate-800" />
+                ) : (
+                  <div className="h-6 w-6 rounded-full bg-slate-200 dark:bg-slate-800" />
+                )}
+                {spell2 ? (
+                  <img loading="lazy" decoding="async" src={buildSpellIconUrl(ddVersion, spell2) ?? ''} alt="" className="h-6 w-6 rounded-md border border-slate-200 dark:border-slate-700" />
+                ) : (
+                  <div className="h-6 w-6 rounded-md bg-slate-200 dark:bg-slate-800" />
+                )}
+                {secondaryStyle ? (
+                  <img loading="lazy" decoding="async" src={buildRuneIconUrl(secondaryStyle.icon) ?? ''} alt="" className="h-6 w-6 rounded-full bg-slate-100 dark:bg-slate-800" />
+                ) : (
+                  <div className="h-6 w-6 rounded-full bg-slate-200 dark:bg-slate-800" />
+                )}
               </div>
             </div>
-            <div className="flex flex-col w-[120px] shrink-0">
-              <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">{match.cs} CS</span>
-              <span className="text-[11px] text-slate-400 font-semibold whitespace-nowrap">{csPerMin}/m</span>
+            <div className="flex flex-col w-[150px] shrink-0 leading-tight">
+              <span className="text-sm font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                {match.k} / {match.d} / {match.a}
+              </span>
+              <span className={`text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap`}>{kdaLabel} KDA</span>
             </div>
-            <div className="flex items-center gap-1 w-[80px] shrink-0">
-              {[spell1, spell2].map((spell, idx) => {
-                const icon = buildSpellIconUrl(ddVersion, spell)
-                return icon ? <img loading="lazy" decoding="async" key={idx} src={icon} alt="" className="h-6 w-6 rounded-md border border-slate-200 dark:border-slate-700" /> : <div key={idx} className="h-6 w-6 rounded-md bg-slate-200 dark:bg-slate-800" />
-              })}
+            <div className="flex flex-col w-[150px] shrink-0 border-l border-slate-200 pl-3 leading-tight dark:border-slate-800">
+              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                {killParticipationPct !== null ? `${killParticipationPct}% KP` : '—'}
+              </span>
+              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">{match.cs} CS</span>
             </div>
-            <div className="flex items-center gap-1 w-[70px] shrink-0">
-              {[keystone, secondaryStyle].map((rune, idx) => {
-                const icon = buildRuneIconUrl(rune?.icon)
-                return icon ? <img loading="lazy" decoding="async" key={idx} src={icon} alt="" className="h-6 w-6 rounded-full bg-slate-100 dark:bg-slate-800" /> : <div key={idx} className="h-6 w-6 rounded-full bg-slate-200 dark:bg-slate-800" />
-              })}
-            </div>
-            <div className="flex flex-1 items-center justify-end gap-1 min-w-0">
+            <div className="grid grid-cols-8 gap-2 ml-auto min-w-0">
               {items.length > 0 ? items.map((itemId, idx) => {
                   const icon = buildItemIconUrl(ddVersion, itemId)
-                  return icon ? <img loading="lazy" decoding="async" key={idx} src={icon} alt="" className="h-7 w-7 rounded-md border border-slate-200 dark:border-slate-700" /> : <div key={idx} className="h-7 w-7 rounded-md bg-slate-200 dark:bg-slate-800" />
-                }) : Array.from({ length: 7 }).map((_, idx) => <div key={`e-${idx}`} className="h-7 w-7 rounded-md bg-slate-200 dark:bg-slate-800" />)}
+                  return (
+                    <div key={idx} className="h-9 w-9 rounded-md border border-slate-200 bg-slate-100 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                      {icon ? (
+                        <img loading="lazy" decoding="async" src={icon} alt="" className="h-full w-full rounded-md object-cover" style={{ aspectRatio: '1 / 1' }} />
+                      ) : null}
+                    </div>
+                  )
+                }) : Array.from({ length: 8 }).map((_, idx) => (
+                  <div key={`e-${idx}`} className="h-9 w-9 rounded-md border border-slate-200 bg-slate-100 shadow-sm dark:border-slate-700 dark:bg-slate-800" style={{ aspectRatio: '1 / 1' }} />
+                ))}
             </div>
             <div className="ml-2 text-slate-400">
               <svg className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
@@ -544,10 +587,10 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
                                 {icon ? <img loading="lazy" decoding="async" src={icon} alt="" className="h-7 w-7 rounded-md border border-slate-200 dark:border-slate-700" /> : <div className="h-7 w-7 rounded-md bg-slate-200 dark:bg-slate-800" />}
                                 <div className="min-w-0 flex-1">
                                   <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{p.riotIdGameName ? `${p.riotIdGameName}#${p.riotIdTagline}` : p.summonerName}</div>
-                                  <div className="text-[11px] text-slate-400">{p.kills}/{p.deaths}/{p.assists} • {(p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0)} CS</div>
+                                  <div className="text-[11px] text-slate-400">{p.kills}/{p.deaths}/{p.assists} | {(p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0)} CS</div>
                                 </div>
                                 <div className="flex items-center gap-1">
-                                  {[p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6].map((itm, i) => {
+                                  {[p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6, p.roleBoundItem ?? 0].map((itm, i) => {
                                     const itmIcon = buildItemIconUrl(ddVersion, itm)
                                     return itmIcon ? <img loading="lazy" decoding="async" key={i} src={itmIcon} alt="" className="h-6 w-6 rounded border border-slate-200 dark:border-slate-700" /> : <div key={i} className="h-6 w-6 rounded bg-slate-200 dark:bg-slate-800" />
                                   })}
@@ -580,6 +623,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const [activeTab, setActiveTab] = useState<'matches' | 'stats' | 'champions'>('matches')
   const [expandedMatchId, setExpandedMatchId] = useState<string | null>(null)
   const [matchDetails, setMatchDetails] = useState<Record<string, MatchDetailResponse>>({})
+  const [visibleMatchesCount, setVisibleMatchesCount] = useState(10)
   const [imagesReady, setImagesReady] = useState(true)
   const initialImagesReady = useRef(false)
   const preloadIdRef = useRef(0)
@@ -597,6 +641,11 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
 
   const playerMatches = useMemo(() => matches, [matches])
 
+  const prefetchMatchIds = useMemo(
+    () => matches.slice(0, visibleMatchesCount).map((match) => match.matchId),
+    [matches, visibleMatchesCount]
+  )
+
   const statsSnapshot = useMemo(() => {
     if (!playerMatches.length) return null
     const totals = playerMatches.reduce(
@@ -608,9 +657,37 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
         acc.assists += match.a
         acc.cs += match.cs
         acc.durationS += match.durationS ?? 0
+        acc.vision += match.visionScore ?? 0
+        if (match.durationS && match.durationS > acc.longestGameS) {
+          acc.longestGameS = match.durationS
+          acc.longestGameChampionId = match.championId
+        }
+        if (match.k > acc.maxKills.value) acc.maxKills = { value: match.k, championId: match.championId }
+        if (match.d > acc.maxDeaths.value) acc.maxDeaths = { value: match.d, championId: match.championId }
+        if (match.a > acc.maxAssists.value) acc.maxAssists = { value: match.a, championId: match.championId }
+        if (match.cs > acc.maxCs.value) acc.maxCs = { value: match.cs, championId: match.championId }
+        if ((match.visionScore ?? 0) > acc.maxVision.value) {
+          acc.maxVision = { value: match.visionScore ?? 0, championId: match.championId }
+        }
         return acc
       },
-      { games: 0, wins: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
+      {
+        games: 0,
+        wins: 0,
+        kills: 0,
+        deaths: 0,
+        assists: 0,
+        cs: 0,
+        durationS: 0,
+        vision: 0,
+        longestGameS: 0,
+        longestGameChampionId: 0,
+        maxKills: { value: 0, championId: 0 },
+        maxDeaths: { value: 0, championId: 0 },
+        maxAssists: { value: 0, championId: 0 },
+        maxCs: { value: 0, championId: 0 },
+        maxVision: { value: 0, championId: 0 },
+      }
     )
 
     const losses = totals.games - totals.wins
@@ -632,6 +709,18 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       kdaRatio,
       csPerMin,
       avgDuration,
+      totalKills: totals.kills,
+      totalDeaths: totals.deaths,
+      totalAssists: totals.assists,
+      totalVision: totals.vision,
+      longestGameS: totals.longestGameS,
+      longestGameChampionId: totals.longestGameChampionId,
+      timePlayedS: totals.durationS,
+      maxKills: totals.maxKills,
+      maxDeaths: totals.maxDeaths,
+      maxAssists: totals.maxAssists,
+      maxCs: totals.maxCs,
+      maxVision: totals.maxVision,
     }
   }, [playerMatches])
 
@@ -806,6 +895,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     const puuid = selectedPlayer.player.puuid
     setActiveTab('matches')
     setExpandedMatchId(null)
+    setVisibleMatchesCount(10)
 
     const cachedSummary = getCacheValue(summaryCache, puuid)
     if (cachedSummary) {
@@ -828,7 +918,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       setMatches(cachedMatches)
     } else {
       setLoadingMatches(true)
-      fetch(`/api/player/${puuid}/matches?limit=200`)
+      fetch(`/api/player/${puuid}/matches?limit=all`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
           const list: MatchSummary[] = data.matches ?? []
@@ -875,10 +965,10 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [])
 
   useEffect(() => {
-    if (!open || !matches.length) return
+    if (!open || prefetchMatchIds.length === 0) return
     
     let cancelled = false
-    const queue = matches.map(m => m.matchId).filter(id => !matchDetailCache.has(id))
+    const queue = prefetchMatchIds.filter((id) => !matchDetailCache.has(id))
     
     if (!queue.length) return
 
@@ -912,7 +1002,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
         clearTimeout(timer);
         fetchingMatches.current.clear();
     }
-  }, [open, matches])
+  }, [open, prefetchMatchIds])
 
   const handleOpen = useCallback((card: PlayerCard) => {
     setSelectedPlayer(card)
@@ -925,6 +1015,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setSummary(null)
     setMatches([])
     setExpandedMatchId(null)
+    setVisibleMatchesCount(10)
     // 2. Memory Leak Fix: Clear heavy detail state
     setMatchDetails({})
   }, [])
@@ -982,7 +1073,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       {open && selectedPlayer && createPortal(
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={handleClose}>
             {/* 4. Backdrop Click Fix: Stop propagation on content click */}
-            <div ref={modalRef} role="dialog" aria-modal="true" className="relative flex h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
+            <div ref={modalRef} role="dialog" aria-modal="true" className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
               {!imagesReady && activeTab === 'matches' && (
                 <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 backdrop-blur dark:bg-slate-950/80">
                   <div className="flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
@@ -1011,30 +1102,75 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                       </div>
                     ) : (
                       <>
-                        <div className="h-14 w-14 overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                        <div className="h-20 w-20 overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                           {summary?.profileIconId && <img loading="eager" decoding="async" src={profileIconUrl(summary.profileIconId, ddVersion) ?? ''} alt="" className="h-full w-full object-cover" />}
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">{displayRiotId(selectedPlayer.player)}</h3>
+                            <h3 className="flex items-baseline gap-1.5 text-lg font-semibold text-slate-900 dark:text-slate-100">
+                              {selectedPlayer.player.game_name ? (
+                                <>
+                                  <span className="font-bold">{selectedPlayer.player.game_name}</span>
+                                  {selectedPlayer.player.tag_line && (
+                                    <span className="text-sm font-medium text-slate-400 dark:text-slate-500">#{selectedPlayer.player.tag_line}</span>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="font-bold">{displayRiotId(selectedPlayer.player)}</span>
+                              )}
+                            </h3>
                             {selectedPlayer.player.role && <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{selectedPlayer.player.role}</span>}
                           </div>
                           <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                             {summary?.rank ? (
-                              <span className="inline-flex items-center gap-2">
-                                <img loading="eager" decoding="async" src={getRankIconSrc(summary.rank.tier)} alt="" className="h-4 w-4" />
-                                <span>{summary.rank.tier ?? 'Unranked'} {summary.rank.rank ?? ''} • {summary.rank.league_points ?? 0} LP • {summary.rank.wins ?? 0}W-{summary.rank.losses ?? 0}L</span>
+                              <span className="inline-flex items-center gap-3">
+                                <img loading="eager" decoding="async" src={getRankIconSrc(summary.rank.tier)} alt="" className="h-10 w-10" />
+                                <span className="grid grid-cols-[auto_auto] gap-x-6 gap-y-0.5 text-[11px] font-semibold">
+                                  <span className="text-slate-700 dark:text-slate-300">
+                                    {summary.rank.tier ?? 'Unranked'}
+                                    {!['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes((summary.rank.tier ?? '').toUpperCase())
+                                      ? ` ${summary.rank.rank ?? ''}`
+                                      : ''}
+                                  </span>
+                                  <span className="text-slate-500 dark:text-slate-400">
+                                    {summary.rank.wins ?? 0}W {summary.rank.losses ?? 0}L
+                                  </span>
+                                  <span className="text-slate-500 dark:text-slate-400">
+                                    {summary.rank.league_points ?? 0} LP
+                                  </span>
+                                  <span className="text-slate-400 dark:text-slate-500">
+                                    {(() => {
+                                      const wins = summary.rank.wins ?? 0
+                                      const losses = summary.rank.losses ?? 0
+                                      const total = wins + losses
+                                      const pct = total ? Math.round((wins / total) * 100) : 0
+                                      return `${pct}% WR`
+                                    })()}
+                                  </span>
+                                </span>
                               </span>
                             ) : <span>Unranked</span>}
                           </div>
-                          {summary?.lastUpdated && <div className="mt-1 text-[11px] text-slate-400">Last updated: {timeAgo(new Date(summary.lastUpdated).getTime())}</div>}
+                          {summary?.lastUpdated && (
+                            <div className="mt-1 text-[11px] text-slate-400">
+                              Last updated: {timeAgo(new Date(summary.lastUpdated).getTime())}
+                            </div>
+                          )}
                         </div>
                       </>
                     )}
                   </div>
-                  <button ref={closeButtonRef} type="button" aria-label="Close" onClick={handleClose} className="rounded-full border border-slate-200 bg-white p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:hover:bg-slate-900 dark:hover:text-slate-100">
-                    <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 10-1.06-1.06L10 8.94 6.28 5.22z" /></svg>
-                  </button>
+                  <div className="flex flex-col items-end gap-2">
+                    <button
+                      ref={closeButtonRef}
+                      type="button"
+                      aria-label="Close"
+                      onClick={handleClose}
+                      className="rounded-full border border-slate-200 bg-white p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:hover:bg-slate-900 dark:hover:text-slate-100"
+                    >
+                      <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 10-1.06-1.06L10 8.94 6.28 5.22z" /></svg>
+                    </button>
+                  </div>
                 </div>
                 <div className="mt-5 flex flex-wrap items-center gap-2 text-xs font-semibold">
                   {(['matches', 'stats', 'champions'] as const).map(tab => (
@@ -1044,19 +1180,48 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                   ))}
                 </div>
               </div>
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 min-h-0 overflow-hidden">
                 {activeTab === 'matches' && (
                   <div
-                    className="h-full overflow-y-auto px-6 py-5 space-y-3 overscroll-contain"
+                    className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-5 space-y-3 overscroll-contain"
                     style={{ contentVisibility: 'auto', containIntrinsicSize: '1200px' }}
                   >
                     {loadingMatches ? <MatchDetailSkeleton /> : !matches.length ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">No matches available.</div>
-                    ) : matches.map(match => <MatchRow key={match.matchId} match={match} champMap={champMap} ddVersion={ddVersion} detail={matchDetails[match.matchId] || null} isExpanded={expandedMatchId === match.matchId} onExpand={toggleExpand} spellMap={spellMap} runeMap={runeMap} />)}
+                    ) : (
+                      <>
+                        {matches
+                          .slice(0, visibleMatchesCount)
+                          .map(match => (
+                            <MatchRow
+                              key={match.matchId}
+                              match={match}
+                              champMap={champMap}
+                              ddVersion={ddVersion}
+                              detail={matchDetails[match.matchId] || null}
+                              isExpanded={expandedMatchId === match.matchId}
+                              onExpand={toggleExpand}
+                              spellMap={spellMap}
+                              runeMap={runeMap}
+                            />
+                          ))}
+                        {visibleMatchesCount < matches.length && (
+                          <div className="pt-2">
+                            <button
+                              type="button"
+                              onClick={() => setVisibleMatchesCount(prev => Math.min(prev + 10, matches.length))}
+                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700"
+                            >
+                              Show more
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
                 {activeTab === 'stats' && (
-                  <div className="h-full overflow-y-auto px-6 py-6 space-y-6">
+                  <div className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-6 space-y-6">
                     {loadingMatches ? (
                       <StatGridSkeleton />
                     ) : !statsSnapshot ? (
@@ -1065,74 +1230,65 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                       </div>
                     ) : (
                       <>
-                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Games</div>
-                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.games}</div>
-                            {summaryRecord && (
-                              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Season: {summaryRecord.wins}W-{summaryRecord.losses}L</div>
-                            )}
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Win Rate</div>
-                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.winrate}%</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{statsSnapshot.wins}W / {statsSnapshot.losses}L</div>
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">KDA</div>
-                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.kdaRatio.toFixed(2)}</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{statsSnapshot.avgKills.toFixed(1)} / {statsSnapshot.avgDeaths.toFixed(1)} / {statsSnapshot.avgAssists.toFixed(1)}</div>
-                          </div>
-                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">CS / Min</div>
-                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.csPerMin.toFixed(1)}</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Avg Game {formatMatchDuration(statsSnapshot.avgDuration)}</div>
-                          </div>
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          {[
+                            { label: 'Total Kills', value: statsSnapshot.totalKills },
+                            { label: 'Total Deaths', value: statsSnapshot.totalDeaths },
+                            { label: 'Total Assists', value: statsSnapshot.totalAssists },
+                            { label: 'Overall KDA', value: statsSnapshot.kdaRatio.toFixed(2) },
+                            { label: 'Time Played', value: formatHoursMinutes(statsSnapshot.timePlayedS) },
+                            { label: 'Total Games', value: statsSnapshot.games },
+                          ].map((stat) => (
+                            <div key={stat.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{stat.label}</div>
+                              <div className="mt-2 text-xl font-bold text-slate-900 dark:text-slate-100">{stat.value}</div>
+                            </div>
+                          ))}
                         </div>
 
-                        <div className="grid gap-6 lg:grid-cols-2">
-                          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                            <div className="flex items-center justify-between">
-                              <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">Top Champions</h4>
-                              <span className="text-xs text-slate-400">Ranked Solo/Duo</span>
-                            </div>
-                            <div className="mt-4 space-y-3">
-                              {topChampions.map((champ) => (
-                                <div key={champ.championId} className="flex items-center gap-3">
-                                  {champ.icon ? (
-                                    <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-10 w-10 rounded-lg border border-slate-200 dark:border-slate-700" />
+                        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                          <h4 className="text-sm font-black uppercase tracking-widest text-slate-700 dark:text-slate-200">Records</h4>
+                          <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                            {([
+                              { label: 'Most Kills', stat: statsSnapshot.maxKills },
+                              { label: 'Most Deaths', stat: statsSnapshot.maxDeaths },
+                              { label: 'Most Assists', stat: statsSnapshot.maxAssists },
+                              { label: 'Most CS', stat: statsSnapshot.maxCs },
+                              { label: 'Most Vision Score', stat: statsSnapshot.maxVision },
+                              {
+                                label: 'Longest Game',
+                                stat: { value: statsSnapshot.longestGameS, championId: statsSnapshot.longestGameChampionId },
+                                formatValue: (value: number) => formatMatchDuration(value),
+                              },
+                            ] as Array<{
+                              label: string
+                              stat: { value: number; championId: number }
+                              formatValue?: (value: number) => string | number
+                            }>).map(({ label, stat, formatValue }) => {
+                              const formatStatValue = formatValue ?? ((value: number) => value)
+                              const champ = champMap?.[stat.championId]
+                              return (
+                                <div key={label} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-950">
+                                  {champ ? (
+                                    <img
+                                      loading="lazy"
+                                      decoding="async"
+                                      src={championIconUrl(ddVersion, champ.id)}
+                                      alt=""
+                                      className="h-12 w-12 rounded-lg border border-slate-200 dark:border-slate-700"
+                                    />
                                   ) : (
-                                    <div className="h-10 w-10 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                    <div className="h-12 w-12 rounded-lg bg-slate-200 dark:bg-slate-800" />
                                   )}
-                                  <div className="min-w-0 flex-1">
-                                    <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
-                                    <div className="text-xs text-slate-400">{champ.games} games • {champ.winrate}% WR</div>
+                                  <div className="min-w-0">
+                                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                      {formatStatValue(stat.value as number)}
+                                    </div>
                                   </div>
-                                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{champ.kda.toFixed(2)} KDA</div>
                                 </div>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                            <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">Performance Breakdown</h4>
-                            <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
-                              <div>
-                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Avg K / D / A</div>
-                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{statsSnapshot.avgKills.toFixed(1)} / {statsSnapshot.avgDeaths.toFixed(1)} / {statsSnapshot.avgAssists.toFixed(1)}</div>
-                              </div>
-                              <div>
-                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Total CS</div>
-                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{statsSnapshot.games ? Math.round(statsSnapshot.games * statsSnapshot.csPerMin * (statsSnapshot.avgDuration / 60)) : 0}</div>
-                              </div>
-                              <div>
-                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Avg Duration</div>
-                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{formatMatchDuration(statsSnapshot.avgDuration)}</div>
-                              </div>
-                              <div>
-                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Win Rate</div>
-                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{statsSnapshot.winrate}%</div>
-                              </div>
-                            </div>
+                              )
+                            })}
                           </div>
                         </div>
                       </>
@@ -1140,7 +1296,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                   </div>
                 )}
                 {activeTab === 'champions' && (
-                  <div className="h-full overflow-y-auto px-6 py-6">
+                  <div className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-6">
                     {loadingMatches ? (
                       <StatGridSkeleton />
                     ) : !championSnapshot.length ? (
@@ -1149,30 +1305,51 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                       </div>
                     ) : (
                       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                        <div className="grid grid-cols-[minmax(180px,1fr)_90px_90px_90px_90px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800 dark:bg-slate-950">
+                        <div className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:border-slate-800 dark:bg-slate-950">
                           <div>Champion</div>
-                          <div className="text-right">Games</div>
-                          <div className="text-right">Win%</div>
-                          <div className="text-right">KDA</div>
-                          <div className="text-right">CS</div>
+                          <div className="text-right tabular-nums">KDA</div>
+                          <div className="text-right tabular-nums">CS</div>
+                          <div className="text-right tabular-nums">Games</div>
                         </div>
                         <div className="divide-y divide-slate-200 dark:divide-slate-800">
-                          {championSnapshot.map((champ) => (
-                            <div key={champ.championId} className="grid grid-cols-[minmax(180px,1fr)_90px_90px_90px_90px] gap-3 px-4 py-3 text-sm text-slate-700 dark:text-slate-200">
-                              <div className="flex items-center gap-3 min-w-0">
-                                {champ.icon ? (
-                                  <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700" />
-                                ) : (
-                                  <div className="h-9 w-9 rounded-lg bg-slate-200 dark:bg-slate-800" />
-                                )}
-                                <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
+                          {championSnapshot.map((champ) => {
+                            const losses = Math.max(0, champ.games - champ.wins)
+                            const winPct = champ.games ? (champ.wins / champ.games) * 100 : 0
+                            return (
+                              <div key={champ.championId} className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 px-5 py-3 text-[13px] text-slate-700 dark:text-slate-200">
+                                <div className="flex items-center gap-3 min-w-0">
+                                  {champ.icon ? (
+                                    <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-12 w-12 rounded-lg border border-slate-200 dark:border-slate-700" />
+                                  ) : (
+                                    <div className="h-12 w-12 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                  )}
+                                  <div className="grid min-w-0 flex-1 items-center gap-3" style={{ gridTemplateColumns: '160px 240px 44px' }}>
+                                    <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
+                                    <div className="flex h-6 overflow-hidden rounded-full border border-slate-200 text-[11px] font-semibold tabular-nums dark:border-slate-700">
+                                      <span
+                                        className="flex items-center justify-center bg-blue-400 px-2 text-white"
+                                        style={{ width: `${winPct}%` }}
+                                      >
+                                        {champ.wins}W
+                                      </span>
+                                      <span
+                                        className="flex items-center justify-center bg-rose-400 px-2 text-white"
+                                        style={{ width: `${100 - winPct}%` }}
+                                      >
+                                        {losses}L
+                                      </span>
+                                    </div>
+                                    <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                                      {champ.winrate}%
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.kda.toFixed(2)}</div>
+                                <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.avgCs.toFixed(1)}</div>
+                                <div className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">{champ.games}</div>
                               </div>
-                              <div className="text-right font-semibold text-slate-900 dark:text-slate-100">{champ.games}</div>
-                              <div className="text-right text-slate-500 dark:text-slate-400">{champ.winrate}%</div>
-                              <div className="text-right text-slate-500 dark:text-slate-400">{champ.kda.toFixed(2)}</div>
-                              <div className="text-right text-slate-500 dark:text-slate-400">{champ.avgCs.toFixed(1)}</div>
-                            </div>
-                          ))}
+                            )
+                          })}
                         </div>
                       </div>
                     )}

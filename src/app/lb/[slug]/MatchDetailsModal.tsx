@@ -24,6 +24,7 @@ interface RiotParticipant {
   visionScore: number; totalMinionsKilled: number; neutralMinionsKilled: number
   item0: number; item1: number; item2: number; item3: number; item4: number; item5: number; item6: number
   summoner1Id: number; summoner2Id: number
+  roleBoundItem?: number
   perks: { styles: Array<{ style: number; selections: Array<{ perk: number }> }>; statPerks: { defense: number; flex: number; offense: number } }
   _kp?: number; // Calculated property
 }
@@ -113,6 +114,7 @@ function adaptSummaryToRiot(summary: MatchParticipant, index: number): RiotParti
     neutralMinionsKilled: 0,
     item0: 0, item1: 0, item2: 0, item3: 0, item4: 0, item5: 0, item6: 0,
     summoner1Id: 0, summoner2Id: 0,
+    roleBoundItem: 0,
     perks: { styles: [], statPerks: { defense: 0, flex: 0, offense: 0 } }
   }
 }
@@ -146,27 +148,58 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
     return championImage ? getChampionIconUrl(ddragonVersion, championImage) : null
   }, [ddragonVersion, championImage])
   
+  const questItemId = p.roleBoundItem && p.roleBoundItem > 0 ? p.roleBoundItem : null
+  const questIcon = questItemId ? getItemIconUrl(ddragonVersion, questItemId) : null
+  const trinketItemId = p.item6 && p.item6 > 0 ? p.item6 : null
+  const trinketIcon = trinketItemId ? getItemIconUrl(ddragonVersion, trinketItemId) : null
+
   return (
     <div className={`group relative flex items-center gap-2 rounded-lg border p-1.5 transition-all ${isFocused ? 'bg-amber-50 border-amber-500/30 ring-1 ring-amber-500/20 dark:bg-slate-800' : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-sm dark:bg-slate-900 dark:border-transparent dark:hover:bg-slate-800 dark:hover:border-slate-700'} ${isRtl ? 'flex-row-reverse text-right' : ''}`} style={{ willChange: 'transform' }}>
       {/* Champion Icon: Uses champMap which is available instantly from parent */}
       <Icon src={championIconSrc || undefined} size="h-9 w-9" rounded="rounded-md" className={`shrink-0 ${isFocused ? "ring-amber-500/40" : ""}`} />
       
-      <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
+        <div className={`flex flex-col justify-center min-w-0 flex-1 overflow-hidden ${isRtl ? 'items-end' : 'items-start'}`}>
         <div className={`truncate text-xs font-medium w-full ${isFocused ? 'text-slate-900 dark:text-white' : 'text-slate-700 dark:text-slate-200'}`}>{getPlayerName(p).split('#')[0]}</div>
         
         {/* Items/Runes/Spells - Dimmed or Skeleton in Preview Mode */}
         <div className={`flex gap-0.5 mt-0.5 ${isPreview ? 'opacity-30' : ''}`}>
-          <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
-          <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
-          <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
-          <Icon src={s1 && buildStaticUrl(ddragonVersion, `img/spell/${s1.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
-          <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+          {isRtl ? (
+            <>
+              <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
+              <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
+              <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
+              <Icon src={s1 && buildStaticUrl(ddragonVersion, `img/spell/${s1.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+              <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+            </>
+          ) : (
+            <>
+              <Icon src={s1 && buildStaticUrl(ddragonVersion, `img/spell/${s1.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+              <Icon src={s2 && buildStaticUrl(ddragonVersion, `img/spell/${s2.image.full}`)} size="h-3 w-3" rounded="rounded-sm" ring={false} />
+              <div className="w-[1px] h-3 bg-slate-200 dark:bg-slate-700 mx-0.5"></div>
+              <Icon src={p.perks?.styles?.[0]?.selections?.[0]?.perk && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[0].selections[0].perk)?.icon}`} size="h-3 w-3" rounded="rounded-full" ring={false} />
+              <Icon src={p.perks?.styles?.[1]?.style && `https://ddragon.leagueoflegends.com/cdn/img/${runeMap.get(p.perks.styles[1].style)?.icon}`} size="h-3 w-3" rounded="rounded-full" className="grayscale opacity-70 p-[1px]" ring={false} />
+            </>
+          )}
         </div>
       </div>
 
-      <div className={`flex flex-col justify-center w-[3.5rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
+      <div className={`flex flex-col justify-center w-[4.75rem] shrink-0 ${isRtl ? 'items-start' : 'items-end'}`}>
         <div className="text-xs font-bold text-slate-900 tabular-nums tracking-tight dark:text-slate-100">{p.kills}/{p.deaths}/{p.assists}</div>
-        <div className="text-[10px] text-slate-500 tabular-nums">{!isPreview && `KP ${p._kp}%`}</div>
+        <div className={`flex items-center flex-nowrap gap-1 text-[10px] text-slate-500 tabular-nums leading-none whitespace-nowrap ${isRtl ? 'flex-row-reverse' : ''}`}>
+          {isRtl ? (
+            <>
+              {trinketIcon && <Icon src={trinketIcon} size="h-3 w-3" rounded="rounded-sm" ring={false} className="mr-0.5" />}
+              {questIcon && <Icon src={questIcon} size="h-3 w-3" rounded="rounded-sm" ring={false} className="mr-0.5" />}
+              {!isPreview && <span className="whitespace-nowrap">KP {p._kp}%</span>}
+            </>
+          ) : (
+            <>
+              {trinketIcon && <Icon src={trinketIcon} size="h-3 w-3" rounded="rounded-sm" ring={false} className="mr-0.5" />}
+              {questIcon && <Icon src={questIcon} size="h-3 w-3" rounded="rounded-sm" ring={false} className="mr-0.5" />}
+              {!isPreview && <span className="whitespace-nowrap">KP {p._kp}%</span>}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Damage Graph - Only visible when full data loaded */}
@@ -543,7 +576,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
               </span>
               <span className="text-sm font-medium text-slate-500 dark:text-slate-400">{QUEUE_LABELS[match?.info.queueId ?? 0] ?? 'Match'}</span>
               {match ? (
-                <span className="text-xs text-slate-400 font-mono dark:text-slate-500">{formatMatchDuration(match.info.gameDuration)} • {timeAgo(match.info.gameEndTimestamp ?? match.info.gameCreation)} • {getMatchPatch(match.info.gameVersion) ?? ddVersion}</span>
+                <span className="text-xs text-slate-400 font-mono dark:text-slate-500">{formatMatchDuration(match.info.gameDuration)} | {timeAgo(match.info.gameEndTimestamp ?? match.info.gameCreation)}</span>
               ) : (
                 <span className="text-xs text-slate-400 font-mono dark:text-slate-500 italic">Fetching full stats...</span>
               )}
@@ -615,12 +648,30 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                       const isRtl = tm.dir === 'rtl'
                       return (
                         <div key={tm.id} className="flex flex-col gap-2">
-                          <div className={`flex items-center justify-between px-2 pb-2 border-b border-slate-200 dark:border-slate-800 ${isRtl ? 'flex-row-reverse' : ''}`}>
-                            <span className={`text-xs font-bold uppercase tracking-widest ${tm.color}`}>{tm.l}</span>
-                            {!isPreview && (
-                              <span className="text-xs font-medium text-slate-500 font-mono"><span className="text-slate-900 dark:text-slate-200">{tm.t.kills}</span> Kills <span className="mx-1 text-slate-300 dark:text-slate-700">|</span> <span className="text-amber-500 dark:text-amber-400">{tm.t.gold.toLocaleString()}</span>g</span>
-                            )}
-                          </div>
+        <div className={`flex items-center justify-between px-2 pb-2 border-b border-slate-200 dark:border-slate-800 ${isRtl ? 'flex-row-reverse' : ''}`}>
+          <span className={`text-xs font-bold uppercase tracking-widest ${tm.color}`}>{tm.l}</span>
+          {!isPreview && (
+            <span className="text-xs font-medium text-slate-500 font-mono">
+              {isRtl ? (
+                <>
+                  <span className={tm.id === 100 ? (teamTotals.blue.gold >= teamTotals.red.gold ? 'font-bold text-amber-600 dark:text-amber-300' : 'text-amber-500 dark:text-amber-400') : (teamTotals.red.gold >= teamTotals.blue.gold ? 'font-bold text-amber-600 dark:text-amber-300' : 'text-amber-500 dark:text-amber-400')}>
+                    {tm.t.gold.toLocaleString()}g
+                  </span>{' '}
+                  <span className="mx-1 text-slate-300 dark:text-slate-700">|</span>
+                  <span className="text-slate-900 dark:text-slate-200">{tm.t.kills}</span> Kills
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-900 dark:text-slate-200">{tm.t.kills}</span> Kills{' '}
+                  <span className="mx-1 text-slate-300 dark:text-slate-700">|</span>
+                  <span className={tm.id === 100 ? (teamTotals.blue.gold >= teamTotals.red.gold ? 'font-bold text-amber-600 dark:text-amber-300' : 'text-amber-500 dark:text-amber-400') : (teamTotals.red.gold >= teamTotals.blue.gold ? 'font-bold text-amber-600 dark:text-amber-300' : 'text-amber-500 dark:text-amber-400')}>
+                    {tm.t.gold.toLocaleString()}g
+                  </span>
+                </>
+              )}
+            </span>
+          )}
+        </div>
                           <div className="space-y-1">
                             {tm.d.map(p => (
                               <PlayerRow key={p.puuid} p={p} match={match} focusedPuuid={focusedPuuid} staticData={staticData} champMap={champMap} ddragonVersion={ddragonVersion} spellMap={spellMap} runeMap={runeMap} getPlayerName={getPlayerName} teamColor={tm.bar} isRtl={isRtl} maxDmg={maxDmg} isPreview={isPreview} />
@@ -648,11 +699,14 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                     const tot = stat.b + stat.r || 1
                     const maxB = Math.max(...teams.blue.map((p:any) => stat.k === 'cs' ? p.totalMinionsKilled+p.neutralMinionsKilled : p[stat.k]), 1)
                     const maxR = Math.max(...teams.red.map((p:any) => stat.k === 'cs' ? p.totalMinionsKilled+p.neutralMinionsKilled : p[stat.k]), 1)
+                    const maxAll = Math.max(maxB, maxR, 1)
+                    const blueHigher = stat.b > stat.r
+                    const redHigher = stat.r > stat.b
                     return (
                       <div key={stat.l} className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-slate-300 hover:shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700">
                         <div className="flex justify-between items-end mb-3">
                           <span className="text-xs font-bold uppercase tracking-widest text-slate-500">{stat.l}</span>
-                          <span className="text-xs font-mono font-medium text-slate-400 dark:text-slate-300"><span className="text-blue-500 dark:text-blue-400">{stat.format ? stat.format(stat.b) : stat.b}</span> <span className="text-slate-300 dark:text-slate-600">/</span> <span className="text-rose-500 dark:text-rose-400">{stat.format ? stat.format(stat.r) : stat.r}</span></span>
+                          <span className="text-xs font-mono font-medium text-slate-400 dark:text-slate-300"><span className={`text-blue-500 dark:text-blue-400 ${blueHigher ? 'font-extrabold tracking-tight' : ''}`}>{stat.format ? stat.format(stat.b) : stat.b}</span> <span className="text-slate-300 dark:text-slate-600">/</span> <span className={`text-rose-500 dark:text-rose-400 ${redHigher ? 'font-extrabold tracking-tight' : ''}`}>{stat.format ? stat.format(stat.r) : stat.r}</span></span>
                         </div>
                         <div className="flex gap-1 mb-4 h-1.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden"><div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${(stat.b/tot)*100}%` }}/><div className="h-full bg-rose-500 transition-all duration-500" style={{ width: `${(stat.r/tot)*100}%` }}/></div>
                         <div className="grid grid-cols-2 gap-4">
@@ -664,11 +718,10 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                                 const val = stat.k === 'cs' ? p.totalMinionsKilled+p.neutralMinionsKilled : (p as any)[stat.k]
                                 const isFocused = focusedPuuid === p.puuid
                                 return (
-                                  <div key={p.puuid} className={`flex items-center gap-2 group w-full ${isRed ? 'flex-row-reverse text-right' : ''} ${isFocused ? 'py-0.5 -my-0.5 rounded bg-amber-50 ring-1 ring-amber-500/30 px-1 -mx-1 dark:bg-amber-500/10' : ''}`}>
+                                  <div key={p.puuid} className={`flex items-center gap-2 group w-full ${isRed ? 'flex-row-reverse text-right' : ''}`}>
                                     <Icon src={getChampionIconUrl(ddragonVersion, getChampionImageFull(staticData.champions[p.championId] ?? champMap[p.championId])!)} size="h-5 w-5" rounded="rounded" className={isFocused ? 'ring-amber-500/50' : 'ring-slate-200 dark:ring-slate-700'} />
-                                    <div className={`truncate text-[9px] font-medium text-slate-500 w-10 hidden sm:block ${isFocused ? 'text-amber-600 dark:text-amber-200' : ''}`}>{getPlayerName(p).split('#')[0]}</div>
-                                    <div className="flex-1 min-w-0"><div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden relative"><div className={`h-1 rounded-full absolute top-0 ${isRed ? 'right-0 bg-rose-500/70 group-hover:bg-rose-500' : 'left-0 bg-blue-500/70 group-hover:bg-blue-500'} ${isFocused ? (isRed ? '!bg-rose-500' : '!bg-blue-500') : ''}`} style={{ width: `${(val/(isRed?maxR:maxB))*100}%` }}/></div></div>
-                                    <span className={`text-[9px] font-mono w-8 tabular-nums ${isFocused ? 'text-amber-600 font-bold dark:text-amber-200' : 'text-slate-400'} ${isRed ? 'text-left' : 'text-right'}`}>{val >= 1000 && stat.k !== 'cs' ? (val/1000).toFixed(1)+'k' : val}</span>
+                                    <div className="flex-1 min-w-0"><div className="h-1 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden relative"><div className={`h-1 rounded-full absolute top-0 ${isRed ? 'right-0 bg-rose-500/70 group-hover:bg-rose-500' : 'left-0 bg-blue-500/70 group-hover:bg-blue-500'} ${isFocused ? (isRed ? '!bg-rose-500' : '!bg-blue-500') : ''}`} style={{ width: `${(val/maxAll)*100}%` }}/></div></div>
+                                    <span className={`text-[9px] font-mono w-8 tabular-nums ${isFocused ? 'text-amber-600 underline underline-offset-2 dark:text-amber-200' : 'text-slate-400'} ${isRed ? 'text-left' : 'text-right'}`}>{val >= 1000 && stat.k !== 'cs' ? (val/1000).toFixed(1)+'k' : val}</span>
                                   </div>
                                 )
                               })}

@@ -1,10 +1,10 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { getSeasonStartIso } from '@/lib/riot/season'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 
 // --- Constants ---
-const FALLBACK_SEASON_START = '2026-01-08T20:00:00.000Z'
 const DEFAULT_GRANDMASTER_CUTOFF = 200
 const DEFAULT_CHALLENGER_CUTOFF = 500
 
@@ -193,7 +193,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = process.env.NEXT_PUBLIC_SEASON_START || FALLBACK_SEASON_START
+  const seasonStartIso = getSeasonStartIso()
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')

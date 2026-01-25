@@ -2,6 +2,7 @@ import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
+import { getSeasonStartIso } from '@/lib/riot/season'
 import { compareRanks } from '@/lib/rankSort'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
@@ -267,7 +268,7 @@ export default async function LeaderboardDetail({
   const missingPuuids = Array.from(gamePuuids).filter(p => !top50Set.has(p))
   const allRelevantPuuids = Array.from(new Set([...top50Puuids, ...Array.from(gamePuuids)]))
 
-  const seasonStartIso = process.env.RANKED_SEASON_START ?? '2025-01-08T20:00:00.000Z'
+  const seasonStartIso = getSeasonStartIso({ ddVersion })
   const seasonStartMsLatest = new Date(seasonStartIso).getTime()
 
   // Phase 2: Enrichment (Parallel Fetch)
@@ -402,7 +403,10 @@ export default async function LeaderboardDetail({
 
   // 7. Assemble Latest Games
   const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
-  const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => allowedMatchIds.has(row.match_id))
+  const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => {
+    if (!allowedMatchIds.has(row.match_id)) return false
+    return row.queue_id === 420
+  })
 
   const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
   for (const row of lpEventsRaw) {

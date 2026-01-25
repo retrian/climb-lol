@@ -66,7 +66,7 @@ export function useMatchPrefetch() {
 
     cacheEntry.match = matchPromise
 
-    // Once match is loaded, prefetch timeline and accounts
+    // Once match is loaded, prefetch timeline only (accounts are deferred until modal opens)
     matchPromise.then((match) => {
       if (!match) return
 
@@ -79,31 +79,9 @@ export function useMatchPrefetch() {
       
       cacheEntry.timeline = timelinePromise
 
-      // Prefetch all account data in parallel
-      const accountFetchOptions = getFetchOptions()
-      const accountPromises = match.metadata.participants.map((puuid: string) =>
-        fetch(`/api/riot/account/${puuid}`, accountFetchOptions)
-          .then(r => r.ok ? r.json() : null)
-          .then(d => [puuid, d?.account] as const)
-          .catch(() => [puuid, null] as const)
-      )
-
-      const accountsPromise = Promise.all(accountPromises).then((entries) => {
-        const accs: Record<string, any> = {}
-        entries.forEach(([id, a]) => {
-          if (a) accs[id] = a
-        })
-        return accs
-      })
-
-      cacheEntry.accounts = accountsPromise
-      
       // Store resolved values for instant access
       timelinePromise.then((timeline) => {
         if (timeline) cacheEntry.timeline = timeline
-      })
-      accountsPromise.then((accounts) => {
-        if (accounts) cacheEntry.accounts = accounts
       })
     })
     

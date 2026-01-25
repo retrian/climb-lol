@@ -2,13 +2,11 @@ import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
+import { getSeasonStartIso } from '@/lib/riot/season'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 import ChampionTable from './ChampionTable'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
-
-// --- Configuration ---
-const FALLBACK_SEASON_START = '2026-01-08T20:00:00.000Z'
 
 // --- Types ---
 type Player = {
@@ -257,7 +255,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     )
   }
 
-  const seasonStartMs = new Date(process.env.NEXT_PUBLIC_SEASON_START || FALLBACK_SEASON_START).getTime()
+  const seasonStartMs = new Date(getSeasonStartIso({ ddVersion })).getTime()
 
   const { data: stateRaw } = await supabase
     .from('player_riot_state')
