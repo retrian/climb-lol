@@ -1326,18 +1326,30 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                                   <div className="grid min-w-0 flex-1 items-center gap-3" style={{ gridTemplateColumns: '160px 240px 44px' }}>
                                     <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
                                     <div className="flex h-6 overflow-hidden rounded-full border border-slate-200 text-[11px] font-semibold tabular-nums dark:border-slate-700">
-                                      <span
-                                        className="flex items-center justify-center bg-blue-400 px-2 text-white"
-                                        style={{ width: `${winPct}%` }}
-                                      >
-                                        {champ.wins}W
-                                      </span>
-                                      <span
-                                        className="flex items-center justify-center bg-rose-400 px-2 text-white"
-                                        style={{ width: `${100 - winPct}%` }}
-                                      >
-                                        {losses}L
-                                      </span>
+                                      {winPct === 100 ? (
+                                        <span className="flex w-full items-center justify-center bg-blue-400 px-2 text-white">
+                                          {champ.wins}W
+                                        </span>
+                                      ) : winPct === 0 ? (
+                                        <span className="flex w-full items-center justify-center bg-rose-400 px-2 text-white">
+                                          {losses}L
+                                        </span>
+                                      ) : (
+                                        <>
+                                          <span
+                                            className="flex items-center justify-center bg-blue-400 px-2 text-white"
+                                            style={{ width: `${winPct}%` }}
+                                          >
+                                            {champ.wins}W
+                                          </span>
+                                          <span
+                                            className="flex items-center justify-center bg-rose-400 px-2 text-white"
+                                            style={{ width: `${100 - winPct}%` }}
+                                          >
+                                            {losses}L
+                                          </span>
+                                        </>
+                                      )}
                                     </div>
                                     <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
                                       {champ.winrate}%
