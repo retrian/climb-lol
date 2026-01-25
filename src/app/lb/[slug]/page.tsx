@@ -189,7 +189,39 @@ function TeamHeaderCard({ name, description, slug, visibility, activeTab, banner
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
+  const supabase = await createClient()
+  const { data: lb } = await supabase
+    .from('leaderboards')
+    .select('name, description, banner_url')
+    .eq('slug', slug)
+    .maybeSingle()
+
+  const title = lb?.name ? `${lb.name} | CWF.LOL` : 'Leaderboard | CWF.LOL'
+  const description =
+    lb?.description?.trim() || 'Custom League of Legends leaderboard with live rank updates.'
+  const ogImageUrl = `/api/og/leaderboard/${encodeURIComponent(slug)}`
+
   return {
+    title,
+    description,
+    openGraph: {
+      title,
+      description,
+      images: [
+        {
+          url: ogImageUrl,
+          width: 1200,
+          height: 630,
+          alt: lb?.name ? `${lb.name} leaderboard` : 'Leaderboard preview',
+        },
+      ],
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      description,
+      images: [ogImageUrl],
+    },
     other: {
       // Prefetch DNS for Riot API domains
       'dns-prefetch': 'https://ddragon.leagueoflegends.com',
