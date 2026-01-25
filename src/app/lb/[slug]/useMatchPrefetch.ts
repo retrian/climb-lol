@@ -59,7 +59,7 @@ export function useMatchPrefetch() {
     }
     
     const fetchOptions = getFetchOptions()
-    const matchPromise = fetch(`/api/riot/match/${matchId}`, fetchOptions)
+    const matchPromise = fetch(`/api/match/${matchId}`, fetchOptions)
       .then(r => r.ok ? r.json() : null)
       .then(d => d?.match || null)
       .catch(() => null)

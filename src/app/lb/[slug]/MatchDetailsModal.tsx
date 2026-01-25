@@ -329,7 +329,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     
     // Only fetch if we don't have preloaded data or preload failed
     if (!preloadedData?.match) {
-      fetch(`/api/riot/match/${matchId}`, { signal: abortController.signal })
+      fetch(`/api/match/${matchId}`, { signal: abortController.signal })
         .then(r => r.ok ? r.json() : Promise.reject())
         .then(d => {
           if (!abortController.signal.aborted) {

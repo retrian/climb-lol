@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getRiotApiKey } from '@/lib/riot/getRiotApiKey'
 import { riotFetchWithRetry } from '@/lib/riot/riotFetchWithRetry'
+import { createServiceClient } from '@/lib/supabase/service'
 
 const ROUTING_BY_PLATFORM: Record<string, string> = {
   NA1: 'americas',
@@ -30,12 +31,14 @@ function getRoutingFromMatchId(matchId: string) {
 const MATCH_CACHE = new Map<string, { value: any; expiresAt: number }>()
 const MATCH_CACHE_TTL_MS = 2 * 60 * 1000
 const MATCH_CACHE_MAX = 100
-const CACHE_CONTROL = 'public, s-maxage=120, stale-while-revalidate=300'
+const MATCH_DB_TTL_MS = 24 * 60 * 60 * 1000
+const CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600'
+const MATCH_IN_FLIGHT = new Map<string, Promise<any>>()
 
-function buildCacheHeaders(isHit: boolean) {
+function buildCacheHeaders(status: 'HIT' | 'HIT-DB' | 'HIT-INFLIGHT' | 'MISS') {
   return {
     'Cache-Control': CACHE_CONTROL,
-    'X-Cache': isHit ? 'HIT' : 'MISS',
+    'X-Cache': status,
   }
 }
 
@@ -57,23 +60,90 @@ function setCachedMatch(matchId: string, value: any) {
   keys.forEach((key) => MATCH_CACHE.delete(key))
 }
 
+function isFresh(timestamp: string | null | undefined, ttlMs: number) {
+  if (!timestamp) return false
+  const ts = new Date(timestamp).getTime()
+  return Number.isFinite(ts) && Date.now() - ts < ttlMs
+}
+
+async function getDbCachedMatch(matchId: string) {
+  const service = createServiceClient()
+  const { data, error } = await service
+    .from('match_cache')
+    .select('match_json, match_fetched_at')
+    .eq('match_id', matchId)
+    .maybeSingle()
+
+  if (error) {
+    console.error('[Match Cache] read error', error.message)
+    return null
+  }
+
+  if (data?.match_json && isFresh(data.match_fetched_at, MATCH_DB_TTL_MS)) {
+    return data.match_json
+  }
+
+  return null
+}
+
+async function upsertDbMatch(matchId: string, match: any) {
+  const service = createServiceClient()
+  const now = new Date().toISOString()
+  const { error } = await service
+    .from('match_cache')
+    .upsert(
+      {
+        match_id: matchId,
+        match_json: match,
+        match_fetched_at: now,
+        updated_at: now,
+      },
+      { onConflict: 'match_id' }
+    )
+
+  if (error) {
+    console.error('[Match Cache] write error', error.message)
+  }
+}
+
 export async function GET(_: Request, { params }: { params: Promise<{ matchId: string }> }) {
   try {
     const { matchId } = await params
     const cached = getCachedMatch(matchId)
     if (cached) {
-      return NextResponse.json({ match: cached }, { headers: buildCacheHeaders(true) })
+      return NextResponse.json({ match: cached }, { headers: buildCacheHeaders('HIT') })
     }
+    const dbCached = await getDbCachedMatch(matchId)
+    if (dbCached) {
+      setCachedMatch(matchId, dbCached)
+      return NextResponse.json({ match: dbCached }, { headers: buildCacheHeaders('HIT-DB') })
+    }
+
+    const inFlight = MATCH_IN_FLIGHT.get(matchId)
+    if (inFlight) {
+      const match = await inFlight
+      return NextResponse.json({ match }, { headers: buildCacheHeaders('HIT-INFLIGHT') })
+    }
+
     const routing = getRoutingFromMatchId(matchId)
     if (!routing) return NextResponse.json({ error: 'Unsupported match id' }, { status: 400 })
     const apiKey = getRiotApiKey()
-    const match = await riotFetchWithRetry(
-      `https://${routing}.api.riotgames.com/lol/match/v5/matches/${matchId}`,
-      apiKey,
-      { maxRetries: 3, retryDelay: 2000 }
-    )
-    setCachedMatch(matchId, match)
-    return NextResponse.json({ match }, { headers: buildCacheHeaders(false) })
+    const fetchPromise = (async () => {
+      const match = await riotFetchWithRetry(
+        `https://${routing}.api.riotgames.com/lol/match/v5/matches/${matchId}`,
+        apiKey,
+        { maxRetries: 3, retryDelay: 2000 }
+      )
+      setCachedMatch(matchId, match)
+      await upsertDbMatch(matchId, match)
+      return match
+    })().finally(() => {
+      MATCH_IN_FLIGHT.delete(matchId)
+    })
+
+    MATCH_IN_FLIGHT.set(matchId, fetchPromise)
+    const match = await fetchPromise
+    return NextResponse.json({ match }, { headers: buildCacheHeaders('MISS') })
   } catch (error) {
     console.error('[Match API]', error)
     const errorMessage = error instanceof Error ? error.message : 'Failed to fetch match'
