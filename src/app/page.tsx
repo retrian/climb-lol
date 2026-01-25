@@ -55,10 +55,10 @@ export default function HomePage() {
   ]
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-4xl px-4 py-10 lg:py-16">
+    <main className="bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+      <div className="mx-auto max-w-4xl px-4 py-8 lg:py-12">
         {/* Hero */}
-        <div className="mb-10">
+        <div className="mb-8">
           <div className="flex items-center gap-3 mb-4">
             <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 dark:from-white dark:via-slate-200 dark:to-slate-400">
               Track NA Ranked Climbs
