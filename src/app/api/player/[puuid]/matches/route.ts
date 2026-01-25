@@ -8,15 +8,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
 
     const { searchParams } = new URL(request.url)
     const limitParam = searchParams.get('limit')
-    const limit = Math.min(Math.max(Number(limitParam ?? 20), 1), 20)
+    const limit = Math.min(Math.max(Number(limitParam ?? 50), 1), 200)
 
     const supabase = await createClient()
 
+    const seasonStartIso = process.env.NEXT_PUBLIC_SEASON_START || process.env.RANKED_SEASON_START || '2026-01-08T20:00:00.000Z'
+    const seasonStartMs = new Date(seasonStartIso).getTime()
+
     const { data: rows, error } = await supabase
       .from('match_participants')
-      .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, matches(game_end_ts, game_duration_s, queue_id)')
+      .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, matches!inner(game_end_ts, game_duration_s, queue_id)')
       .eq('puuid', puuid)
-      .order('match_id', { ascending: false })
+      .eq('matches.queue_id', 420)
+      .gte('matches.game_end_ts', seasonStartMs)
+      .order('game_end_ts', { ascending: false, referencedTable: 'matches' })
       .limit(limit)
 
     if (error) {

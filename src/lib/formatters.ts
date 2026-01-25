@@ -7,8 +7,9 @@ export function getKdaColor(kda: number) {
 
 export function formatMatchDuration(durationS?: number | null) {
   if (!durationS && durationS !== 0) return ''
-  const m = Math.floor(durationS / 60)
-  const s = durationS % 60
+  const safeSeconds = Math.max(0, Math.round(durationS))
+  const m = Math.floor(safeSeconds / 60)
+  const s = safeSeconds % 60
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 

@@ -81,6 +81,7 @@ type MemberRow = {
   player_puuid: string | null
   game_name: string | null
   tag_line: string | null
+  profile_icon_id?: number | null
 }
 
 type ClubLeaderboardRow = {
@@ -148,13 +149,14 @@ export default async function ClubDetailPage({
   const clubErr = sp.club_err ?? null
 
   const supabase = await createClient()
-  const [{ data: auth }, { data: clubRaw, error: clubError }] = await Promise.all([
+  const [{ data: auth }, { data: clubRaw, error: clubError }, { data: profilesRaw }] = await Promise.all([
     supabase.auth.getUser(),
     supabase
       .from('clubs')
       .select('id, name, slug, description, visibility, created_at, updated_at, owner_user_id, banner_url')
       .eq('slug', slug)
       .maybeSingle(),
+    supabase.from('profiles').select('user_id, username'),
   ])
 
   const user = auth.user
@@ -205,6 +207,19 @@ export default async function ClubDetailPage({
   const members = (membersRes.data ?? []) as MemberRow[]
   const memberError = membersRes.error
 
+  const memberPuuids = members.map((member) => member.player_puuid).filter((v): v is string => !!v)
+  const { data: riotStateRaw } = memberPuuids.length
+    ? await supabase.from('player_riot_state').select('puuid, profile_icon_id').in('puuid', memberPuuids)
+    : { data: [] as Array<{ puuid: string; profile_icon_id: number | null }> }
+
+  const riotStateByPuuid = new Map(
+    (riotStateRaw ?? []).map((row) => [row.puuid, row.profile_icon_id])
+  )
+
+  const profilesByUserId = new Map(
+    (profilesRaw ?? []).map((row: { user_id: string; username: string }) => [row.user_id, row.username])
+  )
+
   const links = (linksRes.data ?? []) as ClubLeaderboardRow[]
   const linksError = linksRes.error
 
@@ -232,150 +247,6 @@ export default async function ClubDetailPage({
   const leaderboardCount = attachedLeaderboards.filter((item) => item.leaderboard).length
   const updatedLabel = formatDate(club.updated_at ?? club.created_at)
 
-  async function updateClubHome(formData: FormData) {
-    'use server'
-
-    const name = String(formData.get('club_name') ?? '').trim()
-    const description = String(formData.get('club_description') ?? '').trim().slice(0, 250) || null
-    const visibilityRaw = String(formData.get('club_visibility') ?? '').trim()
-    const prefixRaw = String(formData.get('club_slug_prefix') ?? '').trim()
-    const tagRaw = String(formData.get('club_slug_tag') ?? '').trim()
-
-    if (!prefixRaw || !tagRaw) {
-      redirect(clubUrl(slug, { tab: 'home', err: 'Club tag is required' }))
-    }
-
-    const prefixInput = normalizeSlugPart(prefixRaw, 'club')
-    const tagInput = normalizeSlugPart(tagRaw, 'club')
-
-    const prefixError = validateSlugPart(prefixInput)
-    if (prefixError) redirect(clubUrl(slug, { tab: 'home', err: `Slug prefix: ${prefixError}` }))
-
-    const tagError = validateSlugPart(tagInput)
-    if (tagError) redirect(clubUrl(slug, { tab: 'home', err: `Slug tag: ${tagError}` }))
-
-    if (!name) redirect(clubUrl(slug, { tab: 'home', err: 'Club name is required' }))
-
-    const safeVisibility: Visibility = VISIBILITY.includes(visibilityRaw as Visibility)
-      ? (visibilityRaw as Visibility)
-      : 'PUBLIC'
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'home', err: 'Only the club owner can edit settings' }))
-
-    const nextSlug = buildClubSlug(prefixInput, tagInput)
-    const { data: slugTaken } = await supabase.from('clubs').select('id').eq('slug', nextSlug).neq('id', ownedClub.id).maybeSingle()
-    if (slugTaken?.id) redirect(clubUrl(slug, { tab: 'home', err: 'That club tag is already taken' }))
-
-    const { error } = await supabase
-      .from('clubs')
-      .update({
-        name,
-        slug: nextSlug,
-        description,
-        visibility: safeVisibility,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', ownedClub.id)
-      .eq('owner_user_id', user.id)
-
-    if (error) {
-      const message = error.code === '23505' ? 'That club tag is already taken' : error.message
-      redirect(clubUrl(slug, { tab: 'home', err: message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath(`/clubs/${slug}`)
-    revalidatePath(`/clubs/${nextSlug}`)
-    redirect(clubUrl(nextSlug, { tab: 'home', ok: 'Club settings updated' }))
-  }
-
-  async function updateClubBanner(formData: FormData) {
-    'use server'
-
-    const file = formData.get('club_banner')
-    if (!(file instanceof File) || file.size === 0) return
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'home', err: 'Only the club owner can update the banner' }))
-
-    const ext = extFromType(file.type)
-    if (!ext) redirect(clubUrl(slug, { tab: 'home', err: 'Invalid file type (png/jpg/webp only)' }))
-
-    const MAX_MB = 4
-    if (file.size > MAX_MB * 1024 * 1024) {
-      redirect(clubUrl(slug, { tab: 'home', err: `File too large (max ${MAX_MB}MB)` }))
-    }
-
-    const filePath = `${user.id}/${ownedClub.id}/banner.${ext}`
-
-    const { error: uploadError } = await supabase.storage
-      .from(CLUB_BANNER_BUCKET)
-      .upload(filePath, file, { upsert: true, contentType: file.type })
-
-    if (uploadError) {
-      redirect(clubUrl(slug, { tab: 'home', err: 'Upload failed: ' + uploadError.message }))
-    }
-
-    const { data: urlData } = supabase.storage.from(CLUB_BANNER_BUCKET).getPublicUrl(filePath)
-    const bannerUrl = `${urlData.publicUrl}?v=${cacheBuster()}`
-
-    const { error: dbError } = await supabase
-      .from('clubs')
-      .update({ banner_url: bannerUrl, updated_at: new Date().toISOString() })
-      .eq('id', ownedClub.id)
-      .eq('owner_user_id', user.id)
-
-    if (dbError) {
-      redirect(clubUrl(slug, { tab: 'home', err: 'Database update failed: ' + dbError.message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath(`/clubs/${slug}`)
-    redirect(clubUrl(slug, { tab: 'home', ok: 'Club banner updated successfully' }))
-  }
-
-  async function deleteClub() {
-    'use server'
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'home', err: 'Only the club owner can delete this club' }))
-
-    const { error: membersError } = await supabase.from('club_members').delete().eq('club_id', ownedClub.id)
-    if (membersError) {
-      redirect(clubUrl(slug, { tab: 'home', err: 'Failed to delete members: ' + membersError.message }))
-    }
-
-    const { error: linksError } = await supabase.from('club_leaderboards').delete().eq('club_id', ownedClub.id)
-    if (linksError) {
-      redirect(clubUrl(slug, { tab: 'home', err: 'Failed to detach leaderboards: ' + linksError.message }))
-    }
-
-    const { error: clubError } = await supabase.from('clubs').delete().eq('id', ownedClub.id).eq('owner_user_id', user.id)
-    if (clubError) {
-      redirect(clubUrl(slug, { tab: 'home', err: 'Failed to delete club: ' + clubError.message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath('/dashboard')
-    revalidatePath(`/clubs/${slug}`)
-    redirect('/dashboard?section=club&club_ok=Club+deleted#club')
-  }
 
   async function addMember(formData: FormData) {
     'use server'
@@ -689,137 +560,10 @@ export default async function ClubDetailPage({
               </div>
             </div>
 
-            {canManage ? (
-              <div className="space-y-6">
-                <form action={updateClubHome} className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Edit club home</h2>
-                  <div className="mt-4 space-y-4">
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Club name</label>
-                      <input
-                        name="club_name"
-                        defaultValue={club.name}
-                        required
-                        className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Description</label>
-                      <textarea
-                        name="club_description"
-                        defaultValue={club.description ?? ''}
-                        rows={4}
-                        maxLength={250}
-                        placeholder="About this club..."
-                        className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                      />
-                      <div className="mt-1 text-right text-xs text-slate-400 dark:text-slate-500">Max 250 characters</div>
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Visibility</label>
-                      <select
-                        name="club_visibility"
-                        defaultValue={club.visibility ?? 'PUBLIC'}
-                        className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                      >
-                        <option value="PUBLIC">Public - Listed in directory</option>
-                        <option value="UNLISTED">Unlisted - Link only</option>
-                        <option value="PRIVATE">Private - Owner only</option>
-                      </select>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Club tag</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          name="club_slug_prefix"
-                          defaultValue={slugParts.prefix}
-                          maxLength={CLUB_SLUG_PART_MAX}
-                          pattern="[A-Za-z0-9]{1,5}"
-                          required
-                          className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm font-semibold uppercase tracking-wide text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        />
-                        <span className="text-lg font-black text-slate-400">-</span>
-                        <input
-                          name="club_slug_tag"
-                          defaultValue={slugParts.tag}
-                          maxLength={CLUB_SLUG_PART_MAX}
-                          pattern="[A-Za-z0-9]{1,5}"
-                          required
-                          className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm font-semibold uppercase tracking-wide text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        />
-                      </div>
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Up to {CLUB_SLUG_PART_MAX} letters/numbers per part.</p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="mt-5 w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                  >
-                    Save club home
-                  </button>
-                </form>
-
-                <form action={updateClubBanner} className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club banner</h2>
-                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      {CLUB_BANNER_BUCKET}
-                    </span>
-                  </div>
-                  <div className="mt-4 space-y-4">
-                    {club.banner_url ? (
-                      <div className="relative h-32 w-full overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={club.banner_url} alt="Club banner preview" className="h-full w-full object-cover" />
-                      </div>
-                    ) : (
-                      <div className="flex h-24 items-center justify-center rounded-2xl border-2 border-dashed border-slate-200 bg-white text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                        No banner set yet
-                      </div>
-                    )}
-
-                    <div>
-                      <input
-                        type="file"
-                        name="club_banner"
-                        accept="image/png,image/jpeg,image/webp"
-                        required
-                        className="block w-full text-sm text-slate-500 file:mr-4 file:rounded-2xl file:border-0 file:bg-slate-100 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:text-slate-400 dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover:file:bg-slate-700"
-                      />
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">PNG/JPG/WEBP • Max 4MB • Recommended 1600×400</p>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="mt-5 w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                  >
-                    Upload & save banner
-                  </button>
-                </form>
-
-                <form action={deleteClub} className="rounded-2xl border border-red-200 bg-red-50 p-6 dark:border-red-500/40 dark:bg-red-950/30">
-                  <h2 className="text-lg font-bold text-red-800 dark:text-red-200">Delete club</h2>
-                  <p className="mt-1 text-sm text-red-700/80 dark:text-red-200/80">This cannot be undone.</p>
-                  <button
-                    type="submit"
-                    className="mt-4 w-full rounded-2xl border-2 border-red-200 bg-white px-5 py-3 text-sm font-semibold text-red-700 shadow-sm transition-all duration-200 hover:border-red-300 hover:bg-red-100 hover:-translate-y-0.5 dark:border-red-500/50 dark:bg-slate-950 dark:text-red-300 dark:hover:bg-red-950/40"
-                  >
-                    Delete club
-                  </button>
-                </form>
-              </div>
-            ) : (
-              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                <p className="font-semibold text-slate-800 dark:text-slate-100">Club settings</p>
-                <p className="mt-2">Only the club owner can edit the description, banner, slug, and attached leaderboards.</p>
-                <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">Riot SSO membership approvals are planned for a future update.</p>
-              </div>
-            )}
+            <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+              <p className="font-semibold text-slate-800 dark:text-slate-100">Club settings</p>
+              <p className="mt-2">Manage club settings, banner, and deletion from the dashboard.</p>
+            </div>
           </section>
         )}
 
@@ -862,8 +606,13 @@ export default async function ClubDetailPage({
             ) : (
               members.map((member, idx) => {
                 const riotId = member.game_name && member.tag_line ? `${member.game_name}#${member.tag_line}` : null
+                const profileIconId = member.player_puuid ? riotStateByPuuid.get(member.player_puuid) ?? null : null
+                const iconUrl = profileIconId
+                  ? `https://ddragon.leagueoflegends.com/cdn/${process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'}/img/profileicon/${profileIconId}.png`
+                  : null
                 const joinedLabel = formatDate(member.joined_at)
-                const displayName = riotId ?? (member.user_id ? `Owner ${member.user_id.slice(0, 8)}` : 'Unknown member')
+                const profileName = member.user_id ? profilesByUserId.get(member.user_id) : null
+                const displayName = riotId ?? profileName ?? (member.user_id ? 'Owner' : 'Member')
                 const isOwnerMember = member.role?.toUpperCase() === 'OWNER'
 
                 return (
@@ -871,16 +620,27 @@ export default async function ClubDetailPage({
                     key={member.id}
                     className="flex flex-col gap-3 rounded-2xl border-2 border-slate-200 bg-white p-5 shadow-sm transition dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between"
                   >
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">#{idx + 1}</span>
-                        <h3 className="truncate text-base font-bold text-slate-900 dark:text-slate-100">{displayName}</h3>
-                        <MemberBadge role={member.role} />
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                        {riotId && <span>Riot ID</span>}
-                        {joinedLabel && <span>Joined {joinedLabel}</span>}
-                        {member.player_puuid && <span className="font-mono">{member.player_puuid.slice(0, 12)}…</span>}
+                    <div className="min-w-0 flex items-center gap-3">
+                      {iconUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={iconUrl}
+                          alt=""
+                          className="h-10 w-10 rounded-xl border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                        />
+                      ) : (
+                        <div className="h-10 w-10 rounded-xl border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">#{idx + 1}</span>
+                          <h3 className="truncate text-base font-bold text-slate-900 dark:text-slate-100">{displayName}</h3>
+                          <MemberBadge role={member.role} />
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+                          {riotId && <span>Riot ID</span>}
+                          {joinedLabel && <span>Joined {joinedLabel}</span>}
+                        </div>
                       </div>
                     </div>
 
@@ -960,9 +720,15 @@ export default async function ClubDetailPage({
                   return (
                     <div
                       key={item.linkId}
-                      className="group rounded-2xl border-2 border-slate-200 bg-white p-5 shadow-sm transition hover:border-slate-300 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+                      className="group overflow-hidden rounded-2xl border-2 border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
                     >
-                      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      {lb?.banner_url && (
+                        <div className="h-28 w-full overflow-hidden bg-slate-100 dark:bg-slate-800">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={lb.banner_url} alt="" className="h-full w-full object-cover" />
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-start lg:justify-between">
                         <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate text-lg font-bold text-slate-900 dark:text-slate-100">{lb?.name ?? 'Unknown leaderboard'}</h3>

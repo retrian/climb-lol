@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { resolvePuuid } from '@/lib/riot/resolvePuuid'
 import { buildClubSlug, CLUB_SLUG_PART_MAX, normalizeSlugPart, parseClubSlug, validateSlugPart } from '@/lib/clubSlug'
 import { AddPlayerButton } from './AddPlayerButton'
+import GoalModeFields from './GoalModeFields'
 
 // --- Constants & Types ---
 const VISIBILITY = ['PUBLIC', 'UNLISTED', 'PRIVATE'] as const
@@ -117,7 +118,7 @@ export default async function DashboardPage({
   // Fetch Leaderboard
   const { data: lb } = await supabase
     .from('leaderboards')
-    .select('id, name, slug, visibility, description, banner_url')
+    .select('id, name, slug, visibility, description, banner_url, goal_mode, race_start_at, race_end_at, lp_goal, rank_goal_tier')
     .eq('user_id', user.id)
     .maybeSingle()
 
@@ -130,13 +131,21 @@ export default async function DashboardPage({
         .order('created_at', { ascending: true })
     : { data: null }
 
-  const { data: clubRaw } = await supabase
-    .from('clubs')
-    .select('id, name, slug, description, visibility, banner_url, updated_at, owner_user_id')
-    .eq('owner_user_id', user.id)
-    .maybeSingle()
+  const [{ data: clubRaw }, { data: profileRaw }] = await Promise.all([
+    supabase
+      .from('clubs')
+      .select('id, name, slug, description, visibility, banner_url, updated_at, owner_user_id')
+      .eq('owner_user_id', user.id)
+      .maybeSingle(),
+    supabase
+      .from('profiles')
+      .select('user_id, username, updated_at')
+      .eq('user_id', user.id)
+      .maybeSingle(),
+  ])
 
   const club = (clubRaw ?? null) as ClubRow | null
+  const profile = (profileRaw ?? null) as { user_id: string; username: string; updated_at: string | null } | null
 
   const [{ count: clubMemberCount }, { count: clubLeaderboardCount }] = club
     ? await Promise.all([
@@ -187,9 +196,32 @@ export default async function DashboardPage({
     const descriptionRaw = String(formData.get('description') ?? '').trim().slice(0, 250)
     const visibilityRaw = String(formData.get('visibility') ?? '').trim()
 
+    const goalModeRaw = String(formData.get('goal_mode') ?? '').trim().toUpperCase()
+    const raceStartRaw = String(formData.get('race_start_at') ?? '').trim()
+    const raceEndRaw = String(formData.get('race_end_at') ?? '').trim()
+    const lpGoalRaw = String(formData.get('lp_goal') ?? '').trim()
+    const rankGoalRaw = String(formData.get('rank_goal_tier') ?? '').trim().toUpperCase()
+
     const safeVisibility: Visibility = VISIBILITY.includes(visibilityRaw as Visibility)
       ? (visibilityRaw as Visibility)
       : 'PUBLIC'
+
+    const validGoalModes = ['LIVE', 'RACE', 'LP_GOAL', 'RANK_GOAL'] as const
+    const safeGoalMode = (validGoalModes.includes(goalModeRaw as (typeof validGoalModes)[number])
+      ? goalModeRaw
+      : 'LIVE') as (typeof validGoalModes)[number]
+
+    const parsedRaceStart = raceStartRaw ? new Date(raceStartRaw) : null
+    const parsedRaceEnd = raceEndRaw ? new Date(raceEndRaw) : null
+    const raceStartIso = parsedRaceStart && !Number.isNaN(parsedRaceStart.getTime()) ? parsedRaceStart.toISOString() : null
+    const raceEndIso = parsedRaceEnd && !Number.isNaN(parsedRaceEnd.getTime()) ? parsedRaceEnd.toISOString() : null
+
+    const lpGoalVal = lpGoalRaw ? Number(lpGoalRaw) : null
+    const safeLpGoal = Number.isFinite(lpGoalVal) && (lpGoalVal as number) > 0 ? Math.floor(lpGoalVal as number) : null
+
+    const safeRankGoal = ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(rankGoalRaw)
+      ? rankGoalRaw
+      : null
 
     if (!name) return
 
@@ -212,12 +244,41 @@ export default async function DashboardPage({
         name,
         description: descriptionRaw.length ? descriptionRaw : null,
         visibility: safeVisibility,
+        goal_mode: safeGoalMode,
+        race_start_at: safeGoalMode === 'RACE' ? raceStartIso : null,
+        race_end_at: safeGoalMode === 'RACE' ? raceEndIso : null,
+        lp_goal: safeGoalMode === 'LP_GOAL' ? safeLpGoal : null,
+        rank_goal_tier: safeGoalMode === 'RANK_GOAL' ? safeRankGoal : null,
         updated_at: new Date().toISOString(),
       })
       .eq('id', lb.id)
       .eq('user_id', user.id)
 
     redirect(sectionRedirect({ section: 'settings', ok: 'Settings updated' }))
+  }
+
+  async function updateProfile(formData: FormData) {
+    'use server'
+
+    const usernameRaw = String(formData.get('username') ?? '').trim()
+    if (!usernameRaw) return
+
+    const username = usernameRaw.replace(/\s+/g, ' ').slice(0, 24)
+
+    const supabase = await createClient()
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user) redirect('/sign-in')
+
+    const { error } = await supabase
+      .from('profiles')
+      .upsert({ user_id: user.id, username, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+
+    if (error) {
+      redirect(sectionRedirect({ section: 'top', err: error.message }))
+    }
+
+    redirect(sectionRedirect({ section: 'top', ok: 'Profile updated' }))
   }
 
   async function updateBanner(formData: FormData) {
@@ -841,6 +902,50 @@ export default async function DashboardPage({
 
         {lb ? (
           <div className="space-y-3">
+            <details
+              id="profile"
+              open={section === 'profile'}
+              className="group rounded-2xl border-2 border-slate-200 bg-white shadow-sm transition-all duration-200 hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+            >
+              <summary className="flex cursor-pointer items-center justify-between p-6 hover:bg-slate-50 dark:hover:bg-slate-900/60">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Profile</h2>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Set the name shown on club rosters</p>
+                </div>
+                <svg
+                  className="h-5 w-5 text-slate-400 transition group-open:rotate-180 dark:text-slate-500"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </summary>
+
+              <div className="border-t border-slate-100 p-6 dark:border-slate-800">
+                <form action={updateProfile} className="space-y-4">
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Username</label>
+                    <input
+                      name="username"
+                      defaultValue={profile?.username ?? ''}
+                      required
+                      maxLength={24}
+                      placeholder="e.g., Retr1"
+                      className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                    />
+                    <div className="mt-1 text-right text-xs text-slate-400 dark:text-slate-500">Max 24 characters</div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                  >
+                    Save profile
+                  </button>
+                </form>
+              </div>
+            </details>
             {/* Settings */}
             <details
               id="settings"
@@ -899,6 +1004,14 @@ export default async function DashboardPage({
                       <option value="PRIVATE">Private - Owner only</option>
                     </select>
                   </div>
+
+                  <GoalModeFields
+                    defaultMode={(lb.goal_mode ?? 'LIVE') as 'LIVE' | 'RACE' | 'LP_GOAL' | 'RANK_GOAL'}
+                    defaultLpGoal={lb.lp_goal ?? null}
+                    defaultRaceStart={lb.race_start_at ?? null}
+                    defaultRaceEnd={lb.race_end_at ?? null}
+                    defaultRankGoal={lb.rank_goal_tier ?? null}
+                  />
 
                   <div className="border-t border-slate-100 pt-4 dark:border-slate-800">
                     <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Share Link</label>
@@ -1259,7 +1372,12 @@ export default async function DashboardPage({
                   </div>
                 </div>
 
-                <form action={updateClubSettings} className="space-y-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Edit club home</h3>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Update the club name, description, tag, and visibility.</p>
+                  </div>
+                  <form action={updateClubSettings} className="space-y-4">
                   <div className="grid gap-4 lg:grid-cols-2">
                     <div>
                       <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Club name</label>
@@ -1341,21 +1459,27 @@ export default async function DashboardPage({
                     </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    className="w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                  >
-                    Save club settings
-                  </button>
-                </form>
+                    <button
+                      type="submit"
+                      className="w-full rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                    >
+                      Save club settings
+                    </button>
+                  </form>
+                </div>
 
-                <form action={updateClubBanner} className="space-y-4 rounded-2xl border border-slate-200 p-5 dark:border-slate-800">
+                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Club banner</h3>
+                    <div>
+                      <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">Club banner</h3>
+                      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Update the header image shown on the club page.</p>
+                    </div>
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                       Bucket: {CLUB_BANNER_BUCKET}
                     </span>
                   </div>
+
+                  <form action={updateClubBanner} className="mt-4 space-y-4">
 
                   {club.banner_url ? (
                     <div className="relative h-32 w-full overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
@@ -1379,13 +1503,14 @@ export default async function DashboardPage({
                     <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">PNG/JPG/WEBP • Max 4MB • Recommended 1600×400</p>
                   </div>
 
-                  <button
-                    type="submit"
-                    className="rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                  >
-                    Upload & save banner
-                  </button>
-                </form>
+                    <button
+                      type="submit"
+                      className="rounded-2xl bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                    >
+                      Upload & save banner
+                    </button>
+                  </form>
+                </div>
 
                 <div className="rounded-2xl border border-red-200 bg-red-50 p-5 dark:border-red-500/40 dark:bg-red-950/30">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

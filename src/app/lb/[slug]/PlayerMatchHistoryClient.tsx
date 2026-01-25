@@ -171,7 +171,7 @@ function profileIconUrl(profileIconId?: number | null, ddVersion = DD_VERSION) {
 function displayRiotId(p: Player) {
   const gn = (p.game_name ?? '').trim()
   const tl = (p.tag_line ?? '').trim()
-  return gn && tl ? `${gn}#${tl}` : p.puuid
+  return gn && tl ? `${gn} #${tl}` : p.puuid
 }
 
 function getOpggUrl(player: Player) {
@@ -190,6 +190,12 @@ function formatWinrate(wins?: number | null, losses?: number | null) {
   if (!total) return { label: '0W - 0L', pct: 0, total: 0 }
   const pct = Math.min(100, Math.max(0, Math.round((w / total) * 100)))
   return { label: `${w}W - ${l}L`, pct, total }
+}
+
+function formatPercent(value: number, total: number, digits = 0) {
+  if (!total) return '0'
+  const pct = (value / total) * 100
+  return pct.toFixed(digits)
 }
 
 function buildSpellIconUrl(version: string, spell: any) {
@@ -276,6 +282,18 @@ const MatchDetailSkeleton = memo(() => (
   </div>
 ))
 MatchDetailSkeleton.displayName = 'MatchDetailSkeleton'
+
+const StatGridSkeleton = memo(() => (
+  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    {Array.from({ length: 4 }).map((_, idx) => (
+      <div key={idx} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm animate-pulse dark:border-slate-800 dark:bg-slate-900">
+        <div className="h-3 w-24 rounded bg-slate-200 dark:bg-slate-700" />
+        <div className="mt-3 h-6 w-16 rounded bg-slate-200 dark:bg-slate-700" />
+      </div>
+    ))}
+  </div>
+))
+StatGridSkeleton.displayName = 'StatGridSkeleton'
 
 const PodiumCard = memo(({ card, rank, ddVersion, onOpen, champMap }: { card: PlayerCard, rank: number, ddVersion: string, onOpen: (c: PlayerCard) => void, champMap: any }) => {
   const rankData = card.rankData
@@ -577,6 +595,99 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const spellMap = useMemo(() => buildSpellMap(staticData.spells), [staticData.spells])
   const runeMap = useMemo(() => buildRuneMap(staticData.runes), [staticData.runes])
 
+  const playerMatches = useMemo(() => matches, [matches])
+
+  const statsSnapshot = useMemo(() => {
+    if (!playerMatches.length) return null
+    const totals = playerMatches.reduce(
+      (acc, match) => {
+        acc.games += 1
+        acc.wins += match.win ? 1 : 0
+        acc.kills += match.k
+        acc.deaths += match.d
+        acc.assists += match.a
+        acc.cs += match.cs
+        acc.durationS += match.durationS ?? 0
+        return acc
+      },
+      { games: 0, wins: 0, kills: 0, deaths: 0, assists: 0, cs: 0, durationS: 0 }
+    )
+
+    const losses = totals.games - totals.wins
+    const avgKills = totals.kills / totals.games
+    const avgDeaths = totals.deaths / totals.games
+    const avgAssists = totals.assists / totals.games
+    const kdaRatio = (totals.kills + totals.assists) / Math.max(1, totals.deaths)
+    const csPerMin = totals.durationS ? totals.cs / (totals.durationS / 60) : 0
+    const avgDuration = totals.durationS ? totals.durationS / totals.games : 0
+
+    return {
+      games: totals.games,
+      wins: totals.wins,
+      losses,
+      winrate: Number(formatPercent(totals.wins, totals.games, 0)),
+      avgKills,
+      avgDeaths,
+      avgAssists,
+      kdaRatio,
+      csPerMin,
+      avgDuration,
+    }
+  }, [playerMatches])
+
+  const summaryRecord = useMemo(() => {
+    if (!summary?.rank) return null
+    const wins = summary.rank.wins ?? 0
+    const losses = summary.rank.losses ?? 0
+    return {
+      wins,
+      losses,
+      total: wins + losses,
+      winrate: Number(formatPercent(wins, wins + losses, 0)),
+    }
+  }, [summary?.rank])
+
+  const championSnapshot = useMemo(() => {
+    if (!playerMatches.length) return []
+    const map = new Map<number, { championId: number; games: number; wins: number; kills: number; deaths: number; assists: number; cs: number }>()
+    for (const match of playerMatches) {
+      const entry = map.get(match.championId) ?? {
+        championId: match.championId,
+        games: 0,
+        wins: 0,
+        kills: 0,
+        deaths: 0,
+        assists: 0,
+        cs: 0,
+      }
+      entry.games += 1
+      entry.wins += match.win ? 1 : 0
+      entry.kills += match.k
+      entry.deaths += match.d
+      entry.assists += match.a
+      entry.cs += match.cs
+      map.set(match.championId, entry)
+    }
+
+    return Array.from(map.values())
+      .map((entry) => {
+        const champ = champMap?.[entry.championId]
+        const winrate = Number(formatPercent(entry.wins, entry.games, 0))
+        const kda = (entry.kills + entry.assists) / Math.max(1, entry.deaths)
+        return {
+          ...entry,
+          name: champ?.name ?? `Champion ${entry.championId}`,
+          icon: champ ? championIconUrl(ddVersion, champ.id) : null,
+          winrate,
+          kda,
+          avgCs: entry.cs / entry.games,
+        }
+      })
+      .sort((a, b) => b.games - a.games || b.winrate - a.winrate)
+  }, [playerMatches, champMap, ddVersion])
+
+  const topChampions = useMemo(() => championSnapshot.slice(0, 5), [championSnapshot])
+
   useEffect(() => {
     if (!open) return
     document.body.style.overflow = 'hidden'
@@ -717,7 +828,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       setMatches(cachedMatches)
     } else {
       setLoadingMatches(true)
-      fetch(`/api/player/${puuid}/matches?limit=20`)
+      fetch(`/api/player/${puuid}/matches?limit=200`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
           const list: MatchSummary[] = data.matches ?? []
@@ -944,7 +1055,129 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                     ) : matches.map(match => <MatchRow key={match.matchId} match={match} champMap={champMap} ddVersion={ddVersion} detail={matchDetails[match.matchId] || null} isExpanded={expandedMatchId === match.matchId} onExpand={toggleExpand} spellMap={spellMap} runeMap={runeMap} />)}
                   </div>
                 )}
-                {activeTab !== 'matches' && <div className="flex h-full items-center justify-center px-6 py-8 text-sm text-slate-500 dark:text-slate-300">{activeTab === 'stats' ? 'Detailed player stats coming soon.' : 'Champion breakdown coming soon.'}</div>}
+                {activeTab === 'stats' && (
+                  <div className="h-full overflow-y-auto px-6 py-6 space-y-6">
+                    {loadingMatches ? (
+                      <StatGridSkeleton />
+                    ) : !statsSnapshot ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                        No stats available.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Games</div>
+                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.games}</div>
+                            {summaryRecord && (
+                              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Season: {summaryRecord.wins}W-{summaryRecord.losses}L</div>
+                            )}
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Win Rate</div>
+                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.winrate}%</div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{statsSnapshot.wins}W / {statsSnapshot.losses}L</div>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">KDA</div>
+                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.kdaRatio.toFixed(2)}</div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{statsSnapshot.avgKills.toFixed(1)} / {statsSnapshot.avgDeaths.toFixed(1)} / {statsSnapshot.avgAssists.toFixed(1)}</div>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">CS / Min</div>
+                            <div className="mt-2 text-2xl font-bold text-slate-900 dark:text-slate-100">{statsSnapshot.csPerMin.toFixed(1)}</div>
+                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">Avg Game {formatMatchDuration(statsSnapshot.avgDuration)}</div>
+                          </div>
+                        </div>
+
+                        <div className="grid gap-6 lg:grid-cols-2">
+                          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="flex items-center justify-between">
+                              <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">Top Champions</h4>
+                              <span className="text-xs text-slate-400">Ranked Solo/Duo</span>
+                            </div>
+                            <div className="mt-4 space-y-3">
+                              {topChampions.map((champ) => (
+                                <div key={champ.championId} className="flex items-center gap-3">
+                                  {champ.icon ? (
+                                    <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-10 w-10 rounded-lg border border-slate-200 dark:border-slate-700" />
+                                  ) : (
+                                    <div className="h-10 w-10 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                  )}
+                                  <div className="min-w-0 flex-1">
+                                    <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
+                                    <div className="text-xs text-slate-400">{champ.games} games • {champ.winrate}% WR</div>
+                                  </div>
+                                  <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{champ.kda.toFixed(2)} KDA</div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-slate-100">Performance Breakdown</h4>
+                            <div className="mt-4 grid grid-cols-2 gap-4 text-sm">
+                              <div>
+                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Avg K / D / A</div>
+                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{statsSnapshot.avgKills.toFixed(1)} / {statsSnapshot.avgDeaths.toFixed(1)} / {statsSnapshot.avgAssists.toFixed(1)}</div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Total CS</div>
+                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{statsSnapshot.games ? Math.round(statsSnapshot.games * statsSnapshot.csPerMin * (statsSnapshot.avgDuration / 60)) : 0}</div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Avg Duration</div>
+                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{formatMatchDuration(statsSnapshot.avgDuration)}</div>
+                              </div>
+                              <div>
+                                <div className="text-[11px] uppercase tracking-wide text-slate-400">Win Rate</div>
+                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{statsSnapshot.winrate}%</div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                {activeTab === 'champions' && (
+                  <div className="h-full overflow-y-auto px-6 py-6">
+                    {loadingMatches ? (
+                      <StatGridSkeleton />
+                    ) : !championSnapshot.length ? (
+                      <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                        No champion data available.
+                      </div>
+                    ) : (
+                      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                        <div className="grid grid-cols-[minmax(180px,1fr)_90px_90px_90px_90px] gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400 dark:border-slate-800 dark:bg-slate-950">
+                          <div>Champion</div>
+                          <div className="text-right">Games</div>
+                          <div className="text-right">Win%</div>
+                          <div className="text-right">KDA</div>
+                          <div className="text-right">CS</div>
+                        </div>
+                        <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {championSnapshot.map((champ) => (
+                            <div key={champ.championId} className="grid grid-cols-[minmax(180px,1fr)_90px_90px_90px_90px] gap-3 px-4 py-3 text-sm text-slate-700 dark:text-slate-200">
+                              <div className="flex items-center gap-3 min-w-0">
+                                {champ.icon ? (
+                                  <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-9 w-9 rounded-lg border border-slate-200 dark:border-slate-700" />
+                                ) : (
+                                  <div className="h-9 w-9 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                )}
+                                <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
+                              </div>
+                              <div className="text-right font-semibold text-slate-900 dark:text-slate-100">{champ.games}</div>
+                              <div className="text-right text-slate-500 dark:text-slate-400">{champ.winrate}%</div>
+                              <div className="text-right text-slate-500 dark:text-slate-400">{champ.kda.toFixed(2)}</div>
+                              <div className="text-right text-slate-500 dark:text-slate-400">{champ.avgCs.toFixed(1)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>,

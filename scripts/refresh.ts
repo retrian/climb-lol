@@ -238,6 +238,24 @@ function rankStepIndex(tier?: string | null, rank?: string | null): number | nul
   return tierIndex * DIVISION_ORDER.length + divisionIndex
 }
 
+const TIER_WEIGHT: Record<string, number> = {
+  CHALLENGER: 10,
+  GRANDMASTER: 9,
+  MASTER: 8,
+  DIAMOND: 7,
+  EMERALD: 6,
+  PLATINUM: 5,
+  GOLD: 4,
+  SILVER: 3,
+  BRONZE: 2,
+  IRON: 1,
+}
+
+function tierWeight(tier?: string | null): number {
+  if (!tier) return 0
+  return TIER_WEIGHT[tier.toUpperCase()] ?? 0
+}
+
 function computeLpDelta(opts: {
   lastTier?: string | null
   lastRank?: string | null
@@ -678,10 +696,34 @@ async function main() {
 
   await fetchAndUpsertRankCutoffsIfDue()
 
-  const { data: lbs, error: lbErr } = await supabase.from('leaderboard_players').select('puuid')
+  const { data: lbs, error: lbErr } = await supabase
+    .from('leaderboard_players')
+    .select('puuid, leaderboards(goal_mode, race_start_at, race_end_at, lp_goal, rank_goal_tier, goal_completed_at)')
   if (lbErr) throw lbErr
 
-  const puuids = [...new Set((lbs ?? []).map((r) => r.puuid))]
+  const now = Date.now()
+  const activePuuids = new Set<string>()
+
+  for (const row of lbs ?? []) {
+    const puuid = String((row as any).puuid ?? '').trim()
+    if (!puuid) continue
+
+    const lb = (row as any).leaderboards ?? null
+    const mode = String(lb?.goal_mode ?? 'LIVE').toUpperCase()
+
+    if (lb?.goal_completed_at) continue
+
+    if (mode === 'RACE') {
+      const startMs = lb?.race_start_at ? new Date(lb.race_start_at).getTime() : null
+      const endMs = lb?.race_end_at ? new Date(lb.race_end_at).getTime() : null
+      if (startMs && now < startMs) continue
+      if (endMs && now > endMs) continue
+    }
+
+    activePuuids.add(puuid)
+  }
+
+  const puuids = [...activePuuids]
   if (!puuids.length) {
     console.log('No players to refresh.')
     return
@@ -708,7 +750,114 @@ async function main() {
     await sleep(1000)
   }
 
+  await finalizeLeaderboardGoalsIfNeeded()
+
   console.log('Done.')
+}
+
+async function finalizeLeaderboardGoalsIfNeeded() {
+  const { data: leaderboards, error } = await supabase
+    .from('leaderboards')
+    .select('id, goal_mode, lp_goal, rank_goal_tier, goal_completed_at')
+    .in('goal_mode', ['LP_GOAL', 'RANK_GOAL'])
+    .is('goal_completed_at', null)
+
+  if (error) throw error
+  if (!leaderboards || leaderboards.length === 0) return
+
+  for (const lb of leaderboards) {
+    const { data: players, error: plErr } = await supabase
+      .from('leaderboard_players')
+      .select('puuid')
+      .eq('leaderboard_id', lb.id)
+
+    if (plErr) throw plErr
+    const puuids = (players ?? []).map((p: any) => p.puuid).filter(Boolean)
+    if (!puuids.length) continue
+
+    if (lb.goal_mode === 'LP_GOAL' && typeof lb.lp_goal === 'number' && lb.lp_goal > 0) {
+      const { data: history, error: histErr } = await supabase
+        .from('player_lp_history')
+        .select('puuid, tier, rank, lp, fetched_at')
+        .in('puuid', puuids)
+        .eq('queue_type', QUEUE_SOLO)
+        .gte('lp', lb.lp_goal)
+        .in('tier', ['MASTER', 'GRANDMASTER', 'CHALLENGER'])
+        .order('fetched_at', { ascending: true })
+
+      if (histErr) throw histErr
+      const rows = history ?? []
+      if (!rows.length) continue
+
+      let winner = rows[0]
+      let winnerTs = new Date(winner.fetched_at).getTime()
+
+      for (const row of rows) {
+        const ts = new Date(row.fetched_at).getTime()
+        if (Number.isNaN(ts)) continue
+        if (ts < winnerTs || (ts === winnerTs && (row.lp ?? 0) > (winner.lp ?? 0))) {
+          winner = row
+          winnerTs = ts
+        }
+      }
+
+      await supabase
+        .from('leaderboards')
+        .update({
+          goal_completed_at: new Date(winnerTs).toISOString(),
+          goal_winner_puuid: winner.puuid,
+          goal_winner_lp: winner.lp ?? null,
+          goal_winner_tier: winner.tier ?? null,
+          goal_winner_rank: winner.rank ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', lb.id)
+    }
+
+    if (lb.goal_mode === 'RANK_GOAL' && lb.rank_goal_tier) {
+      const targetWeight = tierWeight(lb.rank_goal_tier)
+      if (!targetWeight) continue
+
+      const { data: history, error: histErr } = await supabase
+        .from('player_lp_history')
+        .select('puuid, tier, rank, lp, fetched_at')
+        .in('puuid', puuids)
+        .eq('queue_type', QUEUE_SOLO)
+        .order('fetched_at', { ascending: true })
+
+      if (histErr) throw histErr
+      const rows = (history ?? []).filter((row: any) => tierWeight(row.tier) >= targetWeight)
+      if (!rows.length) continue
+
+      let earliestDay: string | null = null
+      let winner = rows[0]
+
+      for (const row of rows) {
+        const dayKey = new Date(row.fetched_at).toISOString().slice(0, 10)
+        if (!earliestDay || dayKey < earliestDay) {
+          earliestDay = dayKey
+          winner = row
+        } else if (dayKey === earliestDay && (row.lp ?? 0) > (winner.lp ?? 0)) {
+          winner = row
+        }
+      }
+
+      const completionAt = earliestDay ? `${earliestDay}T23:59:59.999Z` : null
+      if (!completionAt) continue
+
+      await supabase
+        .from('leaderboards')
+        .update({
+          goal_completed_at: completionAt,
+          goal_winner_puuid: winner.puuid,
+          goal_winner_lp: winner.lp ?? null,
+          goal_winner_tier: winner.tier ?? null,
+          goal_winner_rank: winner.rank ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', lb.id)
+    }
+  }
 }
 
 main().catch((e) => {

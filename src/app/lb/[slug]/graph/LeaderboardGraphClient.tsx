@@ -324,25 +324,9 @@ function buildSmoothPath(points: Array<{ x: number; y: number }>) {
 }
 
 function describeProgression(first: NormalizedPoint, last: NormalizedPoint) {
-  const diff = last.ladderValue - first.ladderValue
-  const sign = diff >= 0 ? "+" : "-"
-  const abs = Math.abs(Math.round(diff))
-
-  // Decompose into tiers/divisions/LP-like remainder
-  const tiers = Math.floor(abs / 400)
-  const remTier = abs % 400
-  const divs = Math.floor(remTier / 100)
-  const rem = remTier % 100
-
-  const parts: string[] = []
-  if (tiers) parts.push(`${tiers} tier${tiers === 1 ? "" : "s"}`)
-  if (divs) parts.push(`${divs} div${divs === 1 ? "" : "s"}`)
-  if (rem) parts.push(`${rem} LP`)
-
-  // If very small, just show LP-ish
-  if (parts.length === 0) return "0"
-
-  return `${sign}${parts.join(", ")}`
+  const diff = Math.round((last.lpValue ?? 0) - (first.lpValue ?? 0))
+  if (diff === 0) return "0 LP"
+  return `${diff > 0 ? "+" : ""}${diff} LP`
 }
 
 export default function LeaderboardGraphClient({
