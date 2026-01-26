@@ -170,6 +170,14 @@ function displayRiotId(p: Player) {
   return gn && tl ? `${gn} #${tl}` : p.puuid
 }
 
+function buildOpggUrl(p: Player) {
+  const gn = (p.game_name ?? '').trim()
+  const tl = (p.tag_line ?? '').trim()
+  if (!gn || !tl) return null
+  const encoded = encodeURIComponent(`${gn}-${tl}`)
+  return `https://op.gg/lol/summoners/na/${encoded}`
+}
+
 function getRankIconSrc(tier?: string | null) {
   return `/images/${tier ? tier.toUpperCase() : 'UNRANKED'}_SMALL.jpg`
 }
@@ -390,7 +398,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 
 
   return (
-    <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen(card)} className="group flex items-center gap-3 lg:gap-4 rounded-2xl border border-slate-200 bg-white px-4 lg:px-6 py-4 transition-all hover:border-slate-300 hover:shadow-xl hover:-translate-y-1 hover:scale-[1.01] duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-2 dark:focus:ring-offset-slate-900">
+    <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen(card)} className="group flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 transition-all hover:border-slate-300 hover:shadow-xl hover:-translate-y-1 hover:scale-[1.01] duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-2 dark:focus:ring-offset-slate-900 md:grid md:grid-cols-[2rem_minmax(0,1fr)_160px_120px] md:gap-4 lg:grid-cols-[2rem_minmax(0,1fr)_160px_140px_120px] lg:px-6">
       <div className="w-8 shrink-0 flex justify-center">
         {card.index <= 3 ? (
           <div className={`flex items-center justify-center h-6 w-6 rounded-full ${
@@ -423,7 +431,15 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
         </div>
       </div>
       <div className="hidden md:flex items-center gap-2 lg:gap-3 shrink-0">
-         <img loading="lazy" decoding="async" src={getRankIconSrc(rankData?.tier)} alt="" className="h-9 w-9 object-contain drop-shadow-sm shrink-0" />
+        <div className="flex h-10 w-10 items-center justify-center shrink-0">
+          <img
+            loading="lazy"
+            decoding="async"
+            src={getRankIconSrc(rankData?.tier)}
+            alt=""
+            className="block h-10 w-10 object-contain drop-shadow-sm"
+          />
+        </div>
         <div className="flex flex-col">
           <span className="text-sm font-black text-slate-900 whitespace-nowrap dark:text-slate-100">{rankData?.league_points ?? 0} LP</span>
           <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide whitespace-nowrap dark:text-slate-500">{tierLabel}</span>
@@ -1030,6 +1046,18 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setMatchDetails({})
   }, [])
 
+  const socialLinks = useMemo(() => {
+    if (!selectedPlayer) return [] as Array<{ key: string; href: string; label: string }>
+    const links: Array<{ key: string; href: string; label: string }> = []
+    const twitter = (selectedPlayer.player.twitter_url ?? '').trim()
+    const twitch = (selectedPlayer.player.twitch_url ?? '').trim()
+    const opgg = buildOpggUrl(selectedPlayer.player)
+    if (twitter) links.push({ key: 'x', href: twitter, label: 'X' })
+    if (twitch) links.push({ key: 'twitch', href: twitch, label: 'Twitch' })
+    if (opgg) links.push({ key: 'opgg', href: opgg, label: 'OP.GG' })
+    return links
+  }, [selectedPlayer])
+
   const toggleExpand = useCallback((matchId: string) => {
     setExpandedMatchId(prev => {
       const next = prev === matchId ? null : matchId
@@ -1116,7 +1144,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                           {summary?.profileIconId && <img loading="eager" decoding="async" src={profileIconUrl(summary.profileIconId, ddVersion) ?? ''} alt="" className="h-full w-full object-cover" />}
                         </div>
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <h3 className="flex items-baseline gap-1.5 text-lg font-semibold text-slate-900 dark:text-slate-100">
                               {selectedPlayer.player.game_name ? (
                                 <>
@@ -1130,6 +1158,46 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               )}
                             </h3>
                             {selectedPlayer.player.role && <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">{selectedPlayer.player.role}</span>}
+                            {socialLinks.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                {socialLinks.map((link) => (
+                                  <a
+                                    key={link.key}
+                                    href={link.href}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    aria-label={link.label}
+                                    className={`inline-flex h-8 w-8 items-center justify-center overflow-hidden rounded-md border transition ${
+                                      link.key === 'x'
+                                        ? 'border-slate-200 bg-slate-900 text-white hover:border-slate-900/80 hover:bg-slate-900/90 dark:border-slate-700'
+                                        : link.key === 'twitch'
+                                          ? 'border-purple-200 bg-purple-600 text-white hover:border-purple-500 hover:bg-purple-700 dark:border-purple-500'
+                                          : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:text-white'
+                                    }`}
+                                  >
+                                    {link.key === 'x' && (
+                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+                                        <path d="M18.901 2H22l-6.77 7.743L23.5 22h-6.62l-5.18-6.62L5.5 22H2.4l7.23-8.27L.5 2h6.78l4.69 6.02L18.9 2Zm-1.16 18h1.84L7.38 3.9H5.41l12.33 16.1Z" />
+                                      </svg>
+                                    )}
+                                    {link.key === 'twitch' && (
+                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true">
+                                        <path d="M4 3h17v10.2L15.6 19H12l-3 3H6v-3H2V6l2-3Zm2 2v11h3v2l2-2h4l4-4.1V5H6Zm10 2v5h-2V7h2Zm-4 0v5h-2V7h2Z" />
+                                      </svg>
+                                    )}
+                                    {link.key === 'opgg' && (
+                                      <img
+                                        src="/images/opgg.png"
+                                        alt=""
+                                        className="h-full w-full object-cover"
+                                        loading="lazy"
+                                        decoding="async"
+                                      />
+                                    )}
+                                  </a>
+                                ))}
+                              </div>
+                            )}
                           </div>
                           <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                             {summary?.rank ? (
