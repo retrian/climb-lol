@@ -532,7 +532,9 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
               <span className="text-sm font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
                 {match.k} / {match.d} / {match.a}
               </span>
-              <span className={`text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap`}>{kdaLabel} KDA</span>
+              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                {kdaLabel === 'Perfect' ? 'Perfect' : `${kdaLabel} KDA`}
+              </span>
             </div>
             <div className="flex flex-col w-[150px] shrink-0 border-l border-slate-200 pl-3 leading-tight dark:border-slate-800">
               <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">

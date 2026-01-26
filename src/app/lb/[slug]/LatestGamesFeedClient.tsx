@@ -271,7 +271,9 @@ const GameItem = memo(({
                 {game.k}/{game.d}/{game.a}
               </span>
               <span className="text-slate-300 dark:text-slate-600">•</span>
-              <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>{kda} KDA</span>
+              <span className={`tabular-nums whitespace-nowrap ${kdaColor}`}>
+                {kda === 'Perfect' ? 'Perfect' : `${kda} KDA`}
+              </span>
               <span className="text-slate-300 dark:text-slate-600">•</span>
               <span className="font-semibold text-slate-600 tabular-nums whitespace-nowrap dark:text-slate-300">{game.cs} CS</span>
             </>
