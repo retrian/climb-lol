@@ -49,18 +49,15 @@ export default function GoalModeFields({
   }, [mode])
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-      <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">Goal Mode</div>
-      <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{notes}</p>
-
+    <div>
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <div className="space-y-2">
-          <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">Mode</label>
+          <label className="block text-sm font-semibold text-slate-700 dark:text-slate-200">Goal mode</label>
           <select
             name="goal_mode"
             value={mode}
             onChange={(e) => setMode(e.target.value as GoalMode)}
-            className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           >
             <option value="LIVE">Live Tracker (default)</option>
             <option value="RACE">Race Mode (time window)</option>
@@ -78,7 +75,7 @@ export default function GoalModeFields({
               defaultValue={defaultLpGoal ?? ''}
               min={1}
               placeholder="e.g., 1000"
-              className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
           </div>
         )}
@@ -92,7 +89,7 @@ export default function GoalModeFields({
               type="datetime-local"
               name="race_start_at"
               defaultValue={isoToLocalInput(defaultRaceStart)}
-              className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
           </div>
           <div className="space-y-2">
@@ -101,7 +98,7 @@ export default function GoalModeFields({
               type="datetime-local"
               name="race_end_at"
               defaultValue={isoToLocalInput(defaultRaceEnd)}
-              className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />
           </div>
         </div>
@@ -114,7 +111,7 @@ export default function GoalModeFields({
             <select
               name="rank_goal_tier"
               defaultValue={defaultRankGoal ?? ''}
-              className="w-full rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+              className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             >
               <option value="">Select tier</option>
               {RANK_TIERS.map((tier) => (
@@ -126,6 +123,8 @@ export default function GoalModeFields({
           </div>
         </div>
       )}
+      <p className="mt-2 text-xs text-slate-400 dark:text-slate-500">{notes}</p>
     </div>
   )
 }
+

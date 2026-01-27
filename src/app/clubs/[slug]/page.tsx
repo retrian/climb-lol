@@ -248,8 +248,8 @@ export default async function ClubDetailPage({
   const updatedLabel = formatDate(club.updated_at ?? club.created_at)
 
 
-  async function addMember(formData: FormData) {
-    'use server'
+async function addMember(formData: FormData) {
+  'use server'
 
     const riotIdRaw = String(formData.get('riot_id') ?? '').trim()
     if (!riotIdRaw) redirect(clubUrl(slug, { tab: 'members', err: 'Enter a Riot ID like gameName#tagLine' }))
@@ -259,8 +259,17 @@ export default async function ClubDetailPage({
     const user = auth.user
     if (!user) redirect('/sign-in')
 
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Only the club owner can manage members' }))
+  const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
+  if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Only the club owner can manage members' }))
+
+  const { count: membershipCount } = await supabase
+    .from('club_members')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', user.id)
+
+  if ((membershipCount ?? 0) >= 3) {
+    redirect(clubUrl(slug, { tab: 'members', err: 'Member club limit reached (3 max).' }))
+  }
 
     let gameName = ''
     let tagLine = ''
@@ -290,11 +299,11 @@ export default async function ClubDetailPage({
       redirect(clubUrl(slug, { tab: 'members', err: 'That Riot ID is already a member' }))
     }
 
-    const { error } = await supabase.from('club_members').insert({
-      club_id: ownedClub.id,
-      role: 'MEMBER',
-      player_puuid: puuid,
-      game_name: gameName,
+  const { error } = await supabase.from('club_members').insert({
+    club_id: ownedClub.id,
+    role: 'MEMBER',
+    player_puuid: puuid,
+    game_name: gameName,
       tag_line: tagLine,
       user_id: null,
     })
