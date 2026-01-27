@@ -322,9 +322,10 @@ export default async function LeaderboardDetail({
     top50Puuids.length > 0 ? safeDb(
       supabase
         .from('match_participants')
-        .select('puuid, champion_id, matches!inner(game_end_ts)')
+        .select('puuid, champion_id, matches!inner(game_end_ts, queue_id)')
         .in('puuid', top50Puuids)
-        .gte('matches.game_end_ts', seasonStartMsLatest),
+        .gte('matches.game_end_ts', seasonStartMsLatest)
+        .eq('matches.queue_id', 420),
       [] as SeasonChampionRaw[]
     ) : [],
     missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[]) : [],
