@@ -1,8 +1,17 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #f8fafc;
   --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #475569;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #93c5fd;
   color-scheme: light;
 }
 
@@ -20,6 +29,13 @@ html {
 html.dark {
   --background: #0b1120;
   --foreground: #e2e8f0;
+  --card: #0f172a;
+  --card-foreground: #e2e8f0;
+  --muted: #111827;
+  --muted-foreground: #94a3b8;
+  --border: #1f2937;
+  --input: #1f2937;
+  --ring: #3b82f6;
   color-scheme: dark;
 }
 
@@ -27,4 +43,95 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+
+  a {
+    color: inherit;
+  }
+
+  hr {
+    border-color: var(--border);
+  }
+
+  input,
+  textarea,
+  select,
+  option {
+    background-color: var(--card);
+    color: var(--foreground);
+  }
+
+  input,
+  textarea,
+  select {
+    border-color: var(--input);
+  }
+
+  ::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  table {
+    border-color: var(--border);
+  }
+
+  th,
+  td {
+    border-color: var(--border);
+  }
+
+  code,
+  pre {
+    background-color: var(--muted);
+    color: var(--foreground);
+  }
+}
+
+@layer base {
+  a {
+    color: inherit;
+  }
+
+  hr {
+    border-color: var(--border);
+  }
+
+  input,
+  textarea,
+  select {
+    background-color: var(--card);
+    color: var(--foreground);
+    border-color: var(--input);
+  }
+
+  ::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  table {
+    border-color: var(--border);
+  }
+
+  th,
+  td {
+    border-color: var(--border);
+  }
+
+  code,
+  pre {
+    background-color: var(--muted);
+    color: var(--foreground);
+  }
 }

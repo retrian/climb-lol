@@ -55,7 +55,7 @@ export default function HomePage() {
   ]
 
   return (
-    <main className="bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <main className="min-h-[calc(100vh-8.5rem)] bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto max-w-4xl px-4 py-8 lg:py-12">
         {/* Hero */}
         <div className="mb-8">
