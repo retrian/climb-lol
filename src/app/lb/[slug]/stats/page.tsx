@@ -32,6 +32,7 @@ type MatchRow = {
   match_id: string
   game_duration_s: number | null
   game_end_ts: number | null
+  queue_id?: number | null
 }
 
 type StatTotals = {
@@ -280,7 +281,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       const batch = matchIds.slice(i, i + BATCH_SIZE)
       const { data } = await supabase
         .from('matches')
-        .select('match_id, game_duration_s, game_end_ts')
+        .select('match_id, game_duration_s, game_end_ts, queue_id')
         .in('match_id', batch)
       
       if (data) {
@@ -294,9 +295,11 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   
   for (const row of matchesRaw) {
     const endTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
+    const queueId = typeof row.queue_id === 'number' ? row.queue_id : null
     
     // ✅ Filter applied here in JavaScript to be safe against BigInt issues
     if (!endTs || endTs < seasonStartMs) continue
+    if (queueId !== 420) continue
 
     matchById.set(row.match_id, {
       durationS: typeof row.game_duration_s === 'number' ? row.game_duration_s : 0,

@@ -13,7 +13,7 @@ type Visibility = (typeof VISIBILITY)[number]
 
 const ROLES = ['TOP', 'JGL', 'MID', 'ADC', 'SUP'] as const
 const MAX_PLAYERS = 30
-const CLUB_BANNER_BUCKET = 'club-banners'
+const CLUB_BANNER_BUCKET = 'leaderboard-banners'
 
 type ClubRow = {
   id: string
