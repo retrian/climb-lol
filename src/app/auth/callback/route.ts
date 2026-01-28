@@ -5,6 +5,7 @@ import { getSupabaseConfig, getSupabaseCookieDomain, getSupabaseCookieNameBase }
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get('code')
+  const isProduction = process.env.NODE_ENV === 'production'
 
   console.info('[auth/callback] Full URL:', request.url)
   console.info('[auth/callback] Code present:', !!code)
@@ -47,7 +48,7 @@ export async function GET(request: NextRequest) {
             ...options,
             domain: cookieDomain ?? options?.domain,
             sameSite: 'lax',
-            secure: true,
+            secure: isProduction,
           })
         })
       },
@@ -97,7 +98,7 @@ export async function GET(request: NextRequest) {
         ...(cookieDomain ? { domain: cookieDomain } : {}),
         maxAge: 60 * 60 * 24 * 365, // 1 year
         sameSite: 'lax',
-        secure: true,
+        secure: isProduction,
         httpOnly: false,
       })
       

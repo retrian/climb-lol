@@ -1,8 +1,9 @@
 import type { NextRequest } from 'next/server'
-import { updateSession } from '@/lib/supabase/proxy'
+import { NextResponse } from 'next/server'
 
 export async function middleware(req: NextRequest) {
-  return updateSession(req)
+  // Temporarily disabled - middleware causing dev server hang
+  return NextResponse.next()
 }
 
 export const config = {

@@ -5,6 +5,7 @@ import { getSupabaseConfig, getSupabaseCookieDomain, getSupabaseCookieNameBase }
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request: { headers: request.headers } })
   const { url, key } = getSupabaseConfig()
+  const isProduction = process.env.NODE_ENV === 'production'
   const host = request.headers.get('host')
   const resolvedHost = host?.split(':')[0] ?? null
   const fallbackDomain = resolvedHost?.endsWith('cwf.lol') ? '.cwf.lol' : null
@@ -32,7 +33,7 @@ export async function updateSession(request: NextRequest) {
             ...options,
             domain: cookieDomain ?? options?.domain,
             sameSite: 'lax' as const,
-            secure: true,
+            secure: isProduction,
           }
           
           console.info('[middleware] set-cookie:', finalName, resolvedOptions)
@@ -44,11 +45,20 @@ export async function updateSession(request: NextRequest) {
     },
   })
 
-  const { data, error } = await supabase.auth.getUser()
-  if (error) {
-    console.warn('[middleware] getUser error:', error.message)
-  } else {
-    console.info('[middleware] session user:', data.user?.id ?? '(none)')
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 5000) // 5 second timeout
+    
+    const { data, error } = await supabase.auth.getUser()
+    clearTimeout(timeoutId)
+    
+    if (error) {
+      console.warn('[middleware] getUser error:', error.message)
+    } else {
+      console.info('[middleware] session user:', data.user?.id ?? '(none)')
+    }
+  } catch (err) {
+    console.error('[middleware] auth check failed:', err instanceof Error ? err.message : String(err))
   }
   
   return response

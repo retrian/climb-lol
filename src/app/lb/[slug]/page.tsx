@@ -255,6 +255,11 @@ export default async function LeaderboardDetail({
     if (!user || user.id !== lb.user_id) notFound()
   }
 
+  const { error: viewError } = await supabase.rpc('increment_leaderboard_view', { slug_input: slug })
+  if (viewError) {
+    console.error('Failed to increment leaderboard view:', viewError)
+  }
+
   // Phase 1: Discovery (Parallel Fetch)
   const [
     champMap,

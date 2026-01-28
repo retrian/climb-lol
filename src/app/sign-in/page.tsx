@@ -2,13 +2,14 @@
 
 import { createClient } from '@/lib/supabase/client'
 import { useSearchParams } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 export default function SignInPage() {
   const searchParams = useSearchParams()
   const [hashError, setHashError] = useState<string | null>(null)
   const [hashErrorDescription, setHashErrorDescription] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const autoStartedRef = useRef(false)
   
   const queryError = searchParams.get('error')
   const queryErrorDescription = searchParams.get('error_description')
@@ -33,6 +34,14 @@ export default function SignInPage() {
     setHashError(params.get('error'))
     setHashErrorDescription(params.get('error_description'))
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (autoStartedRef.current) return
+    if (error || errorDescription) return
+    autoStartedRef.current = true
+    void signIn()
+  }, [error, errorDescription])
 
   const signIn = async () => {
     try {

@@ -11,6 +11,19 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   const supabase = await createClient()
   const { data } = await supabase.auth.getUser()
   const user = data.user
+  let username: string | null = null
+  if (user) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('username')
+      .eq('user_id', user.id)
+      .maybeSingle()
+    username =
+      profile?.username ??
+      (user.user_metadata?.full_name as string | undefined) ??
+      user.email?.split('@')[0] ??
+      null
+  }
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -38,44 +51,105 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </Script>
       </head>
       <body className="flex min-h-screen flex-col bg-background text-foreground">
-        {/* Translucent navbar */}
-        <header className="border-b border-gray-200 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/60 dark:border-slate-800 dark:bg-slate-950/70 supports-[backdrop-filter]:dark:bg-slate-950/60">
-          <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-            <Link href="/" className="text-lg font-bold text-gray-900 dark:text-slate-100">
+        {/* Modern navbar with better spacing and hierarchy */}
+        <header className="sticky top-0 z-40 border-b border-gray-200/80 bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/70 dark:border-slate-800/80 dark:bg-slate-950/80 supports-[backdrop-filter]:dark:bg-slate-950/70">
+          <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3">
+            {/* Logo */}
+            <Link 
+              href="/" 
+              className="text-xl font-black tracking-tighter text-gray-900 transition-colors hover:text-gray-700 dark:text-slate-100 dark:hover:text-slate-300"
+            >
               CWF.LOL
             </Link>
 
-            <div className="flex items-center gap-4">
-              <ThemeToggle />
+            {/* Desktop Navigation Links */}
+            <div className="hidden items-center gap-1 md:flex">
               <Link
-                className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                 href="/"
               >
                 Home
               </Link>
               <Link
-                className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
-                href="/leaderboards"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/showdown"
               >
-                Leaderboards
+                Showdown
               </Link>
               <Link
-                className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/tournaments"
+              >
+                Tournaments
+              </Link>
+              <Link
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/challenges"
+              >
+                Challenges
+              </Link>
+              <Link
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                 href="/clubs"
               >
                 Clubs
               </Link>
-              {user ? (
-                <Link
-                  className="text-sm font-medium text-gray-600 transition hover:text-gray-900 dark:text-slate-300 dark:hover:text-white"
-                  href="/dashboard"
-                >
-                  Dashboard
-                </Link>
-              ) : null}
-              <AuthButtons signedIn={!!user} />
+              <Link
+                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/leaderboards"
+              >
+                Leaderboards
+              </Link>
+            </div>
+
+            {/* Right side actions */}
+            <div className="flex items-center gap-2">
+              <ThemeToggle />
+              <AuthButtons signedIn={!!user} username={username} />
             </div>
           </nav>
+
+          {/* Mobile Navigation (shown on small screens) */}
+          <div className="border-t border-gray-200/80 px-4 py-2 dark:border-slate-800/80 md:hidden">
+            <div className="flex flex-wrap items-center justify-center gap-1">
+              <Link
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/"
+              >
+                Home
+              </Link>
+              <Link
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/showdown"
+              >
+                Showdown
+              </Link>
+              <Link
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/tournaments"
+              >
+                Tournaments
+              </Link>
+              <Link
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/challenges"
+              >
+                Challenges
+              </Link>
+              <Link
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/clubs"
+              >
+                Clubs
+              </Link>
+              <Link
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
+                href="/leaderboards"
+              >
+                Leaderboards
+              </Link>
+            </div>
+          </div>
         </header>
 
         {/* Consistent page width/padding across ALL pages */}
