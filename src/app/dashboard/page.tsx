@@ -1292,7 +1292,7 @@ export default async function DashboardPage({
             <div className="min-w-0 space-y-8">
               {effectiveSection === 'profile' && (
               <section id="profile" className="scroll-mt-24">
-                <div className="mx-auto max-w-2xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+                <div className="ml-auto max-w-2xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
                   <div className="border-b border-slate-100 p-6 dark:border-slate-800">
                     <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Profile</h2>
                     <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Set the name shown on club rosters</p>

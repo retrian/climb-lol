@@ -507,9 +507,6 @@ export default function LeaderboardGraphClient({
     const lpChange = prev ? cur.lpValue - prev.lpValue : 0
     const gamesSpan = prev ? cur.totalGames - prev.totalGames : 0
 
-    const tier = (cur.tier ?? "").toUpperCase()
-    const isMasterPlus = tier === "MASTER" || tier === "GRANDMASTER" || tier === "CHALLENGER"
-
     const style = tooltip.preferBelow
       ? { left: x, top: y + 14, transform: "translateX(-50%)" }
       : { left: x, top: y - 12, transform: "translate(-50%, -100%)" }
@@ -522,9 +519,11 @@ export default function LeaderboardGraphClient({
         <div className="font-semibold text-slate-900">
           {cur.totalGames === 0 ? "Placement" : `Game #${cur.totalGames}`}
         </div>
-
+        <div className="mt-1 text-slate-600">
+          {formatRank(cur.tier, cur.rank, cur.lp)}
+        </div>
         <div className={`mt-1 ${lpChange >= 0 ? "text-emerald-600" : "text-red-600"}`}>
-          {formatDelta(lpChange)} LP
+          {formatDelta(lpChange)} LP • {cur.lpValue} LP
         </div>
       </div>
     )

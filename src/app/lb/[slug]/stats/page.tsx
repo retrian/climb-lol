@@ -465,9 +465,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     }
   })
 
-  const topKills = [...playerLeaderboard].sort((a, b) => b.kills - a.kills).slice(0, 5)
-  const topDeaths = [...playerLeaderboard].sort((a, b) => b.deaths - a.deaths).slice(0, 5)
-  const topAssists = [...playerLeaderboard].sort((a, b) => b.assists - a.assists).slice(0, 5)
+  const averagePerGame = (value: number, games: number) => (games > 0 ? value / games : 0)
+  const topKills = [...playerLeaderboard]
+    .sort((a, b) => averagePerGame(b.kills, b.games) - averagePerGame(a.kills, a.games))
+    .slice(0, 5)
+  const topDeaths = [...playerLeaderboard]
+    .sort((a, b) => averagePerGame(b.deaths, b.games) - averagePerGame(a.deaths, a.games))
+    .slice(0, 5)
+  const topAssists = [...playerLeaderboard]
+    .sort((a, b) => averagePerGame(b.assists, b.games) - averagePerGame(a.assists, a.games))
+    .slice(0, 5)
   const topKdaPlayers = [...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value).slice(0, 5)
   const bottomKdaPlayers = [...playerLeaderboard].sort((a, b) => a.kda.value - b.kda.value).slice(0, 5)
   const topWinratePlayers = [...playerLeaderboard].sort((a, b) => b.wins / b.games - a.wins / a.games).slice(0, 5)
@@ -611,12 +618,20 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
             <div className="mt-4 space-y-4">
               {[
-                { title: 'Most Total Kills', data: topKills, value: (row: typeof topKills[number]) => row.kills },
-                { title: 'Most Total Deaths', data: topDeaths, value: (row: typeof topDeaths[number]) => row.deaths },
                 {
-                  title: 'Most Total Assists',
+                  title: 'Most Avg Kills / Game',
+                  data: topKills,
+                  value: (row: typeof topKills[number]) => averagePerGame(row.kills, row.games).toFixed(2),
+                },
+                {
+                  title: 'Most Avg Deaths / Game',
+                  data: topDeaths,
+                  value: (row: typeof topDeaths[number]) => averagePerGame(row.deaths, row.games).toFixed(2),
+                },
+                {
+                  title: 'Most Avg Assists / Game',
                   data: topAssists,
-                  value: (row: typeof topAssists[number]) => row.assists,
+                  value: (row: typeof topAssists[number]) => averagePerGame(row.assists, row.games).toFixed(2),
                 },
               ].map((block) => (
                 <div key={block.title}>

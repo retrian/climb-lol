@@ -38,7 +38,7 @@ const SORT_KEYS: Array<{ key: SortKey; label: string }> = [
 ]
 
 export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
-  const [sortKey, setSortKey] = useState<SortKey>('winrate')
+  const [sortKey, setSortKey] = useState<SortKey>('games')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [expandedRow, setExpandedRow] = useState<number | null>(null)
 
