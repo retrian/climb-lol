@@ -49,6 +49,12 @@ interface MatchSummary {
   durationS?: number | null
   queueId?: number | null
   visionScore?: number | null
+  // ✅ Added fields to support LP Change & Snapshot Rank
+  lpChange?: number | null
+  lpNote?: string | null
+  rankTier?: string | null
+  rankDivision?: string | null
+  endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
 }
 
 interface MatchDetailResponse {
@@ -180,6 +186,22 @@ function buildOpggUrl(p: Player) {
 
 function getRankIconSrc(tier?: string | null) {
   return `/images/${tier ? tier.toUpperCase() : 'UNRANKED'}_SMALL.jpg`
+}
+
+function formatTierShort(tier?: string | null, division?: string | null) {
+  if (!tier) return 'UR'
+  const normalizedTier = tier.toUpperCase()
+  const tierMap: Record<string, string> = {
+    IRON: 'I', BRONZE: 'B', SILVER: 'S', GOLD: 'G', PLATINUM: 'P',
+    EMERALD: 'E', DIAMOND: 'D', MASTER: 'M', GRANDMASTER: 'GM', CHALLENGER: 'C',
+  }
+  const tierShort = tierMap[normalizedTier] ?? normalizedTier[0] ?? 'U'
+  if (['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(normalizedTier)) return tierShort
+
+  const divisionMap: Record<string, string> = { I: '1', II: '2', III: '3', IV: '4' }
+  const normalizedDivision = division?.toUpperCase() ?? ''
+  const divisionShort = divisionMap[normalizedDivision] ?? normalizedDivision
+  return divisionShort ? `${tierShort}${divisionShort}` : tierShort
 }
 
 function formatWinrate(wins?: number | null, losses?: number | null) {
@@ -387,7 +409,6 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
   const winrate = useMemo(() => formatWinrate(rankData?.wins, rankData?.losses), [rankData?.wins, rankData?.losses])
   const displayId = useMemo(() => displayRiotId(card.player), [card.player])
 
-  // ✅ add this
   const icon = useMemo(
     () => profileIconUrl(card.stateData?.profile_icon_id, ddVersion),
     [card.stateData?.profile_icon_id, ddVersion]
@@ -395,7 +416,6 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 
   const isApex = rankData?.tier && ['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(rankData.tier)
   const tierLabel = isApex ? rankData?.tier : `${rankData?.tier || 'Unranked'} ${rankData?.rank || ''}`.trim()
-
 
   return (
     <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={e => (e.key === 'Enter' || e.key === ' ') && onOpen(card)} className="group flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-4 transition-all hover:border-slate-300 hover:shadow-xl hover:-translate-y-1 hover:scale-[1.01] duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:ring-offset-2 dark:focus:ring-offset-slate-900 md:grid md:grid-cols-[2rem_minmax(0,1fr)_160px_120px] md:gap-4 lg:grid-cols-[2rem_minmax(0,1fr)_160px_140px_120px] lg:px-6">
@@ -414,7 +434,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
       </div>
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
-          <img loading="lazy" decoding="async" src={profileIconUrl(card.stateData?.profile_icon_id, ddVersion) || ''} alt="" className="h-full w-full object-cover" />
+          <img loading="lazy" decoding="async" src={icon || ''} alt="" className="h-full w-full object-cover" />
         </div>
         <div className="min-w-0 flex-1">
           <button
@@ -467,7 +487,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 })
 RunnerupRow.displayName = 'RunnerupRow'
 
-const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpand, spellMap, runeMap }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, isExpanded: boolean, onExpand: (id: string) => void, spellMap: Map<number, any>, runeMap: Map<number, any> }) => {
+const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpand, spellMap, runeMap, currentRankData }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, isExpanded: boolean, onExpand: (id: string) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any }) => {
     // 5. Defensive Checks: Guard against undefined maps
     const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
@@ -475,8 +495,15 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
     const kdaValue = match.d > 0 ? (match.k + match.a) / match.d : 99
     const kdaLabel = match.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
     const kdaColor = match.d === 0 ? 'text-amber-600 font-bold' : getKdaColor(kdaValue)
-    const resultLabel = match.win ? 'Victory' : 'Defeat'
-    const resultColor = match.win ? 'text-emerald-500' : 'text-rose-500'
+    
+    // Handle Remake logic
+    const isRemake = match.endType === 'REMAKE'
+    const resultLabel = isRemake ? 'Remake' : (match.win ? 'Victory' : 'Defeat')
+    const resultColor = isRemake ? 'text-slate-500' : (match.win ? 'text-emerald-500' : 'text-rose-500')
+    const rowAccent = isRemake ? 'border-slate-300' : (match.win ? 'border-emerald-400' : 'border-rose-400')
+    const rowBg = isRemake ? 'bg-slate-50/80 dark:bg-slate-500/10' : (match.win ? 'bg-emerald-50/80 dark:bg-emerald-500/10' : 'bg-rose-50/80 dark:bg-rose-500/10')
+    const rowBorder = isRemake ? 'border-slate-200/80 dark:border-slate-500/30' : (match.win ? 'border-emerald-200/80 dark:border-emerald-500/30' : 'border-rose-200/80 dark:border-rose-500/30')
+
     const when = match.endTs ? timeAgo(match.endTs) : '—'
     const queueLabel = match.queueId ? QUEUE_LABELS[match.queueId] ?? 'Custom' : 'Custom'
     const csPerMin = formatCsPerMin(match.cs, match.durationS)
@@ -500,20 +527,61 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
       return Math.round(((match.k + match.a) / teamKills) * 100)
     }, [detail?.info?.participants, participant?.teamId, match.k, match.a])
   
-    const rowBg = match.win ? 'bg-emerald-50/80 dark:bg-emerald-500/10' : 'bg-rose-50/80 dark:bg-rose-500/10'
-    const rowBorder = match.win ? 'border-emerald-200/80 dark:border-emerald-500/30' : 'border-rose-200/80 dark:border-rose-500/30'
-    const rowAccent = match.win ? 'border-emerald-400' : 'border-rose-400'
-  
+    // Rank Fallback Data: Prioritize match snapshot, fallback to current rank
+    const tier = match.rankTier ?? currentRankData?.tier
+    const division = match.rankDivision ?? currentRankData?.rank
+    const rankIcon = tier ? getRankIconSrc(tier) : null
+    const rankLabel = tier ? formatTierShort(tier, division) : null
+
     return (
       <div className={`rounded-2xl border ${rowBorder} ${rowBg} shadow-sm`}>
         <button type="button" onClick={() => onExpand(match.matchId)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
           <div className={`flex items-center gap-3 text-xs text-slate-500 ${rowAccent} border-l-4 pl-3 min-w-0`}>
-            <div className="flex flex-col w-[130px] shrink-0 leading-tight">
-              <span className={`text-[12px] font-black uppercase tracking-wide ${resultColor}`}>{resultLabel}</span>
-              <span className="text-[10px] text-slate-400 uppercase tracking-wide">{durationLabel}</span>
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{queueLabel}</span>
+            
+            {/* --- COLUMN 1: Result, Duration, LP, Queue, Time --- */}
+            <div className="flex flex-col w-[130px] shrink-0 leading-tight gap-0.5">
+              {/* Row 1: Result + Duration */}
+              <div className="flex items-baseline gap-1.5">
+                <span className={`text-[12px] font-black uppercase tracking-wide ${resultColor}`}>{resultLabel}</span>
+                <span className="text-[10px] text-slate-400 font-medium">{durationLabel}</span>
+              </div>
+
+              {/* Row 2: LP Change / Note */}
+              <div className="h-4 flex items-center">
+                {match.lpChange !== undefined && match.lpChange !== null ? (
+                  match.lpNote ? (
+                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                        match.lpNote === 'PROMOTED' 
+                        ? 'text-emerald-700 bg-emerald-100/50 dark:text-emerald-200 dark:bg-emerald-500/20' 
+                        : 'text-rose-700 bg-rose-100/50 dark:text-rose-200 dark:bg-rose-500/20'
+                    }`}>
+                      {match.lpNote}
+                    </span>
+                  ) : (
+                    <span className={`text-[11px] font-bold ${match.lpChange >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                        {match.lpChange > 0 ? '▲' : '▼'} {Math.abs(match.lpChange)} LP
+                    </span>
+                  )
+                ) : (
+                  // Fallback: Show snapshot rank or current rank if LP data missing
+                  rankLabel && !isRemake ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300">
+                      {rankIcon && <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />}
+                      {rankLabel} <span className="text-[9px] opacity-70">(N/A)</span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-300 dark:text-slate-600 font-medium opacity-50">— LP</span>
+                  )
+                )}
+              </div>
+
+              {/* Row 3: Queue Type */}
+              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mt-0.5">{queueLabel}</span>
+
+              {/* Row 4: Time Ago */}
               <span className="text-[10px] text-slate-400">{when}</span>
             </div>
+
             <div className="flex items-center gap-3 w-[190px] shrink-0">
               {champSrc ? (
                 <div className="relative">
@@ -934,7 +1002,29 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       fetch(`/api/player/${puuid}/matches?limit=all`)
         .then(res => res.ok ? res.json() : Promise.reject())
         .then(data => {
-          const list: MatchSummary[] = data.matches ?? []
+          const rawList: any[] = data.matches ?? []
+          // MAPPER to handle potential casing differences (lp_change -> lpChange) and missing rank fields
+          const list: MatchSummary[] = rawList.map(m => ({
+            matchId: m.matchId,
+            puuid: m.puuid,
+            championId: m.championId,
+            win: m.win,
+            k: m.k,
+            d: m.d,
+            a: m.a,
+            cs: m.cs,
+            endTs: m.endTs,
+            durationS: m.durationS,
+            queueId: m.queueId,
+            visionScore: m.visionScore,
+            // Prioritize snake_case from DB if standard API key is missing
+            lpChange: m.lpChange ?? m.lp_change ?? null,
+            lpNote: m.lpNote ?? m.lp_note ?? null,
+            rankTier: m.rankTier ?? m.rank_tier ?? null,
+            rankDivision: m.rankDivision ?? m.rank_division ?? null,
+            endType: m.endType ?? m.end_type,
+          }))
+
           // Sort ONCE here
           const matchIdToSortKey = (matchId: string) => {
             const [, raw] = matchId.split('_')
@@ -1281,6 +1371,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               onExpand={toggleExpand}
                               spellMap={spellMap}
                               runeMap={runeMap}
+                              currentRankData={summary?.rank}
                             />
                           ))}
                         {visibleMatchesCount < matches.length && (

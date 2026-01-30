@@ -35,7 +35,7 @@ export default async function HomePage() {
             CWF.LOL
           </h1>
           <p className="text-lg text-slate-600 font-medium dark:text-slate-300">
-            Climb with Friends, track your friends!
+            Climb with Friends, compete with others!
           </p>
         </div>
 

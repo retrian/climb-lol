@@ -417,6 +417,16 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
 
     const part = (info.participants as any[]).find((x) => x.puuid === puuid)
     if (part) {
+      // Determine end type
+      let endType: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' = 'NORMAL'
+      if (info.gameDuration < 300) { // Less than 5 minutes
+        endType = 'REMAKE'
+      } else if (info.gameEndedInEarlySurrender) {
+        endType = 'EARLY_SURRENDER'
+      } else if (info.gameEndedInSurrender) {
+        endType = 'SURRENDER'
+      }
+
       participantUpserts.push({
         match_id: meta.matchId,
         puuid,
@@ -427,6 +437,8 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
         cs: Number((part.totalMinionsKilled ?? 0) + (part.neutralMinionsKilled ?? 0)),
         win: Boolean(part.win),
         vision_score: Number(part.visionScore ?? 0),
+        end_type: endType,
+        // LP data will be populated by updateMatchParticipantsWithLpData after all matches are fetched
       })
     }
 
@@ -449,6 +461,80 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
 
   await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
   return { ids, newIds: limitedIds }
+}
+
+async function updateMatchParticipantsWithLpData(puuid: string, matchIds: string[]) {
+  if (!matchIds.length) return
+
+  // Get LP events for these matches
+  const { data: lpEvents, error: lpError } = await supabase
+    .from('player_lp_events')
+    .select('match_id, lp_before, lp_after, lp_delta, note')
+    .eq('puuid', puuid)
+    .in('match_id', matchIds)
+
+  if (lpError) {
+    console.warn('[updateLpData] error fetching lp_events:', lpError.message)
+    return
+  }
+
+  if (!lpEvents || lpEvents.length === 0) return
+
+  // Get LP history to find rank snapshots
+  const { data: lpHistory, error: histError } = await supabase
+    .from('player_lp_history')
+    .select('tier, rank, lp, fetched_at')
+    .eq('puuid', puuid)
+    .eq('queue_type', QUEUE_SOLO)
+    .order('fetched_at', { ascending: true })
+
+  if (histError) {
+    console.warn('[updateLpData] error fetching lp_history:', histError.message)
+    return
+  }
+
+  // Get match timestamps
+  const { data: matches, error: matchError } = await supabase
+    .from('matches')
+    .select('match_id, game_end_ts')
+    .in('match_id', matchIds)
+
+  if (matchError) {
+    console.warn('[updateLpData] error fetching matches:', matchError.message)
+    return
+  }
+
+  const matchTimestamps = new Map(matches?.map(m => [m.match_id, m.game_end_ts]) || [])
+
+  // Update each match participant with LP data
+  for (const event of lpEvents) {
+    const matchEndTs = matchTimestamps.get(event.match_id)
+    if (!matchEndTs) continue
+
+    // Find rank snapshot before this match
+    const beforeSnapshot = lpHistory
+      ?.filter(h => new Date(h.fetched_at).getTime() <= matchEndTs)
+      ?.slice(-1)[0] // Get the most recent one before match
+
+    if (!beforeSnapshot) continue
+
+    const { error: updateError } = await supabase
+      .from('match_participants')
+      .update({
+        lp_change: event.lp_delta,
+        lp_note: event.note,
+        rank_tier: beforeSnapshot.tier,
+        rank_division: beforeSnapshot.rank,
+      })
+      .eq('match_id', event.match_id)
+      .eq('puuid', puuid)
+
+    if (updateError) {
+      console.warn('[updateLpData] error updating participant:', updateError.message)
+    }
+  }
+
+  console.log('[updateLpData]', puuid.slice(0, 12), 'updated', lpEvents.length, 'matches')
 }
 
 async function insertLpHistory(puuid: string, snap: SoloSnapshot) {
@@ -672,13 +758,18 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
     await syncAccountIdentity(puuid)
     await syncSummonerBasics(puuid)
 
-    const { ids } = await syncMatchesAll(puuid)
+    const { ids, newIds } = await syncMatchesAll(puuid)
 
     const soloSnap = await syncRankByPuuid(puuid)
 
     if (soloSnap) {
       await insertLpHistory(puuid, soloSnap)
       await maybeInsertPerGameLpEvent({ puuid, snap: soloSnap, ids, state })
+      
+      // ✅ NEW: Update LP data for newly fetched matches
+      if (newIds.length > 0) {
+        await updateMatchParticipantsWithLpData(puuid, newIds)
+      }
     }
 
     const missingTop = !(await hasTopChamps(puuid))

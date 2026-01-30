@@ -7,12 +7,32 @@ type BannerUploadFieldProps = {
   previewUrl?: string | null
   placeholder?: string
   helperText?: string
+  onValidationChange?: (hasError: boolean) => void
 }
 
-export default function BannerUploadField({ name, previewUrl, placeholder, helperText }: BannerUploadFieldProps) {
+export default function BannerUploadField({ name, previewUrl, placeholder, helperText, onValidationChange }: BannerUploadFieldProps) {
   const [file, setFile] = useState<File | null>(null)
+  const [fileSizeError, setFileSizeError] = useState<string | null>(null)
 
   const livePreview = useMemo(() => (file ? URL.createObjectURL(file) : null), [file])
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0] ?? null
+    setFile(selectedFile)
+    
+    // Validate file size client-side
+    if (selectedFile) {
+      const maxSize = 4 * 1024 * 1024 // 4MB in bytes
+      if (selectedFile.size > maxSize) {
+        const error = `File too large (${(selectedFile.size / 1024 / 1024).toFixed(1)}MB). Max 4MB.`
+        setFileSizeError(error)
+        onValidationChange?.(true)
+      } else {
+        setFileSizeError(null)
+        onValidationChange?.(false)
+      }
+    }
+  }
 
   return (
     <div>
@@ -33,10 +53,14 @@ export default function BannerUploadField({ name, previewUrl, placeholder, helpe
           name={name}
           accept="image/png,image/jpeg,image/webp"
           required
-          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          onChange={handleFileChange}
           className="block w-full text-sm text-slate-500 file:mr-4 file:rounded-none file:border-0 file:bg-slate-100 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-200 dark:text-slate-400 dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover:file:bg-slate-700"
         />
-        {helperText ? <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{helperText}</p> : null}
+        {fileSizeError ? (
+          <p className="mt-2 text-xs text-red-600 dark:text-red-400">{fileSizeError}</p>
+        ) : helperText ? (
+          <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">{helperText}</p>
+        ) : null}
       </div>
     </div>
   )

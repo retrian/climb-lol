@@ -4,9 +4,10 @@ import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePuuid } from '@/lib/riot/resolvePuuid'
 import { buildClubSlug, CLUB_SLUG_PART_MAX, normalizeSlugPart, parseClubSlug, validateSlugPart } from '@/lib/clubSlug'
+import HighlightsSubmitClient from '@/app/clubs/[slug]/HighlightsSubmitClient'
 
 const CLUB_BANNER_BUCKET = 'club-banners'
-const TABS = ['home', 'members', 'leaderboards'] as const
+const TABS = ['home', 'members', 'leaderboards', 'highlights'] as const
 type ClubTab = (typeof TABS)[number]
 
 type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
@@ -91,6 +92,15 @@ type ClubLeaderboardRow = {
   added_by_user_id: string | null
 }
 
+type HighlightRow = {
+  id: string
+  club_id: string
+  user_id: string | null
+  url: string
+  duration_seconds: number | null
+  created_at: string | null
+}
+
 type LeaderboardRow = {
   id: string
   name: string
@@ -99,6 +109,19 @@ type LeaderboardRow = {
   updated_at: string | null
   banner_url: string | null
   visibility: string | null
+}
+
+type ClubShowdownRow = {
+  id: string
+  requester_club_id: string
+  target_club_id: string
+  status: string | null
+  created_at: string | null
+}
+
+type ClubNameRow = {
+  id: string
+  name: string
 }
 
 type AttachedLeaderboard = {
@@ -180,11 +203,12 @@ export default async function ClubDetailPage({
 
   const club = clubRaw as ClubRow | null
   if (!club) notFound()
+  const clubSafe = club
 
   const canManage = !!ownerId && club.owner_user_id === ownerId
   const slugParts = parseClubSlug(club.slug)
 
-  const [membersRes, linksRes, userLeaderboardsRes] = await Promise.all([
+  const [membersRes, linksRes, userLeaderboardsRes, highlightsRes, showdownsRes] = await Promise.all([
     supabase
       .from('club_members')
       .select('id, user_id, role, joined_at, player_puuid, game_name, tag_line')
@@ -202,6 +226,17 @@ export default async function ClubDetailPage({
           .eq('user_id', ownerId!)
           .order('name', { ascending: true })
       : Promise.resolve({ data: [] as LeaderboardRow[], error: null }),
+    supabase
+      .from('club_highlights')
+      .select('id, club_id, user_id, url, duration_seconds, created_at')
+      .eq('club_id', club.id)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('club_showdown_requests')
+      .select('id, requester_club_id, target_club_id, status, created_at')
+      .or(`requester_club_id.eq.${club.id},target_club_id.eq.${club.id}`)
+      .order('created_at', { ascending: false })
+      .limit(6),
   ])
 
   const members = (membersRes.data ?? []) as MemberRow[]
@@ -243,9 +278,31 @@ export default async function ClubDetailPage({
   const attachedIds = new Set(attachedLeaderboards.map((item) => item.leaderboard?.id).filter((v): v is string => !!v))
   const attachableLeaderboards = userLeaderboards.filter((lb) => !attachedIds.has(lb.id))
 
+  const highlights = (highlightsRes.data ?? []) as HighlightRow[]
+  const highlightsError = highlightsRes.error
+
+  const showdowns = (showdownsRes.data ?? []) as ClubShowdownRow[]
+  const showdownsError = showdownsRes.error
+  const showdownClubIds = Array.from(
+    new Set(showdowns.flatMap((showdown) => [showdown.requester_club_id, showdown.target_club_id]))
+  )
+  const showdownClubsRes = showdownClubIds.length
+    ? await supabase.from('clubs').select('id, name').in('id', showdownClubIds)
+    : { data: [] as ClubNameRow[], error: null }
+  const showdownClubsById = new Map((showdownClubsRes.data ?? []).map((row) => [row.id, row.name]))
+
   const memberCount = members.length
   const leaderboardCount = attachedLeaderboards.filter((item) => item.leaderboard).length
   const updatedLabel = formatDate(club.updated_at ?? club.created_at)
+  const latestMembers = [...members]
+    .sort((a, b) => {
+      const aTs = a.joined_at ? new Date(a.joined_at).getTime() : 0
+      const bTs = b.joined_at ? new Date(b.joined_at).getTime() : 0
+      return bTs - aTs
+    })
+    .slice(0, 8)
+
+  const canPostHighlight = !!user && (club.owner_user_id === user.id || members.some((member) => member.user_id === user.id))
 
 
 async function addMember(formData: FormData) {
@@ -434,9 +491,74 @@ async function addMember(formData: FormData) {
     redirect(clubUrl(slug, { tab: 'leaderboards', ok: 'Leaderboard removed' }))
   }
 
+  async function addHighlight(formData: FormData) {
+    'use server'
+
+    const urlRaw = String(formData.get('video_url') ?? '').trim()
+    const resolvedUrl = String(formData.get('resolved_url') ?? '').trim()
+    const durationRaw = String(formData.get('duration_seconds') ?? '').trim()
+
+    if (!urlRaw) {
+      redirect(clubUrl(slug, { tab: 'highlights', err: 'Add a video link first.' }))
+    }
+
+    const finalUrl = resolvedUrl || urlRaw
+
+    let durationSeconds = Number(durationRaw)
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+      redirect(clubUrl(slug, { tab: 'highlights', err: 'Unable to read video length. Use a direct video link.' }))
+    }
+
+    durationSeconds = Math.round(durationSeconds)
+    if (durationSeconds > 30) {
+      redirect(clubUrl(slug, { tab: 'highlights', err: 'Video must be 30 seconds or less.' }))
+    }
+
+    try {
+      // eslint-disable-next-line no-new
+      new URL(finalUrl)
+    } catch {
+      redirect(clubUrl(slug, { tab: 'highlights', err: 'Invalid video URL.' }))
+    }
+
+    const supabase = await createClient()
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user) redirect('/sign-in')
+
+    if (clubSafe.owner_user_id !== user.id) {
+      const { data: member } = await supabase
+        .from('club_members')
+        .select('id')
+        .eq('club_id', clubSafe.id)
+        .eq('user_id', user.id)
+        .maybeSingle()
+
+      if (!member?.id) {
+        redirect(clubUrl(slug, { tab: 'highlights', err: 'Only club members can post highlights.' }))
+      }
+    }
+
+    const { error } = await supabase.from('club_highlights').insert({
+      club_id: clubSafe.id,
+      user_id: user.id,
+      url: finalUrl,
+      duration_seconds: durationSeconds,
+    })
+
+    if (error) {
+      redirect(clubUrl(slug, { tab: 'highlights', err: error.message }))
+    }
+
+    revalidatePath(`/clubs/${slug}`)
+    redirect(clubUrl(slug, { tab: 'highlights', ok: 'Highlight added.' }))
+  }
+
   const hasMemberError = !!memberError
   const hasLeaderboardError = !!linksError || !!leaderboardsRes.error
   const hasAttachError = !!userLeaderboardsError
+  const hasHighlightsError = !!highlightsError
+  const hasShowdownError = !!showdownsError
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
@@ -484,7 +606,7 @@ async function addMember(formData: FormData) {
                 </Link>
                 {canManage ? (
                   <Link
-                    href="/dashboard?section=club#club"
+                    href="/dashboard/club"
                     className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
                   >
                     Manage in dashboard
@@ -518,7 +640,7 @@ async function addMember(formData: FormData) {
           </div>
         </div>
 
-        {(clubOk || clubErr || hasMemberError || hasLeaderboardError || hasAttachError) && (
+        {(clubOk || clubErr || hasMemberError || hasLeaderboardError || hasAttachError || hasHighlightsError || hasShowdownError) && (
           <div className="mt-6 space-y-3">
             {clubOk && (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
@@ -545,33 +667,135 @@ async function addMember(formData: FormData) {
                 Your leaderboards are not available to attach. {userLeaderboardsError?.message}
               </div>
             )}
+            {hasHighlightsError && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                Highlights could not be loaded. {highlightsError?.message}
+              </div>
+            )}
+            {hasShowdownError && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                Showdown log could not be loaded. {showdownsError?.message}
+              </div>
+            )}
           </div>
         )}
 
         {activeTab === 'home' && (
-          <section className="mt-8 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-            <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club home</h2>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                This is the public landing page for the club. Share your identity, link your favorite competitions, and keep your roster in sync.
-              </p>
-              <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Members</p>
-                  <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">{memberCount}</p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Riot IDs on the roster</p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Leaderboards</p>
-                  <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">{leaderboardCount}</p>
-                  <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Attached competitions</p>
+          <section className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12 lg:gap-10">
+            <aside className="order-2 lg:order-1 lg:col-span-4 lg:sticky lg:top-6">
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 shadow-sm" />
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest members joined</h3>
+              </div>
+              <div className="mt-4 space-y-3">
+                {latestMembers.length === 0 ? (
+                  <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-10 text-center dark:border-slate-700 dark:bg-slate-900">
+                    <p className="text-sm font-semibold text-slate-600 dark:text-slate-200">No members yet</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Add Riot IDs to start the roster.</p>
+                  </div>
+                ) : (
+                  latestMembers.map((member) => {
+                    const riotId = member.game_name && member.tag_line ? `${member.game_name}#${member.tag_line}` : null
+                    const profileIconId = member.player_puuid ? riotStateByPuuid.get(member.player_puuid) ?? null : null
+                    const iconUrl = profileIconId
+                      ? `https://ddragon.leagueoflegends.com/cdn/${process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'}/img/profileicon/${profileIconId}.png`
+                      : null
+                    const joinedLabel = formatDate(member.joined_at)
+                    const profileName = member.user_id ? profilesByUserId.get(member.user_id) : null
+                    const displayName = riotId ?? profileName ?? (member.user_id ? 'Owner' : 'Member')
+
+                    return (
+                      <div
+                        key={member.id}
+                        className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+                      >
+                        {iconUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={iconUrl}
+                            alt=""
+                            className="h-10 w-10 rounded-xl border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                          />
+                        ) : (
+                          <div className="h-10 w-10 rounded-xl border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                        )}
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayName}</p>
+                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Joined {joinedLabel ?? 'Unknown'}
+                          </p>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </aside>
+
+            <div className="order-1 space-y-6 lg:order-2 lg:col-span-8">
+              <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club home</h2>
+                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                  This is the public landing page for the club. Share your identity, link your favorite competitions, and keep your roster in sync.
+                </p>
+                <div className="mt-6 grid gap-4 sm:grid-cols-2">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Members</p>
+                    <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">{memberCount}</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Riot IDs on the roster</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Leaderboards</p>
+                    <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">{leaderboardCount}</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Attached competitions</p>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white p-6 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              <p className="font-semibold text-slate-800 dark:text-slate-100">Club settings</p>
-              <p className="mt-2">Manage club settings, banner, and deletion from the dashboard.</p>
+              <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">Showdown log</h3>
+                  <Link
+                    href="/showdown"
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200"
+                  >
+                    View all
+                  </Link>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {showdowns.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-300">
+                      No showdowns yet.
+                    </div>
+                  ) : (
+                    showdowns.map((showdown) => {
+                      const opponentClubId = showdown.requester_club_id === club.id ? showdown.target_club_id : showdown.requester_club_id
+                      const opponentName = showdownClubsById.get(opponentClubId) ?? 'Opponent club'
+                      const createdLabel = formatDate(showdown.created_at)
+
+                      return (
+                        <div
+                          key={showdown.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950"
+                        >
+                          <div>
+                            <p className="font-semibold text-slate-800 dark:text-slate-100">{opponentName}</p>
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                              {showdown.status ?? 'PENDING'} • {createdLabel ?? 'Recently'}
+                            </p>
+                          </div>
+                          <Link
+                            href={`/showdown/${showdown.id}`}
+                            className="inline-flex items-center justify-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+                          >
+                            View
+                          </Link>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
             </div>
           </section>
         )}
@@ -776,6 +1000,71 @@ async function addMember(formData: FormData) {
                               </button>
                             </form>
                           )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </section>
+        )}
+
+        {activeTab === 'highlights' && (
+          <section className="mt-8 space-y-6">
+            <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club highlights</h2>
+                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Post a video link (30s max) to share your best moments.</p>
+                </div>
+                {!user && (
+                  <Link
+                    href="/sign-in"
+                    className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+                  >
+                    Sign in to post
+                  </Link>
+                )}
+              </div>
+              {user && (
+                <div className="mt-4">
+                  <HighlightsSubmitClient action={addHighlight} canPost={canPostHighlight} />
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {highlights.length === 0 ? (
+                <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-16 text-center dark:border-slate-700 dark:bg-slate-900">
+                  <p className="text-base font-bold text-slate-600 dark:text-slate-200">No highlights yet</p>
+                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Be the first to post a clip.</p>
+                </div>
+              ) : (
+                highlights.map((highlight) => {
+                  const createdLabel = formatDate(highlight.created_at)
+                  const username = highlight.user_id ? profilesByUserId.get(highlight.user_id) : null
+
+                  return (
+                    <div
+                      key={highlight.id}
+                      className="overflow-hidden rounded-2xl border-2 border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
+                    >
+                      <div className="p-5">
+                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+                          <span className="font-semibold text-slate-800 dark:text-slate-100">{username ?? 'Member'}</span>
+                          {createdLabel && <span>Posted {createdLabel}</span>}
+                          {highlight.duration_seconds && <span>{highlight.duration_seconds}s</span>}
+                        </div>
+                      </div>
+                      <div className="border-t border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
+                        <video controls preload="metadata" className="w-full rounded-xl bg-black">
+                          <source src={highlight.url} />
+                        </video>
+                        <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                          <a href={highlight.url} target="_blank" rel="noreferrer" className="font-semibold text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200">
+                            Open video link
+                          </a>
                         </div>
                       </div>
                     </div>

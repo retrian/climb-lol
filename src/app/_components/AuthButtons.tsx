@@ -32,7 +32,7 @@ export function AuthButtons({ signedIn, username }: { signedIn: boolean; usernam
   const signOut = async () => {
     const supabase = createClient()
     await supabase.auth.signOut()
-    router.refresh()
+    router.push('/')
   }
 
   const signIn = async () => {

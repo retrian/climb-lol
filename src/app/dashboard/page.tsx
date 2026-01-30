@@ -1,12 +1,19 @@
 import Link from 'next/link'
+import DashboardFlashClient from '@/components/DashboardFlashClient'
+import { PlayerFormWrapper } from '@/components/PlayerFormClient'
+import { BannerFormWrapper } from '@/components/BannerFormWrapper'
+import { BannerUploadSection } from '@/components/BannerUploadSection'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { resolvePuuid } from '@/lib/riot/resolvePuuid'
 import { buildClubSlug, CLUB_SLUG_PART_MAX, normalizeSlugPart, parseClubSlug, validateSlugPart } from '@/lib/clubSlug'
 import { AddPlayerButton } from './AddPlayerButton'
 import GoalModeFields from './GoalModeFields'
 import BannerUploadField from './BannerUploadField'
+import { DeleteLeaderboardButton } from './DeleteLeaderboardButton'
+import { DeleteClubButton } from './DeleteClubButton'
 
 // --- Constants & Types ---
 const VISIBILITY = ['PUBLIC', 'UNLISTED', 'PRIVATE'] as const
@@ -27,6 +34,12 @@ type ClubRow = {
   banner_url: string | null
   updated_at: string | null
   owner_user_id: string
+}
+
+type FlashPayload = {
+  kind: 'primary' | 'secondary'
+  tone: 'success' | 'error'
+  message: string
 }
 
 function normalizePlayerError(message: string) {
@@ -78,6 +91,50 @@ function cacheBuster() {
   return Date.now().toString()
 }
 
+async function setDashboardFlash(payload: FlashPayload) {
+  try {
+    const cookieStore = await cookies()
+    cookieStore.set('dashboard_flash', JSON.stringify(payload), {
+      path: '/',
+      maxAge: 30,
+      sameSite: 'lax',
+    })
+  } catch {
+    // ignore cookie failures
+  }
+}
+
+async function getDashboardFlash() {
+  try {
+    const cookieStore = await cookies()
+    const raw = cookieStore.get('dashboard_flash')?.value
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as FlashPayload
+    if (!parsed?.message || !parsed?.tone || !parsed?.kind) return null
+    cookieStore.set('dashboard_flash', '', { path: '/', maxAge: 0 })
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function flashFromOpts(opts: {
+  ok?: string
+  err?: string
+  clubOk?: string
+  clubErr?: string
+  billingOk?: string
+  billingErr?: string
+}) {
+  if (opts.err) return { kind: 'primary', tone: 'error', message: opts.err } satisfies FlashPayload
+  if (opts.ok) return { kind: 'primary', tone: 'success', message: opts.ok } satisfies FlashPayload
+  if (opts.clubErr) return { kind: 'secondary', tone: 'error', message: opts.clubErr } satisfies FlashPayload
+  if (opts.clubOk) return { kind: 'secondary', tone: 'success', message: opts.clubOk } satisfies FlashPayload
+  if (opts.billingErr) return { kind: 'secondary', tone: 'error', message: opts.billingErr } satisfies FlashPayload
+  if (opts.billingOk) return { kind: 'secondary', tone: 'success', message: opts.billingOk } satisfies FlashPayload
+  return null
+}
+
 function sectionRedirect(opts: {
   section: 'settings' | 'banner' | 'players' | 'club' | 'profile' | 'billing' | 'top'
   ok?: string
@@ -91,19 +148,71 @@ function sectionRedirect(opts: {
   leaderboardId?: string
 }) {
   const params = new URLSearchParams()
-  if (opts.ok) params.set('player_ok', opts.ok)
-  if (opts.err) params.set('player_err', opts.err)
   if (opts.deleteConfirm) params.set('delete_confirm', '1')
-  if (opts.clubOk) params.set('club_ok', opts.clubOk)
-  if (opts.clubErr) params.set('club_err', opts.clubErr)
-  if (opts.billingOk) params.set('billing_ok', opts.billingOk)
-  if (opts.billingErr) params.set('billing_err', opts.billingErr)
   if (opts.clubDeleteConfirm) params.set('club_delete_confirm', '1')
-  if (opts.leaderboardId) params.set('lb', opts.leaderboardId)
-  if (opts.section !== 'top') params.set('section', opts.section)
-  const hash = opts.section !== 'top' ? `#${opts.section}` : ''
+  if (opts.section === 'banner' || opts.section === 'players') {
+    params.set('section', opts.section)
+  }
+  
+  if (opts.leaderboardId) {
+    params.set('lb', opts.leaderboardId)
+  }
+  
+  const isLeaderboardSection = opts.section === 'settings' || opts.section === 'banner' || opts.section === 'players'
+  let basePath = '/dashboard/profile'
+  if (opts.section === 'club') basePath = '/dashboard/club'
+  if (opts.section === 'billing') basePath = '/dashboard/billing'
+  if (opts.section === 'profile') basePath = '/dashboard/profile'
+  if (isLeaderboardSection) basePath = `/dashboard/leaderboards`
   const qs = params.toString()
-  return `/dashboard${qs.length ? `?${qs}` : ''}${hash}`
+  return `${basePath}${qs.length ? `?${qs}` : ''}`
+}
+
+async function redirectToDashboard(opts: {
+  section: 'settings' | 'banner' | 'players' | 'club' | 'profile' | 'billing' | 'top'
+  ok?: string
+  err?: string
+  clubOk?: string
+  clubErr?: string
+  billingOk?: string
+  billingErr?: string
+  deleteConfirm?: boolean
+  clubDeleteConfirm?: boolean
+  leaderboardId?: string
+}) {
+  const flash = flashFromOpts(opts)
+  if (flash) {
+    await setDashboardFlash(flash)
+  }
+  
+  // Persist selected leaderboard in a cookie
+  if (opts.leaderboardId) {
+    try {
+      const cookieStore = await cookies()
+      cookieStore.set('dashboard_active_lb', String(opts.leaderboardId), {
+        path: '/dashboard',
+        maxAge: 60 * 60 * 24 * 30,
+        sameSite: 'lax',
+      })
+    } catch {
+      // ignore cookie failures
+    }
+  }
+
+  // Force revalidation of the dashboard so the cookie is read on next render
+  revalidatePath('/dashboard')
+
+  // Get the base target URL
+  let target = sectionRedirect(opts)
+
+  // --- CLEAN URL LOGIC ---
+  // If we are targeting the leaderboards page and have already set the cookie,
+  // strictly redirect to the clean URL to avoid ?lb=UUID in the browser bar.
+  if (target.includes('/dashboard/leaderboards')) {
+    target = '/dashboard/leaderboards'
+  }
+  
+  redirect(target)
 }
 
 // --- Main Page Component ---
@@ -112,28 +221,18 @@ export default async function DashboardPage({
 }: {
   searchParams?:
     | {
-        player_err?: string
-        player_ok?: string
         delete_confirm?: string
-        club_err?: string
-        club_ok?: string
         club_delete_confirm?: string
-        billing_err?: string
-        billing_ok?: string
         section?: string
         lb?: string
+        create_lb?: string
       }
     | Promise<{
-        player_err?: string
-        player_ok?: string
         delete_confirm?: string
-        club_err?: string
-        club_ok?: string
         club_delete_confirm?: string
-        billing_err?: string
-        billing_ok?: string
         section?: string
         lb?: string
+        create_lb?: string
       }>
 }) {
   const supabase = await createClient()
@@ -142,21 +241,32 @@ export default async function DashboardPage({
   if (!user) redirect('/sign-in')
 
   const sp = await Promise.resolve(searchParams ?? {})
-  const playerErr = sp.player_err ? normalizePlayerError(decodeURIComponent(sp.player_err)) : null
-  const playerOk = sp.player_ok ? decodeURIComponent(sp.player_ok) : null
+  const flash = await getDashboardFlash()
+  const playerErr = flash?.kind === 'primary' && flash.tone === 'error' ? normalizePlayerError(flash.message) : null
+  const playerOk = flash?.kind === 'primary' && flash.tone === 'success' ? flash.message : null
   const deleteForId = sp.lb ? decodeURIComponent(sp.lb) : null
   const showDeleteConfirm = sp.delete_confirm === '1'
-  const clubErr = sp.club_err ? decodeURIComponent(sp.club_err) : null
-  const clubOk = sp.club_ok ? decodeURIComponent(sp.club_ok) : null
+  const clubErr = flash?.kind === 'secondary' && flash.tone === 'error' ? flash.message : null
+  const clubOk = flash?.kind === 'secondary' && flash.tone === 'success' ? flash.message : null
   const showClubDeleteConfirm = sp.club_delete_confirm === '1'
+  const isCreatingLeaderboard = sp.create_lb === '1'
   const section = (sp.section ?? 'top').toString()
-  const billingErr = sp.billing_err ? decodeURIComponent(sp.billing_err) : null
-  const billingOk = sp.billing_ok ? decodeURIComponent(sp.billing_ok) : null
+  const billingErr = null
+  const billingOk = null
   const sectionValues = ['profile', 'settings', 'banner', 'players', 'club', 'billing'] as const
   type DashboardSection = (typeof sectionValues)[number]
   const activeSection: DashboardSection = (sectionValues as readonly string[]).includes(section) ? (section as DashboardSection) : 'profile'
   const effectiveSection: DashboardSection = activeSection === 'banner' || activeSection === 'players' ? 'settings' : activeSection
-  const activeLeaderboardId = sp.lb ? decodeURIComponent(sp.lb) : null
+  let activeLeaderboardId = sp.lb ? decodeURIComponent(sp.lb) : null
+  if (!activeLeaderboardId) {
+    try {
+      const cookieStore = await cookies()
+      const val = cookieStore.get('dashboard_active_lb')?.value ?? null
+      activeLeaderboardId = val
+    } catch {
+      // ignore cookie read failures
+    }
+  }
 
   // Fetch Leaderboards
   const { data: leaderboardsRaw } = await supabase
@@ -239,7 +349,24 @@ export default async function DashboardPage({
   async function createLeaderboard(formData: FormData) {
     'use server'
 
-    const name = String(formData.get('name') ?? '').trim()
+    // Check for "Quick Create" flag
+    const isQuickCreate = String(formData.get('quick_create') ?? '') === '1'
+
+    let name = String(formData.get('name') ?? '').trim()
+    const description = String(formData.get('description') ?? '').trim().slice(0, 250) || null
+    let visibilityRaw = String(formData.get('visibility') ?? '').trim()
+    const goalMode = String(formData.get('goal_mode') ?? '').trim() || 'LIVE'
+    const raceStartAt = formData.get('race_start_at') ? String(formData.get('race_start_at') ?? '').trim() : null
+    const raceEndAt = formData.get('race_end_at') ? String(formData.get('race_end_at') ?? '').trim() : null
+    const lpGoal = formData.get('lp_goal') ? parseInt(String(formData.get('lp_goal') ?? '0'), 10) : null
+    const rankGoal = formData.get('rank_goal_tier') ? String(formData.get('rank_goal_tier') ?? '').trim() : null
+
+    // If Quick Create, override validation
+    if (isQuickCreate) {
+      name = "My Leaderboard"
+      visibilityRaw = "UNLISTED"
+    }
+
     if (!name) return
 
     const supabase = await createClient()
@@ -264,11 +391,15 @@ export default async function DashboardPage({
     const allowedSlots = BASE_LEADERBOARD_SLOTS + extraSlots + subscriptionSlots
 
     if (ownedCount >= allowedSlots) {
-      redirect(sectionRedirect({ section: 'billing', billingErr: 'Leaderboard limit reached. Purchase more slots to add another.' }))
+      await redirectToDashboard({ section: 'billing', billingErr: 'Leaderboard limit reached. Purchase more slots to add another.' })
+      return
     }
 
     const base = slugify(name)
     const slug = `${base}-${Math.random().toString(36).slice(2, 7)}`
+    const safeVisibility: Visibility = VISIBILITY.includes(visibilityRaw as Visibility)
+      ? (visibilityRaw as Visibility)
+      : 'PUBLIC'
 
     const { data: inserted, error } = await supabase
       .from('leaderboards')
@@ -276,21 +407,56 @@ export default async function DashboardPage({
         user_id: user.id,
         name,
         slug,
-        visibility: 'PUBLIC',
+        visibility: safeVisibility,
+        description,
+        goal_mode: goalMode,
+        race_start_at: raceStartAt,
+        race_end_at: raceEndAt,
+        lp_goal: lpGoal,
+        rank_goal_tier: rankGoal,
       })
       .select('id')
       .maybeSingle()
 
-    if (error) {
-      console.error('createLeaderboard insert error', {
-        message: error.message,
-        code: error.code,
-        details: error.details,
-        hint: error.hint,
-      })
-      redirect(sectionRedirect({ section: 'top', err: 'Failed to create leaderboard' }))
+    if (error || !inserted?.id) {
+      const errorInfo = error
+        ? {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+          }
+        : {
+            message: 'Unknown error',
+            code: null,
+            details: null,
+            hint: null,
+          }
+      console.error('createLeaderboard insert error', errorInfo)
+      await redirectToDashboard({ section: 'top', err: 'Failed to create leaderboard' })
+      return
     }
-    redirect(sectionRedirect({ section: 'settings', ok: 'Leaderboard created', leaderboardId: inserted?.id }))
+    await redirectToDashboard({ section: 'settings', ok: 'Leaderboard created', leaderboardId: inserted.id })
+  }
+
+  async function selectLeaderboard(formData: FormData) {
+    'use server'
+
+    const leaderboardId = String(formData.get('leaderboard_id') ?? '').trim()
+    if (!leaderboardId) redirect('/dashboard/leaderboards')
+
+    try {
+      const cookieStore = await cookies()
+      cookieStore.set('dashboard_active_lb', leaderboardId, {
+        path: '/dashboard',
+        maxAge: 60 * 60 * 24 * 30,
+        sameSite: 'lax',
+      })
+    } catch {
+      // ignore cookie failures
+    }
+
+    redirect('/dashboard/leaderboards')
   }
 
   async function updateLeaderboard(formData: FormData) {
@@ -342,7 +508,10 @@ export default async function DashboardPage({
       .eq('id', leaderboardId)
       .maybeSingle()
 
-    if (!lb) redirect('/dashboard')
+    if (!lb) {
+      await redirectToDashboard({ section: 'profile' })
+      return
+    }
 
     await supabase
       .from('leaderboards')
@@ -360,7 +529,7 @@ export default async function DashboardPage({
       .eq('id', lb.id)
       .eq('user_id', user.id)
 
-    redirect(sectionRedirect({ section: 'settings', ok: 'Settings updated', leaderboardId }))
+    await redirectToDashboard({ section: 'settings', ok: 'Settings updated', leaderboardId })
   }
 
   async function updateProfile(formData: FormData) {
@@ -381,10 +550,11 @@ export default async function DashboardPage({
       .upsert({ user_id: user.id, username, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
 
     if (error) {
-      redirect(sectionRedirect({ section: 'top', err: error.message }))
+      await redirectToDashboard({ section: 'top', err: error.message })
+      return
     }
 
-    redirect(sectionRedirect({ section: 'top', ok: 'Profile updated' }))
+    await redirectToDashboard({ section: 'top', ok: 'Profile updated' })
   }
 
   async function updateBanner(formData: FormData) {
@@ -392,7 +562,14 @@ export default async function DashboardPage({
 
     const leaderboardId = String(formData.get('leaderboard_id') ?? '').trim()
     const file = formData.get('banner')
-    if (!(file instanceof File) || file.size === 0) return
+    if (!(file instanceof File) || file.size === 0) {
+      return { success: false, message: 'No file selected' }
+    }
+
+    const MAX_MB = 4
+    if (file.size > MAX_MB * 1024 * 1024) {
+      return { success: false, message: `File too large (max ${MAX_MB}MB)` }
+    }
 
     const supabase = await createClient()
     const { data: auth } = await supabase.auth.getUser()
@@ -406,16 +583,15 @@ export default async function DashboardPage({
       .eq('id', leaderboardId)
       .maybeSingle()
 
-    if (!lb) redirect('/dashboard')
+    if (!lb) {
+      return { success: false, message: 'Leaderboard not found' }
+    }
 
     const bucketName = 'leaderboard-banners'
 
     const ext = extFromType(file.type)
-    if (!ext) redirect(sectionRedirect({ section: 'banner', err: 'Invalid file type (png/jpg/webp only)' }))
-
-    const MAX_MB = 4
-    if (file.size > MAX_MB * 1024 * 1024) {
-      redirect(sectionRedirect({ section: 'banner', err: `File too large (max ${MAX_MB}MB)` }))
+    if (!ext) {
+      return { success: false, message: 'Invalid file type (png/jpg/webp only)' }
     }
 
     const filePath = `${user.id}/${lb.id}/banner.${ext}`
@@ -425,7 +601,7 @@ export default async function DashboardPage({
       .upload(filePath, file, { upsert: true, contentType: file.type })
 
     if (uploadError) {
-      redirect(sectionRedirect({ section: 'banner', err: 'Upload failed: ' + uploadError.message }))
+      return { success: false, message: 'Upload failed: ' + uploadError.message }
     }
 
     const { data: urlData } = supabase.storage.from(bucketName).getPublicUrl(filePath)
@@ -438,10 +614,11 @@ export default async function DashboardPage({
       .eq('user_id', user.id)
 
     if (dbError) {
-      redirect(sectionRedirect({ section: 'banner', err: 'Database update failed: ' + dbError.message }))
+      return { success: false, message: 'Database update failed: ' + dbError.message }
     }
 
-    redirect(sectionRedirect({ section: 'banner', ok: 'Banner updated successfully', leaderboardId }))
+    revalidatePath('/dashboard')
+    return { success: true, message: 'Banner updated successfully' }
   }
 
   async function addPlayer(formData: FormData) {
@@ -456,7 +633,7 @@ export default async function DashboardPage({
     const supabase = await createClient()
     const { data: auth } = await supabase.auth.getUser()
     const user = auth.user
-    if (!user) redirect('/sign-in')
+    if (!user) return { success: false, message: 'Not authenticated' }
 
     const { data: lb } = await supabase
       .from('leaderboards')
@@ -465,9 +642,13 @@ export default async function DashboardPage({
       .eq('id', leaderboardId)
       .maybeSingle()
 
-    if (!lb) redirect('/dashboard')
+    if (!lb) {
+      return { success: false, message: 'Leaderboard not found' }
+    }
 
-    if (!riotIdRaw) redirect(sectionRedirect({ section: 'players', err: 'Enter a Riot ID like gameName#tagLine' }))
+    if (!riotIdRaw) {
+      return { success: false, message: 'Enter a Riot ID like gameName#tagLine' }
+    }
 
     let gameName = ''
     let tagLine = ''
@@ -476,7 +657,7 @@ export default async function DashboardPage({
       gameName = parsed.gameName
       tagLine = parsed.tagLine
     } catch (e) {
-      redirect(sectionRedirect({ section: 'players', err: errorMessage(e, 'Invalid Riot ID') }))
+      return { success: false, message: errorMessage(e, 'Invalid Riot ID') }
     }
 
     const { count } = await supabase
@@ -485,14 +666,14 @@ export default async function DashboardPage({
       .eq('leaderboard_id', lb.id)
 
     if ((count ?? 0) >= MAX_PLAYERS) {
-      redirect(sectionRedirect({ section: 'players', err: `Max ${MAX_PLAYERS} players per leaderboard` }))
+      return { success: false, message: `Max ${MAX_PLAYERS} players per leaderboard` }
     }
 
     let puuid = ''
     try {
       puuid = await resolvePuuid(gameName, tagLine)
     } catch (e) {
-      redirect(sectionRedirect({ section: 'players', err: errorMessage(e, 'Riot lookup failed') }))
+      return { success: false, message: errorMessage(e, 'Riot lookup failed') }
     }
 
     const { data: dup } = await supabase
@@ -502,7 +683,9 @@ export default async function DashboardPage({
       .eq('puuid', puuid)
       .maybeSingle()
 
-    if (dup) redirect(sectionRedirect({ section: 'players', err: 'That player is already on your leaderboard' }))
+    if (dup) {
+      return { success: false, message: 'That player is already on your leaderboard' }
+    }
 
     const { error } = await supabase.from('leaderboard_players').insert({
       leaderboard_id: lb.id,
@@ -514,11 +697,12 @@ export default async function DashboardPage({
       twitter_url: twitterUrl,
     })
 
-    if (error) redirect(sectionRedirect({ section: 'players', err: error.message }))
+    if (error) {
+      return { success: false, message: error.message }
+    }
 
     revalidatePath('/dashboard')
-    // Key change: always land back on Players, open, and scrolled there
-    redirect(sectionRedirect({ section: 'players', ok: `Added ${gameName}#${tagLine}`, leaderboardId }))
+    return { success: true, message: `Added ${gameName}#${tagLine}` }
   }
 
   async function updatePlayer(formData: FormData) {
@@ -530,12 +714,14 @@ export default async function DashboardPage({
     const twitchUrl = String(formData.get('twitch_url') ?? '').trim() || null
     const twitterUrl = String(formData.get('twitter_url') ?? '').trim() || null
 
-    if (!playerId) redirect('/dashboard')
+    if (!playerId) {
+      return { success: false, message: 'Player not found' }
+    }
 
     const supabase = await createClient()
     const { data: auth } = await supabase.auth.getUser()
     const user = auth.user
-    if (!user) redirect('/sign-in')
+    if (!user) return { success: false, message: 'Not authenticated' }
 
     const { data: lb } = await supabase
       .from('leaderboards')
@@ -544,7 +730,9 @@ export default async function DashboardPage({
       .eq('id', leaderboardId)
       .maybeSingle()
 
-    if (!lb) redirect('/dashboard')
+    if (!lb) {
+      return { success: false, message: 'Leaderboard not found' }
+    }
 
     const { error } = await supabase
       .from('leaderboard_players')
@@ -552,9 +740,12 @@ export default async function DashboardPage({
       .eq('id', playerId)
       .eq('leaderboard_id', lb.id)
 
-    if (error) redirect(sectionRedirect({ section: 'players', err: error.message }))
+    if (error) {
+      return { success: false, message: error.message }
+    }
 
-    redirect(sectionRedirect({ section: 'players', ok: 'Player updated', leaderboardId }))
+    revalidatePath('/dashboard')
+    return { success: true, message: 'Player updated' }
   }
 
   async function removePlayer(formData: FormData) {
@@ -562,12 +753,14 @@ export default async function DashboardPage({
 
     const playerId = String(formData.get('player_id') ?? '').trim()
     const leaderboardId = String(formData.get('leaderboard_id') ?? '').trim()
-    if (!playerId) redirect('/dashboard')
+    if (!playerId) {
+      return { success: false, message: 'Player not found' }
+    }
 
     const supabase = await createClient()
     const { data: auth } = await supabase.auth.getUser()
     const user = auth.user
-    if (!user) redirect('/sign-in')
+    if (!user) return { success: false, message: 'Not authenticated' }
 
     const { data: lb } = await supabase
       .from('leaderboards')
@@ -576,38 +769,18 @@ export default async function DashboardPage({
       .eq('id', leaderboardId)
       .maybeSingle()
 
-    if (!lb) redirect('/dashboard')
+    if (!lb) {
+      return { success: false, message: 'Leaderboard not found' }
+    }
 
     const { error } = await supabase.from('leaderboard_players').delete().eq('id', playerId).eq('leaderboard_id', lb.id)
 
-    if (error) redirect(sectionRedirect({ section: 'players', err: error.message }))
-
-    redirect(sectionRedirect({ section: 'players', ok: 'Player removed', leaderboardId }))
-  }
-
-  async function armDeleteLeaderboard(formData: FormData) {
-    'use server'
-
-    const leaderboardId = String(formData.get('leaderboard_id') ?? '').trim()
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    if (!leaderboardId) {
-      redirect(sectionRedirect({ section: 'top', err: 'Missing leaderboard' }))
+    if (error) {
+      return { success: false, message: error.message }
     }
 
-    const { data: lb } = await supabase
-      .from('leaderboards')
-      .select('id')
-      .eq('user_id', user.id)
-      .eq('id', leaderboardId)
-      .maybeSingle()
-    if (!lb) redirect(sectionRedirect({ section: 'top', err: 'No leaderboard to delete' }))
-
-    redirect(sectionRedirect({ section: 'settings', deleteConfirm: true, leaderboardId }))
+    revalidatePath('/dashboard')
+    return { success: true, message: 'Player removed' }
   }
 
   async function deleteLeaderboard(formData: FormData) {
@@ -616,7 +789,8 @@ export default async function DashboardPage({
     const confirm = String(formData.get('confirm') ?? '').trim()
     const leaderboardId = String(formData.get('leaderboard_id') ?? '').trim()
     if (confirm !== 'DELETE') {
-      redirect(sectionRedirect({ section: 'settings', err: 'Type DELETE to confirm deletion', deleteConfirm: true, leaderboardId }))
+      await redirectToDashboard({ section: 'settings', err: 'Type DELETE to confirm deletion', deleteConfirm: true, leaderboardId })
+      return
     }
 
     const supabase = await createClient()
@@ -631,7 +805,10 @@ export default async function DashboardPage({
       .eq('id', leaderboardId)
       .maybeSingle()
 
-    if (!lb) redirect(sectionRedirect({ section: 'top', err: 'No leaderboard found to delete' }))
+    if (!lb) {
+      await redirectToDashboard({ section: 'top', err: 'No leaderboard found to delete' })
+      return
+    }
 
     // Best-effort: delete banner objects
     const bucketName = 'leaderboard-banners'
@@ -648,15 +825,17 @@ export default async function DashboardPage({
 
     const { error: delPlayersErr } = await supabase.from('leaderboard_players').delete().eq('leaderboard_id', lb.id)
     if (delPlayersErr) {
-      redirect(sectionRedirect({ section: 'top', err: 'Failed to delete players: ' + delPlayersErr.message }))
+      await redirectToDashboard({ section: 'top', err: 'Failed to delete players: ' + delPlayersErr.message })
+      return
     }
 
     const { error: delLbErr } = await supabase.from('leaderboards').delete().eq('id', lb.id).eq('user_id', user.id)
     if (delLbErr) {
-      redirect(sectionRedirect({ section: 'top', err: 'Failed to delete leaderboard: ' + delLbErr.message }))
+      await redirectToDashboard({ section: 'top', err: 'Failed to delete leaderboard: ' + delLbErr.message })
+      return
     }
 
-    redirect(sectionRedirect({ section: 'top', ok: 'Leaderboard deleted' }))
+    await redirectToDashboard({ section: 'top', ok: 'Leaderboard deleted' })
   }
 
   async function createClub(formData: FormData) {
@@ -677,7 +856,8 @@ export default async function DashboardPage({
     }
 
     if (!quickCreate && (!prefixRaw || !tagRaw)) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Club tag is required' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Club tag is required' })
+      return
     }
 
     const prefixInput = normalizeSlugPart(prefixRaw, 'club')
@@ -685,16 +865,19 @@ export default async function DashboardPage({
 
     const prefixError = validateSlugPart(prefixInput)
     if (prefixError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: `Slug prefix: ${prefixError}` }))
+      await redirectToDashboard({ section: 'club', clubErr: `Slug prefix: ${prefixError}` })
+      return
     }
 
     const tagError = validateSlugPart(tagInput)
     if (tagError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: `Slug tag: ${tagError}` }))
+      await redirectToDashboard({ section: 'club', clubErr: `Slug tag: ${tagError}` })
+      return
     }
 
     if (!name) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Club name is required' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Club name is required' })
+      return
     }
 
     const safeVisibility: Visibility = VISIBILITY.includes(visibilityRaw as Visibility)
@@ -713,7 +896,8 @@ export default async function DashboardPage({
       .maybeSingle()
 
     if (existingClub?.id) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'You already own a club' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'You already own a club' })
+      return
     }
 
     const { count: membershipCount } = await supabase
@@ -722,13 +906,15 @@ export default async function DashboardPage({
       .eq('user_id', user.id)
 
     if ((membershipCount ?? 0) >= CLUB_MEMBER_LIMIT) {
-      redirect(sectionRedirect({ section: 'club', clubErr: `Club membership limit reached (${CLUB_MEMBER_LIMIT} max).` }))
+      await redirectToDashboard({ section: 'club', clubErr: `Club membership limit reached (${CLUB_MEMBER_LIMIT} max).` })
+      return
     }
 
     const slug = buildClubSlug(prefixInput, tagInput)
     const { data: slugTaken } = await supabase.from('clubs').select('id').eq('slug', slug).maybeSingle()
     if (slugTaken?.id) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'That club tag is already taken' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'That club tag is already taken' })
+      return
     }
 
     const { data: inserted, error } = await supabase
@@ -746,7 +932,8 @@ export default async function DashboardPage({
 
     if (error || !inserted?.id) {
       const message = error?.code === '23505' ? 'That club tag is already taken' : error?.message ?? 'Failed to create club'
-      redirect(sectionRedirect({ section: 'club', clubErr: message }))
+      await redirectToDashboard({ section: 'club', clubErr: message })
+      return
     }
 
     const { error: memberError } = await supabase.from('club_members').insert({
@@ -756,13 +943,14 @@ export default async function DashboardPage({
     })
 
     if (memberError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: memberError.message }))
+      await redirectToDashboard({ section: 'club', clubErr: memberError.message })
+      return
     }
 
     revalidatePath('/dashboard')
     revalidatePath('/clubs')
     revalidatePath(`/clubs/${inserted.slug}`)
-    redirect(sectionRedirect({ section: 'club', clubOk: 'Club created' }))
+    await redirectToDashboard({ section: 'club', clubOk: 'Club created' })
   }
 
   async function updateClubSettings(formData: FormData) {
@@ -775,7 +963,8 @@ export default async function DashboardPage({
     const tagRaw = String(formData.get('club_slug_tag') ?? '').trim()
 
     if (!prefixRaw || !tagRaw) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Club tag is required' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Club tag is required' })
+      return
     }
 
     const prefixInput = normalizeSlugPart(prefixRaw, 'club')
@@ -783,16 +972,19 @@ export default async function DashboardPage({
 
     const prefixError = validateSlugPart(prefixInput)
     if (prefixError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: `Slug prefix: ${prefixError}` }))
+      await redirectToDashboard({ section: 'club', clubErr: `Slug prefix: ${prefixError}` })
+      return
     }
 
     const tagError = validateSlugPart(tagInput)
     if (tagError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: `Slug tag: ${tagError}` }))
+      await redirectToDashboard({ section: 'club', clubErr: `Slug tag: ${tagError}` })
+      return
     }
 
     if (!name) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Club name is required' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Club name is required' })
+      return
     }
 
     const safeVisibility: Visibility = VISIBILITY.includes(visibilityRaw as Visibility)
@@ -811,13 +1003,15 @@ export default async function DashboardPage({
       .maybeSingle()
 
     if (!club?.id) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'No club found to update' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'No club found to update' })
+      return
     }
 
     const slug = buildClubSlug(prefixInput, tagInput)
     const { data: slugTaken } = await supabase.from('clubs').select('id').eq('slug', slug).neq('id', club.id).maybeSingle()
     if (slugTaken?.id) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'That club tag is already taken' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'That club tag is already taken' })
+      return
     }
 
     const { error } = await supabase
@@ -834,14 +1028,15 @@ export default async function DashboardPage({
 
     if (error) {
       const message = error.code === '23505' ? 'That club tag is already taken' : error.message
-      redirect(sectionRedirect({ section: 'club', clubErr: message }))
+      await redirectToDashboard({ section: 'club', clubErr: message })
+      return
     }
 
     revalidatePath('/dashboard')
     revalidatePath('/clubs')
     revalidatePath(`/clubs/${club.slug}`)
     revalidatePath(`/clubs/${slug}`)
-    redirect(sectionRedirect({ section: 'club', clubOk: 'Club settings updated' }))
+    await redirectToDashboard({ section: 'club', clubOk: 'Club settings updated' })
   }
 
   async function updateClubBanner(formData: FormData) {
@@ -862,15 +1057,20 @@ export default async function DashboardPage({
       .maybeSingle()
 
     if (!club?.id) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'No club found to update' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'No club found to update' })
+      return
     }
 
     const ext = extFromType(file.type)
-    if (!ext) redirect(sectionRedirect({ section: 'club', clubErr: 'Invalid file type (png/jpg/webp only)' }))
+    if (!ext) {
+      await redirectToDashboard({ section: 'club', clubErr: 'Invalid file type (png/jpg/webp only)' })
+      return
+    }
 
     const MAX_MB = 4
     if (file.size > MAX_MB * 1024 * 1024) {
-      redirect(sectionRedirect({ section: 'club', clubErr: `File too large (max ${MAX_MB}MB)` }))
+      await redirectToDashboard({ section: 'club', clubErr: `File too large (max ${MAX_MB}MB)` })
+      return
     }
 
     const filePath = `${user.id}/${club.id}/banner.${ext}`
@@ -880,7 +1080,8 @@ export default async function DashboardPage({
       .upload(filePath, file, { upsert: true, contentType: file.type })
 
     if (uploadError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Upload failed: ' + uploadError.message }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Upload failed: ' + uploadError.message })
+      return
     }
 
     const { data: urlData } = supabase.storage.from(CLUB_BANNER_BUCKET).getPublicUrl(filePath)
@@ -893,13 +1094,14 @@ export default async function DashboardPage({
       .eq('owner_user_id', user.id)
 
     if (dbError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Database update failed: ' + dbError.message }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Database update failed: ' + dbError.message })
+      return
     }
 
     revalidatePath('/dashboard')
     revalidatePath('/clubs')
     revalidatePath(`/clubs/${club.slug}`)
-    redirect(sectionRedirect({ section: 'club', clubOk: 'Club banner updated successfully' }))
+    await redirectToDashboard({ section: 'club', clubOk: 'Club banner updated successfully' })
   }
 
   async function deleteClub(formData: FormData) {
@@ -919,11 +1121,13 @@ export default async function DashboardPage({
       .maybeSingle()
 
     if (!club?.id) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'No club found to delete' }))
+      await redirectToDashboard({ section: 'club', clubErr: 'No club found to delete' })
+      return
     }
 
     if (!confirm) {
-      redirect(sectionRedirect({ section: 'club', clubDeleteConfirm: true }))
+      await redirectToDashboard({ section: 'club', clubDeleteConfirm: true })
+      return
     }
 
     const folder = `${user.id}/${club.id}`
@@ -939,23 +1143,26 @@ export default async function DashboardPage({
 
     const { error: membersError } = await supabase.from('club_members').delete().eq('club_id', club.id)
     if (membersError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Failed to delete members: ' + membersError.message }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Failed to delete members: ' + membersError.message })
+      return
     }
 
     const { error: linksError } = await supabase.from('club_leaderboards').delete().eq('club_id', club.id)
     if (linksError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Failed to detach leaderboards: ' + linksError.message }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Failed to detach leaderboards: ' + linksError.message })
+      return
     }
 
     const { error: clubError } = await supabase.from('clubs').delete().eq('id', club.id).eq('owner_user_id', user.id)
     if (clubError) {
-      redirect(sectionRedirect({ section: 'club', clubErr: 'Failed to delete club: ' + clubError.message }))
+      await redirectToDashboard({ section: 'club', clubErr: 'Failed to delete club: ' + clubError.message })
+      return
     }
 
     revalidatePath('/dashboard')
     revalidatePath('/clubs')
     revalidatePath(`/clubs/${club.slug}`)
-    redirect(sectionRedirect({ section: 'club', clubOk: 'Club deleted' }))
+    await redirectToDashboard({ section: 'club', clubOk: 'Club deleted' })
   }
 
   async function startStripeCheckoutOneTime() {
@@ -974,12 +1181,14 @@ export default async function DashboardPage({
     })
 
     if (!response.ok) {
-      redirect(sectionRedirect({ section: 'billing', billingErr: 'Unable to start checkout.' }))
+      await redirectToDashboard({ section: 'billing', billingErr: 'Unable to start checkout.' })
+      return
     }
 
     const data = (await response.json()) as { url?: string }
     if (!data.url) {
-      redirect(sectionRedirect({ section: 'billing', billingErr: 'Unable to start checkout.' }))
+      await redirectToDashboard({ section: 'billing', billingErr: 'Unable to start checkout.' })
+      return
     }
 
     redirect(data.url)
@@ -1001,12 +1210,14 @@ export default async function DashboardPage({
     })
 
     if (!response.ok) {
-      redirect(sectionRedirect({ section: 'billing', billingErr: 'Unable to start checkout.' }))
+      await redirectToDashboard({ section: 'billing', billingErr: 'Unable to start checkout.' })
+      return
     }
 
     const data = (await response.json()) as { url?: string }
     if (!data.url) {
-      redirect(sectionRedirect({ section: 'billing', billingErr: 'Unable to start checkout.' }))
+      await redirectToDashboard({ section: 'billing', billingErr: 'Unable to start checkout.' })
+      return
     }
 
     redirect(data.url)
@@ -1046,23 +1257,39 @@ export default async function DashboardPage({
     : null
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-5xl px-4 py-10 lg:py-16">
-        {/* Header */}
-        <div className="mb-8 flex flex-col gap-6 lg:mb-10 lg:flex-row lg:items-center lg:justify-between">
-          <div className="space-y-2">
-            <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 dark:from-white dark:via-slate-200 dark:to-slate-400 lg:text-5xl">
-              Dashboard
-            </h1>
-            <p className="text-base font-medium text-slate-600 dark:text-slate-300">
-              Manage your leaderboard, players, and club details from one place.
-            </p>
+    <>
+      <DashboardFlashClient />
+
+      {flash && (
+        <div className="fixed left-1/2 top-16 z-50 -translate-x-1/2 pointer-events-none">
+          <div
+            className={`max-w-3xl mx-auto rounded-md px-4 py-2 shadow-lg ring-1 ring-black/10 transform transition-all duration-300 ${
+              flash.tone === 'success'
+                ? 'bg-emerald-600 text-white dark:bg-emerald-500'
+                : 'bg-red-600 text-white dark:bg-red-500'
+            }`}
+          >
+            <div className="flex items-center justify-between gap-4">
+              <div className="text-sm font-semibold">{flash.message}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+        <div className="mx-auto max-w-5xl px-4 py-10 lg:py-16">
+          {/* Header */}
+          <div className="mb-8 flex flex-col gap-6 lg:mb-10 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-2">
+              <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 dark:from-white dark:via-slate-200 dark:to-slate-400 lg:text-5xl">
+                Dashboard
+              </h1>
+              <p className="text-base font-medium text-slate-600 dark:text-slate-300">
+                Manage your leaderboard, players, and club details from one place.
+              </p>
+            </div>
           </div>
 
-          {lb && null}
-        </div>
-
-        {lb && (
           <div className="mb-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded-none border border-slate-200/80 bg-white/90 p-4 shadow-sm backdrop-blur transition-all duration-200 hover:border-slate-300 hover:shadow-md dark:border-slate-800/80 dark:bg-slate-900/80">
               <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Leaderboards used</p>
@@ -1083,46 +1310,44 @@ export default async function DashboardPage({
               </p>
             </div>
           </div>
-        )}
 
-        {/* Feedback Messages */}
-        {(playerErrMessage || playerOk) && (
-          <div
-            className={`mb-6 rounded-none border-2 px-4 py-3 text-sm shadow-sm ${
-              playerErrMessage
-              ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-950/30 dark:text-emerald-200'
-            }`}
-          >
-            {playerErrMessage ?? playerOk}
-          </div>
-        )}
+          {/* Feedback Messages */}
+          {(playerErrMessage || playerOk) && (
+            <div
+              className={`mb-6 rounded-none border-2 px-4 py-3 text-sm shadow-sm ${
+                playerErrMessage
+                  ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-950/30 dark:text-emerald-200'
+              }`}
+            >
+              {playerErrMessage ?? playerOk}
+            </div>
+          )}
 
-        {(clubErr || clubOk || billingErr || billingOk) && (
-          <div
-            className={`mb-6 rounded-none border-2 px-4 py-3 text-sm shadow-sm ${
-              clubErr || billingErr
-                ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-950/30 dark:text-emerald-200'
-            }`}
-          >
-            {clubErr ?? billingErr ?? clubOk ?? billingOk}
-          </div>
-        )}
+          {(clubErr || clubOk || billingErr || billingOk) && (
+            <div
+              className={`mb-6 rounded-none border-2 px-4 py-3 text-sm shadow-sm ${
+                clubErr || billingErr
+                  ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/40 dark:bg-emerald-950/30 dark:text-emerald-200'
+              }`}
+            >
+              {clubErr ?? billingErr ?? clubOk ?? billingOk}
+            </div>
+          )}
 
-        {lb ? (
           <div className="grid gap-8 lg:grid-cols-[260px_1fr]">
             <aside className="space-y-4 lg:sticky lg:top-6">
-              <div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Profile</div>
-                <Link
-                  href={sectionRedirect({ section: 'profile', leaderboardId: lb?.id })}
-                  scroll={false}
-                  className={`mt-3 flex items-center justify-between rounded-none px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
-                    effectiveSection === 'profile'
-                      ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-900/20 dark:bg-white dark:text-slate-900 dark:ring-white/20'
-                      : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:shadow-sm dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
-                  }`}
+<div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Profile</div>
+    <Link
+      href={sectionRedirect({ section: 'profile' })} // <--- REMOVED leaderboardId HERE
+      scroll={false}
+      className={`mt-3 flex items-center justify-between rounded-none px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
+        effectiveSection === 'profile'
+          ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-900/20 dark:bg-white dark:text-slate-900 dark:ring-white/20'
+          : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:shadow-sm dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+      }`}
                 >
                   <span>Profile settings</span>
                   <span className="text-xs opacity-70 transition-transform duration-200 group-hover:translate-x-0.5">→</span>
@@ -1132,16 +1357,15 @@ export default async function DashboardPage({
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Leaderboards</div>
                 <div className="mt-3">
                   {leaderboards.length === 0 ? (
-                    <p className="text-xs text-slate-500 dark:text-slate-400">No leaderboards yet.</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">No leaderboards yet.</p>
                   ) : (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-3 mb-3">
                       {leaderboards.map((board) => {
                         const isActive = lb?.id === board.id
                         return (
-                          <Link
+                          <form
                             key={board.id}
-                            href={sectionRedirect({ section: 'settings', leaderboardId: board.id })}
-                            scroll={false}
+                            action={selectLeaderboard}
                             className={`group relative aspect-[4/3] overflow-hidden rounded-xl border transition-all duration-200 ease-out ${
                               isActive
                                 ? 'border-slate-900 ring-2 ring-slate-900/30 dark:border-white dark:ring-white/40'
@@ -1149,56 +1373,63 @@ export default async function DashboardPage({
                             }`}
                             aria-label={`Select ${board.name}`}
                           >
-                            {board.banner_url ? (
-                              <div
-                                className="absolute inset-0 bg-cover bg-center"
-                                style={{ backgroundImage: `url(${board.banner_url})` }}
-                              />
-                            ) : (
-                              <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 dark:from-slate-200 dark:via-slate-300 dark:to-slate-100" />
-                            )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-slate-900/20 to-transparent dark:from-slate-900/60" />
-                            <div className="relative flex h-full flex-col justify-end p-3 text-white">
-                              <div className="text-sm font-semibold leading-tight drop-shadow-sm">
-                                {board.name}
+                            <input type="hidden" name="leaderboard_id" value={board.id} />
+                            <button type="submit" className="absolute inset-0 w-full h-full text-left">
+                              {board.banner_url ? (
+                                <div
+                                  className="absolute inset-0 bg-cover bg-center"
+                                  style={{ backgroundImage: `url(${board.banner_url})` }}
+                                />
+                              ) : (
+                                <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 dark:from-slate-200 dark:via-slate-300 dark:to-slate-100" />
+                              )}
+                              <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-slate-900/20 to-transparent dark:from-slate-900/60" />
+                              <div className="relative flex h-full flex-col justify-end p-3 text-white">
+                                <div className="text-sm font-semibold leading-tight drop-shadow-sm">
+                                  {board.name}
+                                </div>
+                                {effectiveSection === 'settings' && isActive && (
+                                  <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70">
+                                    Selected
+                                  </div>
+                                )}
                               </div>
-                              <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70">
-                                {isActive ? 'Selected' : 'Select'}
-                              </div>
-                            </div>
-                          </Link>
+                            </button>
+                          </form>
                         )
                       })}
                     </div>
                   )}
-                </div>
-                <form action={createLeaderboard} className="mt-4 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <input
-                      name="name"
-                      placeholder="Leaderboard name"
-                      className="min-w-0 h-10 flex-1 rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900"
-                      disabled={atLeaderboardLimit}
-                    />
-                    <button
-                      type="submit"
-                      className="h-10 w-10 rounded-none border border-slate-200 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
-                      aria-label="Create new leaderboard"
-                      disabled={atLeaderboardLimit}
-                    >
-                      →
-                    </button>
-                  </div>
-                  {atLeaderboardLimit ? (
-                    <div className="rounded-none border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-400">
-                      Limit reached. Upgrade to add more leaderboards.
-                    </div>
-                  ) : (
-                    <div className="text-xs text-slate-500 dark:text-slate-400">
-                      {remainingLeaderboardSlots} slots remaining.
+                  
+                  {!atLeaderboardLimit && (
+                    <div className="grid grid-cols-2 gap-3">
+                      <form
+                        action={createLeaderboard}
+                        className="group relative aspect-[4/3] overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition-all duration-200 ease-out hover:border-slate-300 hover:bg-slate-100 hover:shadow-md dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+                      >
+                        {/* Hidden input to signal "quick create" mode */}
+                        <input type="hidden" name="quick_create" value="1" />
+                        <button type="submit" className="absolute inset-0 w-full h-full text-left">
+                          <div className="relative flex h-full flex-col items-center justify-center p-3 text-slate-500 dark:text-slate-400">
+                            <div className="text-3xl font-light mb-1">+</div>
+                            <div className="text-xs font-semibold text-center leading-tight">Create Leaderboard</div>
+                          </div>
+                        </button>
+                      </form>
                     </div>
                   )}
-                </form>
+                </div>
+                
+                {atLeaderboardLimit ? (
+                  <div className="mt-3 rounded-none border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-400">
+                    Limit reached. Upgrade to add more leaderboards.
+                  </div>
+                ) : (
+                  <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+                    {remainingLeaderboardSlots} slots remaining.
+                  </div>
+                )}
+
                 <div className="mt-6">
                   {memberClubs.length > 0 && (
                     <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Clubs</div>
@@ -1231,9 +1462,11 @@ export default async function DashboardPage({
                               <div className="text-sm font-semibold leading-tight drop-shadow-sm">
                                 {clubItem.name}
                               </div>
-                              <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70">
-                                {isSelected ? 'Owned' : 'Open'}
-                              </div>
+                              {effectiveSection === 'club' && isSelected && (
+                                <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70">
+                                  Selected
+                                </div>
+                              )}
                             </div>
                           </Link>
                         )
@@ -1247,7 +1480,7 @@ export default async function DashboardPage({
                         <input
                           name="club_name"
                           placeholder="Club name"
-                          className="min-w-0 h-10 flex-1 rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900"
+                          className="min-w-0 h-10 flex-1 rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900"
                           disabled={atClubMembershipLimit}
                         />
                         <button
@@ -1261,7 +1494,7 @@ export default async function DashboardPage({
                       </div>
                     </form>
                     {atClubMembershipLimit ? (
-                      <div className="mt-2 rounded-none border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-400">
+                      <div className="mt-2 rounded-none border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-400">
                         Limit reached. Please leave a club.
                       </div>
                     ) : (
@@ -1272,16 +1505,16 @@ export default async function DashboardPage({
                   </div>
                 </div>
               </div>
-              <div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Billing</div>
-                <Link
-                  href={sectionRedirect({ section: 'billing', leaderboardId: lb?.id })}
-                  scroll={false}
-                  className={`mt-3 flex items-center justify-between rounded-none px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
-                    effectiveSection === 'billing'
-                      ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-900/20 dark:bg-white dark:text-slate-900 dark:ring-white/20'
-                      : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:shadow-sm dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
-                  }`}
+<div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Billing</div>
+    <Link
+      href={sectionRedirect({ section: 'billing' })} // <--- REMOVED leaderboardId HERE
+      scroll={false}
+      className={`mt-3 flex items-center justify-between rounded-none px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
+        effectiveSection === 'billing'
+          ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-900/20 dark:bg-white dark:text-slate-900 dark:ring-white/20'
+          : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:shadow-sm dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
+      }`}
                 >
                   <span>Billing settings</span>
                   <span className="text-xs opacity-70 transition-transform duration-200 group-hover:translate-x-0.5">→</span>
@@ -1326,325 +1559,326 @@ export default async function DashboardPage({
 
               {effectiveSection === 'settings' && (
               <section id="settings" className="scroll-mt-24">
-                <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                  <div className="border-b border-slate-100 p-6 dark:border-slate-800">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Leaderboard settings</h2>
-                        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Name, description, and visibility</p>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="p-6">
-                    <form key={lb.id} action={updateLeaderboard} className="space-y-6">
-                      <input type="hidden" name="leaderboard_id" value={lb.id} />
-                      <div>
-                        <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Name</label>
-                        <input
-                          name="name"
-                          defaultValue={lb.name}
-                          required
-                          className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                        />
-                      </div>
+                {lb ? (
+                  <>
+                    <details
+                      open={activeSection === 'settings'}
+                      className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900"
+                    >
+                      <summary className="cursor-pointer list-none border-b border-slate-100 p-6 dark:border-slate-800 [&::-webkit-details-marker]:hidden">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Leaderboard settings</h2>
+                            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Name, description, and visibility</p>
+                          </div>
+                        </div>
+                      </summary>
+                      <div className="p-6">
+                        <form key={lb.id} action={updateLeaderboard} className="space-y-6">
+                          <input type="hidden" name="leaderboard_id" value={lb.id} />
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            <div>
+                              <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Name</label>
+                              <input
+                                name="name"
+                                defaultValue={lb.name}
+                                required
+                                className="h-11 w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                              />
+                            </div>
 
-                      <div>
-                        <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Description</label>
-                        <textarea
-                          name="description"
-                          defaultValue={lb.description ?? ''}
-                          rows={2}
-                          maxLength={250}
-                          placeholder="Optional description for your leaderboard..."
-                          className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                        />
-                        <div className="mt-1 text-right text-xs text-slate-400 dark:text-slate-500">Max 250 characters</div>
-                      </div>
+                            <div>
+                              <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Visibility</label>
+                              <select
+                                name="visibility"
+                                defaultValue={lb.visibility ?? 'PUBLIC'}
+                                className="h-11 w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                              >
+                                <option value="PUBLIC">Public - Listed in directory</option>
+                                <option value="UNLISTED">Unlisted - Link only</option>
+                                <option value="PRIVATE">Private - Owner only</option>
+                              </select>
+                            </div>
+                          </div>
 
-                      <div>
-                        <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Visibility</label>
-                        <select
-                          name="visibility"
-                          defaultValue={lb.visibility ?? 'PUBLIC'}
-                          className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        >
-                          <option value="PUBLIC">Public - Listed in directory</option>
-                          <option value="UNLISTED">Unlisted - Link only</option>
-                          <option value="PRIVATE">Private - Owner only</option>
-                        </select>
-                      </div>
+                          <div>
+                            <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Description</label>
+                            <textarea
+                              name="description"
+                              defaultValue={lb.description ?? ''}
+                              rows={2}
+                              maxLength={250}
+                              placeholder="Optional description for your leaderboard..."
+                              className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                            />
+                            <div className="mt-1 text-right text-xs text-slate-400 dark:text-slate-500">Max 250 characters</div>
+                          </div>
 
-                      <GoalModeFields
-                        defaultMode={(lb.goal_mode ?? 'LIVE') as 'LIVE' | 'RACE' | 'LP_GOAL' | 'RANK_GOAL'}
-                        defaultLpGoal={lb.lp_goal ?? null}
-                        defaultRaceStart={lb.race_start_at ?? null}
-                        defaultRaceEnd={lb.race_end_at ?? null}
-                        defaultRankGoal={lb.rank_goal_tier ?? null}
-                      />
-
-                      <button
-                        type="submit"
-                        className="w-full rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                      >
-                        Save Settings
-                      </button>
-                    </form>
-                    <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-                      {!showDeleteConfirm || deleteForId !== lb?.id ? (
-                        <Link
-                          href={sectionRedirect({ section: 'settings', deleteConfirm: true, leaderboardId: lb?.id })}
-                          scroll={false}
-                          className="rounded-none border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 shadow-sm transition-all duration-200 hover:border-red-300 hover:bg-red-50 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 dark:border-red-500/40 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-950/30"
-                          title="Delete leaderboard"
-                        >
-                          Delete
-                        </Link>
-                      ) : (
-                        <form action={deleteLeaderboard} className="flex items-center gap-2">
-                          <input type="hidden" name="leaderboard_id" value={lb?.id ?? ''} />
-                          <input
-                            name="confirm"
-                            placeholder="DELETE"
-                            className="w-24 rounded-none border border-red-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:border-red-400 focus:ring-4 focus:ring-red-400/10 transition-all duration-200 shadow-sm dark:border-red-500/40 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500"
+                          <GoalModeFields
+                            defaultMode={(lb.goal_mode ?? 'LIVE') as 'LIVE' | 'RACE' | 'LP_GOAL' | 'RANK_GOAL'}
+                            defaultLpGoal={lb.lp_goal ?? null}
+                            defaultRaceStart={lb.race_start_at ?? null}
+                            defaultRaceEnd={lb.race_end_at ?? null}
+                            defaultRankGoal={lb.rank_goal_tier ?? null}
                           />
+
                           <button
                             type="submit"
-                            className="rounded-none bg-red-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition-all duration-200 hover:bg-red-700 hover:-translate-y-0.5 dark:bg-red-500 dark:hover:bg-red-400"
+                            className="w-full rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
                           >
-                            Confirm
+                            Save Settings
                           </button>
-                          <Link href="/dashboard" className="px-1 text-xs font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200">
-                            Cancel
-                          </Link>
                         </form>
-                      )}
+                        <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
+                          <DeleteLeaderboardButton 
+                            leaderboardId={lb.id} 
+                            onDelete={deleteLeaderboard} 
+                          />
 
-                      <Link
-                        href={`/lb/${lb.slug}`}
-                        className="rounded-none bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-all duration-200 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/40 dark:bg-slate-900 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800"
-                      >
-                        View Leaderboard →
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-8 space-y-8">
-                  <div id="banner" className="scroll-mt-24 overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                    <div className="border-b border-slate-100 p-6 dark:border-slate-800">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Leaderboard banner</h2>
-                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Customize the header background</p>
-                        </div>
-                        <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                          {hasBanner ? 'Banner set' : 'No banner'}
+                          <Link
+                            href={`/lb/${lb.slug}`}
+                            className="rounded-none bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-all duration-200 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/40 dark:bg-slate-900 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800"
+                          >
+                            View Leaderboard →
+                          </Link>
                         </div>
                       </div>
+                    </details>
+
+                    <div className="mt-8 space-y-8">
+                      <details
+                        id="banner"
+                        open={activeSection === 'banner'}
+                        className="scroll-mt-24 overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900"
+                      >
+                        <summary className="cursor-pointer list-none border-b border-slate-100 p-6 dark:border-slate-800 [&::-webkit-details-marker]:hidden">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Leaderboard banner</h2>
+                              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Customize the header background</p>
+                            </div>
+                            <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                              {hasBanner ? 'Banner set' : 'No banner'}
+                            </div>
+                          </div>
+                        </summary>
+                        <div className="p-6">
+                          <BannerFormWrapper action={updateBanner}>
+                            <BannerUploadSection leaderboardId={lb.id} bannerUrl={lb.banner_url} />
+                          </BannerFormWrapper>
+                        </div>
+                      </details>
+
+                      <details
+                        id="players"
+                        open={activeSection === 'players'}
+                        className="scroll-mt-24 overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900"
+                      >
+                        <summary className="cursor-pointer list-none border-b border-slate-100 p-6 dark:border-slate-800 [&::-webkit-details-marker]:hidden">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Players</h2>
+                              <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Add and manage up to {MAX_PLAYERS} players</p>
+                            </div>
+                            <div className="rounded-none bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                              {playerCount}/{MAX_PLAYERS}
+                            </div>
+                          </div>
+                        </summary>
+                        <div className="p-6 space-y-6">
+                          <PlayerFormWrapper action={addPlayer}>
+                            <input type="hidden" name="leaderboard_id" value={lb.id} />
+                            <div className="flex items-center justify-between">
+                              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Add player</div>
+                              <span className="text-xs text-slate-500 dark:text-slate-400">
+                                {playerCount}/{MAX_PLAYERS}
+                              </span>
+                            </div>
+
+                            <div className="mt-4 space-y-3">
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  name="riot_id"
+                                  placeholder="Riot ID (gameName#tagLine)"
+                                  required
+                                  autoFocus={section === 'players'}
+                                  className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                                />
+                                <select
+                                  name="role"
+                                  className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                >
+                                  <option value="">Role (optional)</option>
+                                  {ROLES.map((role) => (
+                                    <option key={role} value={role}>
+                                      {role}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <input
+                                  name="twitch_url"
+                                  placeholder="Twitch URL (optional)"
+                                  className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                                />
+                                <input
+                                  name="twitter_url"
+                                  placeholder="Twitter/X URL (optional)"
+                                  className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                                />
+                              </div>
+
+                              <AddPlayerButton isAtLimit={playerCount >= MAX_PLAYERS} />
+
+                            </div>
+                          </PlayerFormWrapper>
+
+                          <div className="rounded-none border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+                            {playerCount === 0 ? (
+                              <div className="p-10 text-center">
+                                <p className="text-sm font-semibold text-slate-500 dark:text-slate-300">No players yet</p>
+                                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">Add your first player above.</p>
+                              </div>
+                            ) : (
+                              <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
+                                <div className="hidden sm:grid grid-cols-[56px_2.4fr_90px_120px_90px] items-center gap-3 px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                  <span>#</span>
+                                  <span>Riot ID</span>
+                                  <span>Role</span>
+                                  <span>Socials</span>
+                                  <span className="text-right">Actions</span>
+                                </div>
+                                {players!.map((p, index) => {
+                                  const editId = `player-edit-${p.id}`
+                                  return (
+                                    <details key={p.id} className="group">
+                                      <summary className="grid cursor-pointer grid-cols-[56px_2.4fr_90px_120px_90px] items-center gap-3 px-6 py-5 text-base text-slate-900 list-none dark:text-slate-100">
+                                        <span className="text-slate-500 dark:text-slate-400">{index + 1}</span>
+                                        <span className="truncate font-semibold text-slate-900 dark:text-slate-50">{p.game_name}#{p.tag_line}</span>
+                                        <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                          {p.role ?? '—'}
+                                        </span>
+                                        <span className="text-sm text-slate-500 dark:text-slate-400">
+                                          {p.twitch_url || p.twitter_url ? (
+                                            <span className="flex items-center gap-2">
+                                              {p.twitch_url ? (
+                                                <span className="inline-flex h-6 w-6 items-center justify-center rounded-none bg-purple-500/10 text-purple-500 dark:bg-purple-500/20">
+                                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                                                    <path
+                                                      fill="currentColor"
+                                                      d="M4.5 3h15v9.75l-4.5 4.5h-4.5l-2.5 2.5H6v-2.5H4.5V3zm13.5 9V4.5h-12v10h3v2.5l2.5-2.5h5L18 12zM9 7.5h1.5v4H9v-4zm4.5 0H15v4h-1.5v-4z"
+                                                    />
+                                                  </svg>
+                                                </span>
+                                              ) : null}
+                                              {p.twitter_url ? (
+                                                <span className="inline-flex h-6 w-6 items-center justify-center rounded-none bg-sky-500/10 text-sky-500 dark:bg-sky-500/20">
+                                                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
+                                                    <path
+                                                      fill="currentColor"
+                                                      d="M18.9 2H22l-6.8 7.8L23 22h-6.2l-4.9-6.5L5.7 22H2.6l7.3-8.3L1 2h6.4l4.4 6L18.9 2zm-1.1 18h1.7L6.3 3.9H4.5L17.8 20z"
+                                                    />
+                                                  </svg>
+                                                </span>
+                                              ) : null}
+                                            </span>
+                                          ) : (
+                                            '—'
+                                          )}
+                                        </span>
+                                        <span className="text-right text-sm font-semibold text-slate-700 dark:text-slate-200">Edit</span>
+                                      </summary>
+                                      <div className="border-t border-slate-100 bg-slate-50 px-6 py-5 dark:border-slate-800 dark:bg-slate-900/60">
+                                        <PlayerFormWrapper action={updatePlayer}>
+                                          <input type="hidden" name="leaderboard_id" value={lb.id} />
+                                          <input type="hidden" name="player_id" value={p.id} />
+                                          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr] sm:items-end">
+                                            <div>
+                                              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Role</label>
+                                              <select
+                                                name="role"
+                                                defaultValue={p.role ?? ''}
+                                                className="h-10 w-full rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                              >
+                                                <option value="">No role</option>
+                                                {ROLES.map((role) => (
+                                                  <option key={role} value={role}>
+                                                    {role}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                            </div>
+                                            <div>
+                                              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Twitch URL</label>
+                                                <input
+                                                  name="twitch_url"
+                                                  defaultValue={p.twitch_url ?? ''}
+                                                  placeholder="https://twitch.tv/..."
+                                                  className="h-10 w-full rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                                                />
+                                            </div>
+                                            <div>
+                                              <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Twitter/X URL</label>
+                                                <input
+                                                  name="twitter_url"
+                                                  defaultValue={p.twitter_url ?? ''}
+                                                  placeholder="https://twitter.com/..."
+                                                  className="h-10 w-full rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
+                                                />
+                                            </div>
+                                            <button
+                                              type="submit"
+                                              className="rounded-none bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                                            >
+                                              Save changes
+                                            </button>
+                                          </div>
+                                        </PlayerFormWrapper>
+                                        <div className="mt-4 flex flex-wrap items-center justify-end gap-4">
+                                          <PlayerFormWrapper action={removePlayer}>
+                                            <input type="hidden" name="leaderboard_id" value={lb.id} />
+                                            <input type="hidden" name="player_id" value={p.id} />
+                                            <button
+                                              type="submit"
+                                              className="text-sm font-semibold text-red-600 hover:text-red-700"
+                                            >
+                                              Remove
+                                            </button>
+                                          </PlayerFormWrapper>
+                                        </div>
+                                      </div>
+                                    </details>
+                                  )
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </details>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+                    <div className="border-b border-slate-100 p-6 dark:border-slate-800">
+                      <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">No Leaderboard Selected</h2>
+                      <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                        Create one to get started.
+                      </p>
                     </div>
                     <div className="p-6">
-                      <form action={updateBanner} className="space-y-4">
-                        <input type="hidden" name="leaderboard_id" value={lb.id} />
-                        <BannerUploadField
-                          name="banner"
-                          previewUrl={lb.banner_url}
-                          placeholder="No banner set"
-                          helperText="PNG/JPG/WEBP • Max 4MB • Recommended 1600×400"
-                        />
-
+                      <form action={createLeaderboard} className="space-y-4">
+                        <input type="hidden" name="quick_create" value="1" />
                         <button
                           type="submit"
-                          className="rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+                          className="w-full rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
                         >
-                          Upload & Save Banner
+                          Quick Create Leaderboard
                         </button>
                       </form>
                     </div>
                   </div>
-
-                  <div id="players" className="scroll-mt-24 overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                    <div className="border-b border-slate-100 p-6 dark:border-slate-800">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Players</h2>
-                          <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Add and manage up to {MAX_PLAYERS} players</p>
-                        </div>
-                        <div className="rounded-none bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                          {playerCount}/{MAX_PLAYERS}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="p-6 space-y-6">
-                      <form action={addPlayer}>
-                        <input type="hidden" name="leaderboard_id" value={lb.id} />
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Add player</div>
-                          <span className="text-xs text-slate-500 dark:text-slate-400">
-                            {playerCount}/{MAX_PLAYERS}
-                          </span>
-                        </div>
-
-                        <div className="mt-4 space-y-3">
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <input
-                              name="riot_id"
-                              placeholder="Riot ID (gameName#tagLine)"
-                              required
-                              autoFocus={section === 'players'}
-                              className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                            />
-                            <select
-                              name="role"
-                              className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                            >
-                              <option value="">Role (optional)</option>
-                              {ROLES.map((role) => (
-                                <option key={role} value={role}>
-                                  {role}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <input
-                              name="twitch_url"
-                              placeholder="Twitch URL (optional)"
-                              className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                            />
-                            <input
-                              name="twitter_url"
-                              placeholder="Twitter/X URL (optional)"
-                              className="w-full rounded-none border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                            />
-                          </div>
-
-                          <AddPlayerButton isAtLimit={playerCount >= MAX_PLAYERS} />
-
-                        </div>
-                      </form>
-
-                      <div className="rounded-none border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
-                        {playerCount === 0 ? (
-                          <div className="p-10 text-center">
-                            <p className="text-sm font-semibold text-slate-500 dark:text-slate-300">No players yet</p>
-                            <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">Add your first player above.</p>
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-slate-200/80 dark:divide-slate-800">
-                            <div className="hidden sm:grid grid-cols-[56px_2.4fr_90px_120px_90px] items-center gap-3 px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                              <span>#</span>
-                              <span>Riot ID</span>
-                              <span>Role</span>
-                              <span>Socials</span>
-                              <span className="text-right">Actions</span>
-                            </div>
-                            {players!.map((p, index) => {
-                              const editId = `player-edit-${p.id}`
-                              return (
-                                <details key={p.id} className="group">
-                                  <summary className="grid cursor-pointer grid-cols-[56px_2.4fr_90px_120px_90px] items-center gap-3 px-6 py-5 text-base text-slate-900 list-none dark:text-slate-100">
-                                    <span className="text-slate-500 dark:text-slate-400">{index + 1}</span>
-                                    <span className="truncate font-semibold text-slate-900 dark:text-slate-50">{p.game_name}#{p.tag_line}</span>
-                                    <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                                      {p.role ?? '—'}
-                                    </span>
-                                      <span className="text-sm text-slate-500 dark:text-slate-400">
-                                        {p.twitch_url || p.twitter_url ? (
-                                          <span className="flex items-center gap-2">
-                                            {p.twitch_url ? (
-                                              <span className="inline-flex h-6 w-6 items-center justify-center rounded-none bg-purple-500/10 text-purple-500 dark:bg-purple-500/20">
-                                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
-                                                  <path
-                                                    fill="currentColor"
-                                                    d="M4.5 3h15v9.75l-4.5 4.5h-4.5l-2.5 2.5H6v-2.5H4.5V3zm13.5 9V4.5h-12v10h3v2.5l2.5-2.5h5L18 12zM9 7.5h1.5v4H9v-4zm4.5 0H15v4h-1.5v-4z"
-                                                  />
-                                                </svg>
-                                              </span>
-                                            ) : null}
-                                            {p.twitter_url ? (
-                                              <span className="inline-flex h-6 w-6 items-center justify-center rounded-none bg-sky-500/10 text-sky-500 dark:bg-sky-500/20">
-                                                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" aria-hidden="true">
-                                                  <path
-                                                    fill="currentColor"
-                                                    d="M18.9 2H22l-6.8 7.8L23 22h-6.2l-4.9-6.5L5.7 22H2.6l7.3-8.3L1 2h6.4l4.4 6L18.9 2zm-1.1 18h1.7L6.3 3.9H4.5L17.8 20z"
-                                                  />
-                                                </svg>
-                                              </span>
-                                            ) : null}
-                                          </span>
-                                        ) : (
-                                          '—'
-                                        )}
-                                      </span>
-                                    <span className="text-right text-sm font-semibold text-slate-700 dark:text-slate-200">Edit</span>
-                                  </summary>
-                                  <div className="border-t border-slate-100 bg-slate-50 px-6 py-5 dark:border-slate-800 dark:bg-slate-900/60">
-                                    <form id={editId} action={updatePlayer} className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr] sm:items-end">
-                                      <input type="hidden" name="leaderboard_id" value={lb.id} />
-                                      <input type="hidden" name="player_id" value={p.id} />
-                                      <div>
-                                        <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Role</label>
-                                          <select
-                                            name="role"
-                                            defaultValue={p.role ?? ''}
-                                            className="h-10 w-full rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                                          >
-                                          <option value="">No role</option>
-                                          {ROLES.map((role) => (
-                                            <option key={role} value={role}>
-                                              {role}
-                                            </option>
-                                          ))}
-                                        </select>
-                                      </div>
-                                      <div>
-                                        <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Twitch URL</label>
-                                          <input
-                                            name="twitch_url"
-                                            defaultValue={p.twitch_url ?? ''}
-                                            placeholder="https://twitch.tv/..."
-                                            className="h-10 w-full rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                                          />
-                                      </div>
-                                      <div>
-                                        <label className="mb-1 block text-xs font-semibold text-slate-600 dark:text-slate-300">Twitter/X URL</label>
-                                          <input
-                                            name="twitter_url"
-                                            defaultValue={p.twitter_url ?? ''}
-                                            placeholder="https://twitter.com/..."
-                                            className="h-10 w-full rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                                          />
-                                      </div>
-                                    </form>
-                                    <div className="mt-4 flex flex-wrap items-center justify-end gap-4">
-                                      <form action={removePlayer}>
-                                        <input type="hidden" name="leaderboard_id" value={lb.id} />
-                                        <input type="hidden" name="player_id" value={p.id} />
-                                        <button
-                                          type="submit"
-                                          className="text-sm font-semibold text-red-600 hover:text-red-700"
-                                        >
-                                          Remove
-                                        </button>
-                                      </form>
-                                      <button
-                                        type="submit"
-                                        form={editId}
-                                        className="rounded-none bg-slate-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                                      >
-                                        Save changes
-                                      </button>
-                                    </div>
-                                  </div>
-                                </details>
-                              )
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                )}
               </section>
               )}
 
@@ -1652,15 +1886,18 @@ export default async function DashboardPage({
               <section id="club" className="scroll-mt-24">
                 {club ? (
                   <div className="space-y-8">
-                    <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                      <div className="border-b border-slate-100 p-6 dark:border-slate-800">
+                    <details
+                      open={activeSection === 'club'}
+                      className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900"
+                    >
+                      <summary className="cursor-pointer list-none border-b border-slate-100 p-6 dark:border-slate-800 [&::-webkit-details-marker]:hidden">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club settings</h2>
                             <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Name, description, visibility, and tag</p>
                           </div>
                         </div>
-                      </div>
+                      </summary>
                       <div className="p-6 space-y-6">
                         <form action={updateClubSettings} className="space-y-6">
                           <div className="grid gap-4 lg:grid-cols-2">
@@ -1741,31 +1978,7 @@ export default async function DashboardPage({
                           </button>
                         </form>
                         <div className="flex flex-wrap items-center justify-between gap-4">
-                          {!showClubDeleteConfirm ? (
-                            <Link
-                              href={sectionRedirect({ section: 'club', clubDeleteConfirm: true })}
-                              scroll={false}
-                              className="rounded-none border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 shadow-sm transition-all duration-200 hover:border-red-300 hover:bg-red-50 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40 dark:border-red-500/40 dark:bg-slate-900 dark:text-red-300 dark:hover:bg-red-950/30"
-                            >
-                              Delete
-                            </Link>
-                          ) : (
-                            <form action={deleteClub} className="flex items-center gap-2">
-                              <input type="hidden" name="club_confirm" value="1" />
-                              <button
-                                type="submit"
-                                className="rounded-none bg-red-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-red-700"
-                              >
-                                Confirm delete
-                              </button>
-                              <Link
-                                href={sectionRedirect({ section: 'club' })}
-                                className="px-1 text-xs font-semibold text-red-700 hover:text-red-900 dark:text-red-300 dark:hover:text-red-100"
-                              >
-                                Cancel
-                              </Link>
-                            </form>
-                          )}
+                          <DeleteClubButton onDelete={deleteClub} />
 
                           <Link
                             href={`/clubs/${club.slug}`}
@@ -1775,10 +1988,13 @@ export default async function DashboardPage({
                           </Link>
                         </div>
                       </div>
-                    </div>
+                    </details>
 
-                    <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                      <div className="border-b border-slate-100 p-6 dark:border-slate-800">
+                    <details
+                      open={activeSection === 'club'}
+                      className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900"
+                    >
+                      <summary className="cursor-pointer list-none border-b border-slate-100 p-6 dark:border-slate-800 [&::-webkit-details-marker]:hidden">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club banner</h2>
@@ -1788,7 +2004,7 @@ export default async function DashboardPage({
                             {hasClubBanner ? 'Banner set' : 'No banner'}
                           </span>
                         </div>
-                      </div>
+                      </summary>
                       <div className="p-6">
                         <form action={updateClubBanner} className="space-y-4">
                           <BannerUploadField
@@ -1806,7 +2022,7 @@ export default async function DashboardPage({
                           </button>
                         </form>
                       </div>
-                    </div>
+                    </details>
                   </div>
                 ) : (
                   <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
@@ -1894,193 +2110,10 @@ export default async function DashboardPage({
                 )}
               </section>
               )}
-
-              {effectiveSection === 'billing' && (
-              <section id="billing" className="scroll-mt-24">
-                <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-                  <div className="border-b border-slate-100 p-6 dark:border-slate-800">
-                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Billing</h2>
-                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Purchase extra leaderboard slots.</p>
-                  </div>
-                  <div className="p-6 space-y-4">
-                    <div className="rounded-none border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span>Included leaderboards: {BASE_LEADERBOARD_SLOTS}</span>
-                        <span>Extra slots: {extraLeaderboardSlots}</span>
-                        <span>Subscription slots: {subscriptionSlots}</span>
-                        <span>Total: {allowedLeaderboards}</span>
-                      </div>
-                      <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        {remainingLeaderboardSlots} slot(s) available.
-                      </div>
-                    </div>
-
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <form action={startStripeCheckoutOneTime}>
-                        <button
-                          type="submit"
-                          className="w-full rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                        >
-                          Buy 1 extra slot ($4.99)
-                        </button>
-                      </form>
-                      <form action={startStripeCheckoutSubscription}>
-                        <button
-                          type="submit"
-                          className="w-full rounded-none border border-slate-200 bg-white px-6 py-3 text-sm font-semibold text-slate-700 shadow-sm transition-all duration-200 hover:border-slate-300 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-900"
-                        >
-                          Subscribe for more slots
-                        </button>
-                      </form>
-                    </div>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Billing is in beta. Subscription management UI coming soon.
-                    </p>
-                  </div>
-                </div>
-              </section>
-              )}
             </div>
           </div>
-        ) : (
-          <div className="rounded-none border border-slate-200/80 bg-white p-8 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-            <h2 className="text-2xl font-black tracking-tight text-slate-900 dark:text-slate-100">
-              Create Your Leaderboard
-            </h2>
-            <p className="mt-2 text-slate-600 font-medium dark:text-slate-300">
-              Get started by creating your first leaderboard (one per account)
-            </p>
-
-            <form action={createLeaderboard} className="mt-6 space-y-4">
-              <div>
-                <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  Leaderboard Name
-                </label>
-                <input
-                  name="name"
-                  required
-                  placeholder="e.g., NA Climb Squad"
-                  className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                />
-              </div>
-
-              <button
-                type="submit"
-                className="w-full rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-              >
-                Create Leaderboard
-              </button>
-            </form>
-          </div>
-        )}
-
-        {!lb && (
-          <section id="club" className="mt-8 scroll-mt-24">
-            <div className="overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-              <div className="border-b border-slate-100 p-6 dark:border-slate-800">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club</h2>
-                <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Create and manage your club profile, members, and attached leaderboards</p>
-              </div>
-              <div className="p-6">
-                {club ? (
-                  <div className="space-y-6">
-                    <div className="flex flex-col gap-3 rounded-none border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Club page</p>
-                        <p className="mt-1 text-sm font-semibold text-slate-800 dark:text-slate-100">/clubs/{club.slug}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Link
-                          href={`/clubs/${club.slug}`}
-                          className="inline-flex items-center justify-center rounded-none bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                        >
-                          Open club →
-                        </Link>
-                        <Link
-                          href="/clubs"
-                          className="inline-flex items-center justify-center rounded-none border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
-                        >
-                          View directory
-                        </Link>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <form action={createClub} className="space-y-4">
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Club name</label>
-                      <input
-                        name="club_name"
-                        required
-                        placeholder="e.g., NA Scrim Club"
-                        className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Club description</label>
-                      <textarea
-                        name="club_description"
-                        rows={3}
-                        maxLength={250}
-                        placeholder="What is this club about?"
-                        className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Visibility</label>
-                      <select
-                        name="club_visibility"
-                        defaultValue="PUBLIC"
-                        className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                      >
-                        <option value="PUBLIC">Public - Listed in directory</option>
-                        <option value="UNLISTED">Unlisted - Link only</option>
-                        <option value="PRIVATE">Private - Owner only</option>
-                      </select>
-                    </div>
-
-                    <div className="rounded-none border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                      <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Club tag</label>
-                      <div className="flex items-center gap-2">
-                        <input
-                          name="club_slug_prefix"
-                          defaultValue={clubSlugParts.prefix}
-                          maxLength={CLUB_SLUG_PART_MAX}
-                          pattern="[A-Za-z0-9]{1,5}"
-                          required
-                          className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-sm font-semibold uppercase tracking-wide text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        />
-                        <span className="text-lg font-black text-slate-400">-</span>
-                        <input
-                          name="club_slug_tag"
-                          defaultValue={clubSlugParts.tag}
-                          maxLength={CLUB_SLUG_PART_MAX}
-                          pattern="[A-Za-z0-9]{1,5}"
-                          required
-                          className="w-full rounded-none border-2 border-slate-200 bg-white px-4 py-3 text-sm font-semibold uppercase tracking-wide text-slate-900 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                        />
-                      </div>
-                      <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        Two parts, up to {CLUB_SLUG_PART_MAX} letters or numbers each.
-                      </p>
-                    </div>
-
-                    <button
-                      type="submit"
-                      className="w-full rounded-none bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 hover:shadow-lg hover:-translate-y-0.5 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                    >
-                      Create club
-                    </button>
-                  </form>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
-      </div>
-    </main>
+        </div>
+      </main>
+    </>
   )
 }
-

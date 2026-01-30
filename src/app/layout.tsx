@@ -1,17 +1,62 @@
 import './globals.css'
 import Link from 'next/link'
 import Script from 'next/script'
+import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { AuthButtons } from '@/app/_components/AuthButtons'
 import { ThemeToggle } from '@/app/_components/ThemeToggle'
+import { MailboxPopoverClient } from '@/app/_components/MailboxPopoverClient'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
+
+type ClubRow = {
+  id: string
+  name: string
+  owner_user_id: string | null
+}
+
+type ClubInviteRow = {
+  id: string
+  club_id: string
+  inviter_user_id: string | null
+  created_at: string | null
+}
+
+type ClubShowdownRow = {
+  id: string
+  requester_club_id: string
+  target_club_id: string
+  created_at: string | null
+  status: string | null
+}
+
+type ClubMemberRow = {
+  club_id: string
+  user_id: string
+}
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
   const { data } = await supabase.auth.getUser()
   const user = data.user
   let username: string | null = null
+  let mailboxInvites: Array<{ id: string; clubName: string; inviterName?: string | null; createdAt?: string | null }> = []
+  let mailboxInboxShowdowns: Array<{
+    id: string
+    opponentName: string
+    createdAt?: string | null
+    requesterClubId: string
+    targetClubId: string
+    status?: string | null
+  }> = []
+  let mailboxOutgoingShowdowns: Array<{
+    id: string
+    opponentName: string
+    createdAt?: string | null
+    targetClubId: string
+    status?: string | null
+  }> = []
   if (user) {
     const { data: profile } = await supabase
       .from('profiles')
@@ -23,6 +68,150 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       (user.user_metadata?.full_name as string | undefined) ??
       user.email?.split('@')[0] ??
       null
+
+    const [invitesRes, clubsRes, membersRes, showdownsRes, profilesRes] = await Promise.all([
+      supabase
+        .from('club_invites')
+        .select('id, club_id, inviter_user_id, created_at')
+        .eq('invitee_user_id', user.id)
+        .eq('status', 'PENDING')
+        .order('created_at', { ascending: false })
+        .limit(10),
+      supabase.from('clubs').select('id, name'),
+      supabase.from('club_members').select('club_id, user_id').eq('user_id', user.id),
+      supabase
+        .from('club_showdown_requests')
+        .select('id, requester_club_id, target_club_id, created_at, status')
+        .eq('status', 'PENDING')
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase.from('profiles').select('user_id, username'),
+    ])
+
+    const clubs = (clubsRes.data ?? []) as ClubRow[]
+    const clubNames = new Map(clubs.map((club) => [club.id, club.name]))
+    const profileNames = new Map((profilesRes.data ?? []).map((p) => [p.user_id, p.username]))
+
+    mailboxInvites = ((invitesRes.data ?? []) as ClubInviteRow[]).map((invite) => ({
+      id: invite.id,
+      clubName: clubNames.get(invite.club_id) ?? 'Club invite',
+      inviterName: invite.inviter_user_id ? profileNames.get(invite.inviter_user_id) : null,
+      createdAt: invite.created_at,
+    }))
+
+    const memberClubIds = new Set(((membersRes.data ?? []) as ClubMemberRow[]).map((row) => row.club_id))
+    const ownedClubIds = new Set(clubs.filter((club) => club.owner_user_id === user.id).map((club) => club.id))
+    const myClubIds = new Set([...memberClubIds, ...ownedClubIds])
+
+    const showdownRows = (showdownsRes.data ?? []) as ClubShowdownRow[]
+    mailboxInboxShowdowns = showdownRows
+      .filter((request) => myClubIds.has(request.target_club_id))
+      .slice(0, 10)
+      .map((request) => ({
+        id: request.id,
+        opponentName: clubNames.get(request.requester_club_id) ?? 'Club challenge',
+        requesterClubId: request.requester_club_id,
+        targetClubId: request.target_club_id,
+        createdAt: request.created_at,
+        status: request.status ?? 'PENDING',
+      }))
+
+    mailboxOutgoingShowdowns = showdownRows
+      .filter((request) => myClubIds.has(request.requester_club_id))
+      .slice(0, 10)
+      .map((request) => ({
+        id: request.id,
+        opponentName: clubNames.get(request.target_club_id) ?? 'Club challenge',
+        targetClubId: request.target_club_id,
+        createdAt: request.created_at,
+        status: request.status ?? 'PENDING',
+      }))
+  }
+
+  async function acceptShowdown(formData: FormData) {
+    'use server'
+
+    const requestId = String(formData.get('request_id') ?? '').trim()
+    const targetClubId = String(formData.get('target_club_id') ?? '').trim()
+    if (!requestId || !targetClubId) redirect('/showdown?err=Missing request')
+
+    const supabase = await createClient()
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user) redirect('/sign-in')
+    const userId = user.id
+
+    const { data: member } = await supabase
+      .from('club_members')
+      .select('id')
+      .eq('club_id', targetClubId)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (!member?.id) {
+      const { data: ownedClub } = await supabase
+        .from('clubs')
+        .select('id')
+        .eq('id', targetClubId)
+        .eq('owner_user_id', userId)
+        .maybeSingle()
+      if (!ownedClub?.id) redirect('/showdown?err=Only target club members can accept')
+    }
+
+    const { error } = await supabase
+      .from('club_showdown_requests')
+      .update({ status: 'ACCEPTED' })
+      .eq('id', requestId)
+      .eq('target_club_id', targetClubId)
+      .eq('status', 'PENDING')
+
+    if (error) redirect(`/showdown?err=${encodeURIComponent(error.message)}`)
+
+    revalidatePath('/showdown')
+    revalidatePath(`/showdown/${requestId}`)
+    redirect(`/showdown/${requestId}`)
+  }
+
+  async function cancelShowdown(formData: FormData) {
+    'use server'
+
+    const requestId = String(formData.get('request_id') ?? '').trim()
+    const requesterClubId = String(formData.get('requester_club_id') ?? '').trim()
+    if (!requestId || !requesterClubId) redirect('/showdown?err=Missing request')
+
+    const supabase = await createClient()
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user) redirect('/sign-in')
+    const userId = user.id
+
+    const { data: member } = await supabase
+      .from('club_members')
+      .select('id')
+      .eq('club_id', requesterClubId)
+      .eq('user_id', userId)
+      .maybeSingle()
+
+    if (!member?.id) {
+      const { data: ownedClub } = await supabase
+        .from('clubs')
+        .select('id')
+        .eq('id', requesterClubId)
+        .eq('owner_user_id', userId)
+        .maybeSingle()
+      if (!ownedClub?.id) redirect('/showdown?err=Only requesting club members can cancel')
+    }
+
+    const { error } = await supabase
+      .from('club_showdown_requests')
+      .delete()
+      .eq('id', requestId)
+      .eq('requester_club_id', requesterClubId)
+
+    if (error) redirect(`/showdown?err=${encodeURIComponent(error.message)}`)
+
+    revalidatePath('/showdown')
+    redirect('/showdown?ok=Request cancelled')
   }
 
   return (
@@ -105,6 +294,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             {/* Right side actions */}
             <div className="flex items-center gap-2">
               <ThemeToggle />
+              <MailboxPopoverClient
+                invites={mailboxInvites}
+                inboxShowdowns={mailboxInboxShowdowns}
+                outgoingShowdowns={mailboxOutgoingShowdowns}
+                onAcceptShowdown={acceptShowdown}
+                onCancelShowdown={cancelShowdown}
+              />
               <AuthButtons signedIn={!!user} username={username} />
             </div>
           </nav>

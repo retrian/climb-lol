@@ -26,7 +26,23 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
     while (!done) {
       const query = supabase
         .from('match_participants')
-        .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, matches!inner(game_end_ts, game_duration_s, queue_id)')
+        .select(`
+          match_id, 
+          puuid, 
+          champion_id, 
+          kills, 
+          deaths, 
+          assists, 
+          cs, 
+          win, 
+          vision_score,
+          lp_change,
+          lp_note,
+          rank_tier,
+          rank_division,
+          end_type,
+          matches!inner(game_end_ts, game_duration_s, queue_id)
+        `)
         .eq('puuid', puuid)
         .eq('matches.queue_id', 420)
         .gte('matches.game_end_ts', seasonStartMs)
@@ -68,6 +84,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
       endTs: row.matches?.game_end_ts ?? null,
       durationS: row.matches?.game_duration_s ?? null,
       queueId: row.matches?.queue_id ?? null,
+      // ✅ NEW: LP and rank snapshot fields
+      lp_change: row.lp_change ?? null,
+      lp_note: row.lp_note ?? null,
+      rank_tier: row.rank_tier ?? null,
+      rank_division: row.rank_division ?? null,
+      end_type: row.end_type ?? null,
     }))
 
     return NextResponse.json({ matches: payload })

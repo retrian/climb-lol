@@ -84,7 +84,7 @@ export default async function ClubsPage({
             </p>
             {user ? (
               <Link
-                href="/dashboard?section=club#club"
+                href="/dashboard/club"
                 className="mt-3 inline-flex items-center text-sm font-semibold text-blue-600 transition hover:text-blue-500 dark:text-blue-400"
               >
                 Open club controls
