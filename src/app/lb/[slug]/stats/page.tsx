@@ -107,6 +107,18 @@ function formatDaysHoursCaps(totalSeconds: number) {
   return `${days}D ${hours.toString().padStart(2, '0')}H`
 }
 
+function topUniquePlayers<T extends { puuid: string }>(rows: T[], limit: number) {
+  const seen = new Set<string>()
+  const unique: T[] = []
+  for (const row of rows) {
+    if (seen.has(row.puuid)) continue
+    seen.add(row.puuid)
+    unique.push(row)
+    if (unique.length >= limit) break
+  }
+  return unique
+}
+
 // --- Components ---
 
 function TeamHeaderCard({
@@ -128,14 +140,18 @@ function TeamHeaderCard({
 }) {
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
-      <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
-      <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
-
-      {bannerUrl && (
-        <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
+      {bannerUrl ? (
+        <div className="absolute inset-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" />
+          <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-white/45 to-white/25 dark:from-slate-950/80 dark:via-slate-950/55 dark:to-slate-900/35" />
+          <div className="absolute inset-0 bg-gradient-to-t from-white/75 via-white/25 to-transparent dark:from-slate-950/80 dark:via-slate-950/40 dark:to-transparent" />
         </div>
+      ) : (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
+          <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
+        </>
       )}
 
       <div className="relative flex flex-col lg:flex-row">
@@ -143,14 +159,8 @@ function TeamHeaderCard({
           <div className="mb-4 lg:mb-6">
             <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
           </div>
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
-            {name}
-          </h1>
-          {description && (
-            <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">
-              {description}
-            </p>
-          )}
+          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
+          {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
         </div>
 
         {cutoffs.length > 0 && (
@@ -161,21 +171,7 @@ function TeamHeaderCard({
                 Rank Cutoffs
               </div>
             </div>
-            {cutoffs.map((c) => (
-              <div
-                key={c.label}
-                className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" />
-                <div className="flex-1">
-                  <div className="text-xs font-bold text-slate-500 uppercase tracking-wide dark:text-slate-400">
-                    {c.label}
-                  </div>
-                  <div className="text-lg font-black text-slate-900 dark:text-slate-100">{c.lp} LP</div>
-                </div>
-              </div>
-            ))}
+            {cutoffs.map((c) => (<div key={c.label} className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"><img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" /><div className="flex-1"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide dark:text-slate-400">{c.label}</div><div className="text-lg font-black text-slate-900 dark:text-slate-100">{c.lp} LP</div></div></div>))}
           </div>
         )}
       </div>
@@ -238,7 +234,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   if (puuids.length === 0) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-        <div className="mx-auto max-w-6xl px-4 py-10 space-y-8">
+        <div className="mx-auto w-full max-w-[1460px] px-6 py-10 space-y-8">
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
@@ -480,14 +476,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const topWinratePlayers = [...playerLeaderboard].sort((a, b) => b.wins / b.games - a.wins / a.games).slice(0, 5)
   const topTotalTime = [...playerLeaderboard].sort((a, b) => b.durationS - a.durationS).slice(0, 5)
 
-  const topKillsSingle = [...participants].sort((a, b) => b.kills - a.kills).slice(0, 3)
-  const topDeathsSingle = [...participants].sort((a, b) => b.deaths - a.deaths).slice(0, 3)
-  const topAssistsSingle = [...participants].sort((a, b) => b.assists - a.assists).slice(0, 3)
-  const topCsSingle = [...participants].sort((a, b) => b.cs - a.cs).slice(0, 3)
-  const topVisionSingle = [...participants]
-    .filter((row) => typeof row.vision_score === 'number')
-    .sort((a, b) => (b.vision_score ?? 0) - (a.vision_score ?? 0))
-    .slice(0, 3)
+  const topKillsSingle = topUniquePlayers([...participants].sort((a, b) => b.kills - a.kills), 3)
+  const topDeathsSingle = topUniquePlayers([...participants].sort((a, b) => b.deaths - a.deaths), 3)
+  const topAssistsSingle = topUniquePlayers([...participants].sort((a, b) => b.assists - a.assists), 3)
+  const topCsSingle = topUniquePlayers([...participants].sort((a, b) => b.cs - a.cs), 3)
+  const topVisionSingle = topUniquePlayers(
+    [...participants]
+      .filter((row) => typeof row.vision_score === 'number')
+      .sort((a, b) => (b.vision_score ?? 0) - (a.vision_score ?? 0)),
+    3,
+  )
 
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   for (const row of participants) {
@@ -528,121 +526,309 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
-        <TeamHeaderCard
-          name={lb.name}
-          description={lb.description}
-          slug={slug}
-          visibility={lb.visibility}
-          activeTab="stats"
-          cutoffs={cutoffsDisplay}
-          bannerUrl={lb.banner_url}
-        />
+      <div className="mx-auto w-full max-w-none px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
+        <div className="mx-auto w-full max-w-[1460px]">
+          <TeamHeaderCard
+            name={lb.name}
+            description={lb.description}
+            slug={slug}
+            visibility={lb.visibility}
+            activeTab="stats"
+            cutoffs={cutoffsDisplay}
+            bannerUrl={lb.banner_url}
+          />
+        </div>
 
-        {noGames ? (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            No games found for this leaderboard yet (current season).
-          </div>
-        ) : null}
-
-        <section className="grid gap-4 md:grid-cols-3">
-          {[
-            {
-              label: 'Total Games',
-              value: totals.games.toLocaleString(),
-              sub: 'Combined player games',
-            },
-            {
-              label: 'Total Record',
-              value: `${totals.wins}W - ${totals.losses}L`,
-              sub: `${formatWinrate(totals.wins, totals.games)} • ${totals.games.toLocaleString()} games`,
-            },
-            {
-              label: 'Total Time Played',
-              value: formatDaysHoursCaps(totals.durationS),
-              sub: `Across all matches • ${Math.floor((Number.isFinite(totals.durationS) ? totals.durationS : 0) / 3600).toLocaleString()}h`,
-            },
-          ].map((card) => (
-            <div
-              key={card.label}
-              className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-            >
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                {card.label}
-              </div>
-              <div className="mt-3 text-3xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
-              <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
+        <div className="mx-auto w-full max-w-[1460px] space-y-10 lg:space-y-12">
+          {noGames ? (
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+              No games found for this leaderboard yet (current season).
             </div>
-          ))}
-        </section>
+          ) : null}
 
-        <section className="space-y-4">
-          <div className="flex items-center gap-2">
-            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600" />
-            <h2 className="text-sm font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Champion Analytics
-            </h2>
-          </div>
-
-          <details className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-slate-100 px-6 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
-              <div>
+          <section className="grid gap-4 md:grid-cols-3">
+            {[
+              {
+                label: 'Total Games',
+                value: totals.games.toLocaleString(),
+                sub: 'Combined player games',
+              },
+              {
+                label: 'Total Record',
+                value: `${totals.wins}W - ${totals.losses}L`,
+                sub: `${formatWinrate(totals.wins, totals.games)} • ${totals.games.toLocaleString()} games`,
+              },
+              {
+                label: 'Total Time Played',
+                value: formatDaysHoursCaps(totals.durationS),
+                sub: `Across all matches • ${Math.floor((Number.isFinite(totals.durationS) ? totals.durationS : 0) / 3600).toLocaleString()}h`,
+              },
+            ].map((card) => (
+              <div
+                key={card.label}
+                className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+              >
                 <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Unique Champions
+                  {card.label}
                 </div>
-                <div className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                  {championLeaderboard.length}
-                </div>
+                <div className="mt-3 text-3xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
+                <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
               </div>
-              <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Toggle
-              </span>
-            </summary>
+            ))}
+          </section>
 
-            {noGames ? (
-              <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">No champion data yet.</div>
-            ) : (
-              <ChampionTable rows={championTableRows} />
-            )}
-          </details>
-        </section>
-
-        <section className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <section className="space-y-4">
             <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-amber-400 to-amber-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Player Accumulative Rankings
-              </h3>
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-emerald-400 to-emerald-600" />
+              <h2 className="text-sm font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                Champion Analytics
+              </h2>
             </div>
 
-            <div className="mt-4 space-y-4">
-              {[
-                {
-                  title: 'Most Avg Kills / Game',
-                  data: topKills,
-                  value: (row: typeof topKills[number]) => averagePerGame(row.kills, row.games).toFixed(2),
-                },
-                {
-                  title: 'Most Avg Deaths / Game',
-                  data: topDeaths,
-                  value: (row: typeof topDeaths[number]) => averagePerGame(row.deaths, row.games).toFixed(2),
-                },
-                {
-                  title: 'Most Avg Assists / Game',
-                  data: topAssists,
-                  value: (row: typeof topAssists[number]) => averagePerGame(row.assists, row.games).toFixed(2),
-                },
-              ].map((block) => (
-                <div key={block.title}>
+            <details className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-slate-100 px-6 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
+                <div>
                   <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    {block.title}
+                    Unique Champions
                   </div>
-                  {block.data.length === 0 ? (
+                  <div className="text-2xl font-black text-slate-900 dark:text-slate-100">
+                    {championLeaderboard.length}
+                  </div>
+                </div>
+                <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Toggle
+                </span>
+              </summary>
+
+              {noGames ? (
+                <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">No champion data yet.</div>
+              ) : (
+                <ChampionTable rows={championTableRows} />
+              )}
+            </details>
+          </section>
+
+          <section className="grid gap-6 lg:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-amber-400 to-amber-600" />
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Player Accumulative Rankings
+                </h3>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {[
+                  {
+                    title: 'Most Avg Kills / Game',
+                    data: topKills,
+                    value: (row: typeof topKills[number]) => averagePerGame(row.kills, row.games).toFixed(2),
+                  },
+                  {
+                    title: 'Most Avg Deaths / Game',
+                    data: topDeaths,
+                    value: (row: typeof topDeaths[number]) => averagePerGame(row.deaths, row.games).toFixed(2),
+                  },
+                  {
+                    title: 'Most Avg Assists / Game',
+                    data: topAssists,
+                    value: (row: typeof topAssists[number]) => averagePerGame(row.assists, row.games).toFixed(2),
+                  },
+                ].map((block) => (
+                  <div key={block.title}>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      {block.title}
+                    </div>
+                    {block.data.length === 0 ? (
+                      <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <ol className="mt-2 space-y-1 text-sm">
+                        {block.data.map((row, idx) => (
+                          <li key={row.puuid} className="flex items-center justify-between">
+                            <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                              <span className="text-slate-400">{idx + 1}.</span>
+                              {row.iconUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={row.iconUrl}
+                                  alt=""
+                                  className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                                />
+                              ) : (
+                                <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                              )}
+                              <span>{row.name}</span>
+                            </span>
+                            <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                              {block.value(row)}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-rose-400 to-rose-600" />
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Single Game High Scores
+                </h3>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {[
+                  { title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills' },
+                  { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
+                  { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
+                  { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
+                  { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision_score' },
+                ].map((block) => (
+                  <div key={block.title}>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      {block.title}
+                    </div>
+                    {block.data.length === 0 ? (
+                      <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <ol className="mt-2 space-y-1 text-sm">
+                        {block.data.map((row, idx) => {
+                          const player = playersByPuuid.get(row.puuid)
+                          const iconUrl = profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion)
+                          const champ = champMap[row.champion_id]
+                          return (
+                            <li key={`${row.match_id}-${row.puuid}`} className="flex items-center justify-between">
+                              <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                                <span className="text-slate-400">{idx + 1}.</span>
+                                {iconUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={iconUrl}
+                                    alt=""
+                                    className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                                  />
+                                ) : (
+                                  <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                                )}
+                                <span>{player ? displayRiotId(player) : row.puuid}</span>
+                                <span className="text-slate-400"> • {champ?.name ?? 'Unknown'}</span>
+                              </span>
+                              <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                                {row[block.key as keyof typeof row]}
+                              </span>
+                            </li>
+                          )
+                        })}
+                      </ol>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-sky-400 to-sky-600" />
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  KDA Leaderboard Highlights
+                </h3>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                {[
+                  { title: 'Best Overall KDA', data: bestKdaPlayersTop },
+                  { title: 'Worst Overall KDA', data: worstKdaPlayersTop },
+                ].map((block) => (
+                  <div key={block.title}>
+                    <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      {block.title}
+                    </div>
+                    {block.data.length === 0 ? (
+                      <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <ol className="mt-2 space-y-1 text-sm">
+                        {block.data.map((row, idx) => (
+                          <li key={row.puuid} className="flex items-center justify-between">
+                            <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                              <span className="text-slate-400">{idx + 1}.</span>
+                              {row.iconUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={row.iconUrl}
+                                  alt=""
+                                  className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                                />
+                              ) : (
+                                <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                              )}
+                              <span>{row.name}</span>
+                            </span>
+                            <span className={`font-semibold tabular-nums ${getKdaColor(row.kda.value)}`}>
+                              {row.kda.label} KDA
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+              <div className="flex items-center gap-2">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
+                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                  Time &amp; Length Highlights
+                </h3>
+              </div>
+
+              <div className="mt-4 space-y-4">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                    Longest Game Length
+                  </div>
+                  {longestGamesTop.length === 0 ? (
                     <div className="mt-2 text-xs text-slate-400">No data yet.</div>
                   ) : (
                     <ol className="mt-2 space-y-1 text-sm">
-                      {block.data.map((row, idx) => (
+                      {longestGamesTop.map((row, idx) => (
+                        <li key={row.matchId} className="flex items-center justify-between">
+                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
+                            <span className="text-slate-400">{idx + 1}.</span>
+                            {row.playerIconUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={row.playerIconUrl}
+                                alt=""
+                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                              />
+                            ) : (
+                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                            )}
+                            <span>{row.playerName}</span>
+                          </span>
+                          <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
+                            {formatMatchDuration(row.durationS)}
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                    Longest Individual Total Time Played
+                  </div>
+                  {longestTotalTimeTop.length === 0 ? (
+                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
+                  ) : (
+                    <ol className="mt-2 space-y-1 text-sm">
+                      {longestTotalTimeTop.map((row, idx) => (
                         <li key={row.puuid} className="flex items-center justify-between">
                           <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
                             <span className="text-slate-400">{idx + 1}.</span>
@@ -659,201 +845,17 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                             <span>{row.name}</span>
                           </span>
                           <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                            {block.value(row)}
+                            {formatDaysHoursCaps(row.durationS)}
                           </span>
                         </li>
                       ))}
                     </ol>
                   )}
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-rose-400 to-rose-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Single Game High Scores
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {[
-                { title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills' },
-                { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
-                { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
-                { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
-                 { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision_score' },
-              ].map((block) => (
-                <div key={block.title}>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    {block.title}
-                  </div>
-                  {block.data.length === 0 ? (
-                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <ol className="mt-2 space-y-1 text-sm">
-                      {block.data.map((row, idx) => {
-                        const player = playersByPuuid.get(row.puuid)
-                        const iconUrl = profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion)
-                        const champ = champMap[row.champion_id]
-                        return (
-                          <li key={`${row.match_id}-${row.puuid}`} className="flex items-center justify-between">
-                            <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                              <span className="text-slate-400">{idx + 1}.</span>
-                              {iconUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={iconUrl}
-                                  alt=""
-                                  className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                                />
-                              ) : (
-                                <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                              )}
-                              <span>{player ? displayRiotId(player) : row.puuid}</span>
-                              <span className="text-slate-400"> • {champ?.name ?? 'Unknown'}</span>
-                            </span>
-                            <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                              {row[block.key as keyof typeof row]}
-                            </span>
-                          </li>
-                        )
-                      })}
-                    </ol>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-sky-400 to-sky-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                KDA Leaderboard Highlights
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {[
-                { title: 'Best Overall KDA', data: bestKdaPlayersTop },
-                { title: 'Worst Overall KDA', data: worstKdaPlayersTop },
-              ].map((block) => (
-                <div key={block.title}>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    {block.title}
-                  </div>
-                  {block.data.length === 0 ? (
-                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <ol className="mt-2 space-y-1 text-sm">
-                      {block.data.map((row, idx) => (
-                        <li key={row.puuid} className="flex items-center justify-between">
-                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                            <span className="text-slate-400">{idx + 1}.</span>
-                            {row.iconUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={row.iconUrl}
-                                alt=""
-                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                              />
-                            ) : (
-                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                            )}
-                            <span>{row.name}</span>
-                          </span>
-                          <span className={`font-semibold tabular-nums ${getKdaColor(row.kda.value)}`}>
-                            {row.kda.label} KDA
-                          </span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                Time &amp; Length Highlights
-              </h3>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Longest Game Length
-                </div>
-                {longestGamesTop.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                ) : (
-                  <ol className="mt-2 space-y-1 text-sm">
-                    {longestGamesTop.map((row, idx) => (
-                      <li key={row.matchId} className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                          <span className="text-slate-400">{idx + 1}.</span>
-                          {row.playerIconUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={row.playerIconUrl}
-                              alt=""
-                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                            />
-                          ) : (
-                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                          )}
-                          <span>{row.playerName}</span>
-                        </span>
-                        <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                          {formatMatchDuration(row.durationS)}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
-              </div>
-
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Longest Individual Total Time Played
-                </div>
-                {longestTotalTimeTop.length === 0 ? (
-                  <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                ) : (
-                  <ol className="mt-2 space-y-1 text-sm">
-                    {longestTotalTimeTop.map((row, idx) => (
-                      <li key={row.puuid} className="flex items-center justify-between">
-                        <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                          <span className="text-slate-400">{idx + 1}.</span>
-                          {row.iconUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={row.iconUrl}
-                              alt=""
-                              className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                            />
-                          ) : (
-                            <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                          )}
-                          <span>{row.name}</span>
-                        </span>
-                        <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                          {formatDaysHoursCaps(row.durationS)}
-                        </span>
-                      </li>
-                    ))}
-                  </ol>
-                )}
               </div>
             </div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
     </main>
   )

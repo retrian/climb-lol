@@ -79,9 +79,7 @@ function formatTierShort(tier?: string | null, division?: string | null) {
 
 function displayRiotId(p: Player) {
   const gn = (p.game_name ?? '').trim()
-  const tl = (p.tag_line ?? '').trim()
-  if (gn && tl) return `${gn}#${tl}`
-  return 'Unknown Player'
+  return gn || 'Unknown Player'
 }
 
 function formatLpNote(lpNote: string | null, isRemake: boolean) {
@@ -97,6 +95,7 @@ const GameItem = memo(({
   champ, 
   champSrc, 
   rankData, 
+  profileIconSrc,
   hasMatchDetails,
   onSelect,
   onHover
@@ -106,6 +105,7 @@ const GameItem = memo(({
   champ: any
   champSrc: string | null
   rankData: any
+  profileIconSrc: string | null
   hasMatchDetails: boolean
   onSelect: () => void
   onHover: () => void
@@ -183,11 +183,8 @@ const GameItem = memo(({
 
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
-              <span
-                className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400"
-                title="View match history"
-              >
-                {name}
+              <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 hover:text-blue-600 dark:text-slate-100 dark:hover:text-blue-400" title="View match history">
+                <span className="truncate">{name}</span>
               </span>
               <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">
                 {when}
@@ -195,7 +192,10 @@ const GameItem = memo(({
             </div>
             <div className="mt-1 flex items-center justify-between gap-2">
               <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
-                {champ?.name || 'Unknown'}
+                {profileIconSrc ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={profileIconSrc} alt="" className="h-5 w-5 rounded-full border border-slate-200 dark:border-slate-700" loading="lazy" />
+                ) : null}
               </span>
               {lpChange !== null ? (
                 lpNote ? (
@@ -323,6 +323,7 @@ export default function LatestGamesFeedClient({
   champMap,
   ddVersion,
   rankByPuuid,
+  playerIconsByPuuid,
   participantsByMatch,
   preloadedMatchData = {},
 }: {
@@ -331,6 +332,7 @@ export default function LatestGamesFeedClient({
   champMap: any
   ddVersion: string
   rankByPuuid: Record<string, any>
+  playerIconsByPuuid: Record<string, number | null>
   participantsByMatch: Record<string, MatchParticipant[]>
   preloadedMatchData?: Record<string, { match: any; timeline: any; accounts: Record<string, any> }>
 }) {
@@ -355,6 +357,8 @@ export default function LatestGamesFeedClient({
       const champ = champMap[g.championId]
       const champSrc = champ ? championIconUrl(ddVersion, champ.id) : null
       const rankData = rankByPuuid?.[g.puuid]
+      const profileIconId = playerIconsByPuuid?.[g.puuid] ?? null
+      const profileIconSrc = profileIconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${profileIconId}.png` : null
       const matchParticipants = participantsByMatch[g.matchId] ?? []
       const hasMatchDetails = matchParticipants.length > 0
       
@@ -364,10 +368,11 @@ export default function LatestGamesFeedClient({
         champ,
         champSrc,
         rankData,
+        profileIconSrc,
         hasMatchDetails,
       }
     })
-  }, [games, playersByPuuid, champMap, ddVersion, rankByPuuid, participantsByMatch])
+  }, [games, playersByPuuid, champMap, ddVersion, rankByPuuid, participantsByMatch, playerIconsByPuuid])
 
   const handleSelectGame = useCallback((game: Game) => {
     setSelectedGame(game)
@@ -406,6 +411,7 @@ export default function LatestGamesFeedClient({
             champ={item.champ}
             champSrc={item.champSrc}
             rankData={item.rankData}
+            profileIconSrc={item.profileIconSrc}
             hasMatchDetails={item.hasMatchDetails}
             onSelect={() => handleSelectGame(item.game)}
             onHover={() => handleGameHover(item.game.matchId)}

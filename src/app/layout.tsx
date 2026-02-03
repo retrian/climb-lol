@@ -349,7 +349,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </header>
 
         {/* Consistent page width/padding across ALL pages */}
-        <main className="mx-auto w-full max-w-6xl flex-1 px-4">
+        <main className="mx-auto w-full max-w-none flex-1 px-0">
           {children}
         </main>
         <footer className="border-t border-gray-200 py-6 text-sm text-gray-600 dark:border-slate-800 dark:text-slate-300">

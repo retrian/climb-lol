@@ -160,12 +160,22 @@ function makeLpKey(matchId: string, puuid: string): string {
 
 // --- Components ---
 
-function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs }: any) {
+  function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs }: any) {
     return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
-      <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
-      <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
-      {bannerUrl && <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800"><img src={bannerUrl} alt="Leaderboard Banner" className="h-full w-full object-cover" /></div>}
+      {bannerUrl ? (
+        <div className="absolute inset-0">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
+          <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-white/45 to-white/25 dark:from-slate-950/80 dark:via-slate-950/55 dark:to-slate-900/35" />
+          <div className="absolute inset-0 bg-gradient-to-t from-white/75 via-white/25 to-transparent dark:from-slate-950/80 dark:via-slate-950/40 dark:to-transparent" />
+        </div>
+      ) : (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
+          <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
+        </>
+      )}
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
           <div className="mb-4 lg:mb-6">
@@ -308,6 +318,16 @@ export default async function LeaderboardDetail({
   const seasonStartIso = getSeasonStartIso({ ddVersion })
   const seasonStartMsLatest = new Date(seasonStartIso).getTime()
 
+  const now = new Date()
+  const todayStart = new Date(now)
+  todayStart.setHours(0, 0, 0, 0)
+  const todayStartTs = todayStart.getTime()
+
+  const weekStart = new Date(now)
+  weekStart.setDate(weekStart.getDate() - 7)
+  const weekStartIso = weekStart.toISOString()
+  const weekStartTs = weekStart.getTime()
+
   // Phase 2: Enrichment (Parallel Fetch)
   const [
     statesRaw,
@@ -316,7 +336,8 @@ export default async function LeaderboardDetail({
     missingPlayersRaw,
     latestMatchesRaw,
     lpEventsRaw,
-    matchParticipantsRaw
+    matchParticipantsRaw,
+    lpEventRows
   ] = await Promise.all([
     allRelevantPuuids.length > 0
       ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[])
@@ -340,7 +361,18 @@ export default async function LeaderboardDetail({
       : ([] as LpEventRaw[]),
     latestMatchIds.length > 0
       ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[])
-      : ([] as MatchParticipantRaw[])
+      : ([] as MatchParticipantRaw[]),
+    allRelevantPuuids.length > 0
+      ? safeDb(
+          supabase
+            .from('player_lp_events')
+            .select('puuid, lp_delta, recorded_at, queue_type')
+            .in('puuid', allRelevantPuuids)
+            .eq('queue_type', 'RANKED_SOLO_5x5')
+            .gte('recorded_at', weekStartIso),
+          [] as Array<{ puuid: string; lp_delta: number; recorded_at: string | null; queue_type: string | null }>
+        )
+      : ([] as Array<{ puuid: string; lp_delta: number; recorded_at: string | null; queue_type: string | null }>),
   ])
 
   // --- Processing Data ---
@@ -505,6 +537,9 @@ export default async function LeaderboardDetail({
   const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
   const rankByPuuidRecord = Object.fromEntries(rankBy.entries())
   const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
+  const playerIconsByPuuidRecord = Object.fromEntries(
+    Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
+  ) as Record<string, number | null>
   
   const preloadedMatchDataRecord: Record<string, any> = {}
 
@@ -516,22 +551,68 @@ export default async function LeaderboardDetail({
     topChamps: champsBy.get(player.puuid) ?? [],
   }))
 
+  const dailyLpByPuuid = new Map<string, number>()
+  for (const row of lpEventRows) {
+    const lpChange = typeof row.lp_delta === 'number' && Number.isFinite(row.lp_delta) ? row.lp_delta : null
+    const recordedAt = row.recorded_at ? new Date(row.recorded_at).getTime() : null
+    if (lpChange === null || recordedAt === null) continue
+    if (recordedAt < todayStartTs) continue
+    dailyLpByPuuid.set(row.puuid, (dailyLpByPuuid.get(row.puuid) ?? 0) + lpChange)
+  }
+
+  const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
+  const dailyTopGain = dailyLpEntries.length
+    ? dailyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
+    : null
+  const dailyTopLoss = dailyLpEntries.length
+    ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
+    : null
+  const resolvedTopLoss = dailyTopLoss && dailyTopLoss[1] < 0
+    ? dailyTopLoss
+    : dailyLpEntries.length
+      ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
+      : null
+
+  const weeklyLpByPuuid = new Map<string, number>()
+  for (const row of lpEventRows) {
+    const lpChange = typeof row.lp_delta === 'number' && Number.isFinite(row.lp_delta) ? row.lp_delta : null
+    const recordedAt = row.recorded_at ? new Date(row.recorded_at).getTime() : null
+    if (lpChange === null || recordedAt === null) continue
+    if (recordedAt < weekStartTs) continue
+    weeklyLpByPuuid.set(row.puuid, (weeklyLpByPuuid.get(row.puuid) ?? 0) + lpChange)
+  }
+
+  const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
+  const weeklyTopGain = weeklyLpEntries.length
+    ? weeklyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
+    : null
+  const weeklyTopLoss = weeklyLpEntries.length
+    ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
+    : null
+  const resolvedWeeklyTopLoss = weeklyTopLoss && weeklyTopLoss[1] < 0
+    ? weeklyTopLoss
+    : weeklyLpEntries.length
+      ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
+      : null
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-7xl px-4 py-8 lg:py-12 space-y-10 lg:space-y-12">
-        <TeamHeaderCard
-          name={lb.name}
-          description={lb.description}
-          slug={slug}
-          visibility={lb.visibility}
-          activeTab="overview"
-          lastUpdated={lastUpdatedIso}
-          cutoffs={cutoffs}
-          bannerUrl={lb.banner_url}
-        />
+      <div className="mx-auto w-full max-w-none px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
+        <div className="mx-auto w-full max-w-[1460px]">
+          <TeamHeaderCard
+            name={lb.name}
+            description={lb.description}
+            slug={slug}
+            visibility={lb.visibility}
+            activeTab="overview"
+            lastUpdated={lastUpdatedIso}
+            cutoffs={cutoffs}
+            bannerUrl={lb.banner_url}
+          />
+        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-start">
-          <aside className="lg:col-span-3 lg:sticky lg:top-6 order-2 lg:order-1">
+        <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,820px)_280px] gap-8 lg:gap-10 items-start justify-center">
+          <aside className="lg:sticky lg:top-6 order-2 lg:order-1">
             <div className="flex items-center gap-2 mb-6">
               <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
               <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
@@ -542,14 +623,131 @@ export default async function LeaderboardDetail({
               champMap={champMap}
               ddVersion={ddVersion}
               rankByPuuid={rankByPuuidRecord}
+              playerIconsByPuuid={playerIconsByPuuidRecord}
               participantsByMatch={participantsByMatchRecord}
               preloadedMatchData={preloadedMatchDataRecord}
             />
           </aside>
 
-          <div className="lg:col-span-9 order-1 lg:order-2 space-y-8 lg:space-y-10">
-            <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
+          <div className="order-1 lg:order-2 space-y-8 lg:space-y-10">
+            <div className="max-w-[820px] mx-auto">
+              <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
+            </div>
           </div>
+
+          <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
+            <div className="flex items-center gap-2 mb-6">
+              <div className="h-1 w-8 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 rounded-full shadow-sm" />
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Daily LP Movers</h3>
+            </div>
+            <div className="space-y-4">
+              {dailyTopGain ? (() => {
+                const player = playersByPuuidRecord[dailyTopGain[0]]
+                const iconId = playerIconsByPuuidRecord[dailyTopGain[0]]
+                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
+                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                return (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-4 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">Top Gainer</div>
+                    <div className="mt-2 flex items-center gap-2">
+                      {iconSrc ? (
+                        <img src={iconSrc} alt="" className="h-5 w-5 rounded-full border border-emerald-200 dark:border-emerald-400/40" />
+                      ) : null}
+                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
+                    </div>
+                    <div className="mt-1 text-sm font-black text-emerald-600 dark:text-emerald-300">+{Math.round(dailyTopGain[1])} LP</div>
+                  </div>
+                )
+              })() : (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                  No LP changes today yet.
+                </div>
+              )}
+
+              {resolvedTopLoss ? (() => {
+                const player = playersByPuuidRecord[resolvedTopLoss[0]]
+                const iconId = playerIconsByPuuidRecord[resolvedTopLoss[0]]
+                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
+                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                const isLoss = resolvedTopLoss[1] < 0
+                return (
+                  <div className={`rounded-2xl border px-4 py-4 shadow-sm ${
+                    isLoss
+                      ? 'border-rose-200 bg-rose-50/60 dark:border-rose-500/30 dark:bg-rose-500/10'
+                      : 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10'
+                  }`}>
+                    <div className={`text-[10px] font-black uppercase tracking-widest ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
+                      {isLoss ? 'Top Loser' : 'Least Gain'}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      {iconSrc ? (
+                        <img src={iconSrc} alt="" className={`h-5 w-5 rounded-full border ${isLoss ? 'border-rose-200 dark:border-rose-400/40' : 'border-amber-200 dark:border-amber-400/40'}`} />
+                      ) : null}
+                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
+                    </div>
+                    <div className={`mt-1 text-sm font-black ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
+                      {resolvedTopLoss[1] >= 0 ? '+' : ''}{Math.round(resolvedTopLoss[1])} LP
+                    </div>
+                  </div>
+                )
+              })() : null}
+
+              <div className="pt-2">
+                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Weekly Movers</div>
+              </div>
+
+              {weeklyTopGain ? (() => {
+                const player = playersByPuuidRecord[weeklyTopGain[0]]
+                const iconId = playerIconsByPuuidRecord[weeklyTopGain[0]]
+                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
+                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                return (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-4 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">Top Gainer</div>
+                    <div className="mt-2 flex items-center gap-2">
+                      {iconSrc ? (
+                        <img src={iconSrc} alt="" className="h-5 w-5 rounded-full border border-emerald-200 dark:border-emerald-400/40" />
+                      ) : null}
+                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
+                    </div>
+                    <div className="mt-1 text-sm font-black text-emerald-600 dark:text-emerald-300">+{Math.round(weeklyTopGain[1])} LP</div>
+                  </div>
+                )
+              })() : (
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+                  No weekly LP changes yet.
+                </div>
+              )}
+
+              {resolvedWeeklyTopLoss ? (() => {
+                const player = playersByPuuidRecord[resolvedWeeklyTopLoss[0]]
+                const iconId = playerIconsByPuuidRecord[resolvedWeeklyTopLoss[0]]
+                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
+                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                const isLoss = resolvedWeeklyTopLoss[1] < 0
+                return (
+                  <div className={`rounded-2xl border px-4 py-4 shadow-sm ${
+                    isLoss
+                      ? 'border-rose-200 bg-rose-50/60 dark:border-rose-500/30 dark:bg-rose-500/10'
+                      : 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10'
+                  }`}>
+                    <div className={`text-[10px] font-black uppercase tracking-widest ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
+                      {isLoss ? 'Top Loser' : 'Least Gain'}
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      {iconSrc ? (
+                        <img src={iconSrc} alt="" className={`h-5 w-5 rounded-full border ${isLoss ? 'border-rose-200 dark:border-rose-400/40' : 'border-amber-200 dark:border-amber-400/40'}`} />
+                      ) : null}
+                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
+                    </div>
+                    <div className={`mt-1 text-sm font-black ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
+                      {resolvedWeeklyTopLoss[1] >= 0 ? '+' : ''}{Math.round(resolvedWeeklyTopLoss[1])} LP
+                    </div>
+                  </div>
+                )
+              })() : null}
+            </div>
+          </aside>
         </div>
       </div>
     </main>

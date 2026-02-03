@@ -1,13 +1,18 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatRank } from "@/lib/rankFormat"
 
 // --- Types ---
 type PlayerSummary = {
   puuid: string
   name: string
+  tagLine?: string | null
   profileIconUrl: string | null
+  rankTier?: string | null
+  rankDivision?: string | null
+  lp?: number | null
+  order?: number
 }
 
 type LpPoint = {
@@ -40,10 +45,11 @@ type TooltipState = {
   preferBelow: boolean
 }
 
+
 // --- Constants ---
 const WIDTH = 960
-const HEIGHT = 420
-const PADDING = { top: 40, right: 30, bottom: 50, left: 110 }
+const HEIGHT = 620
+const PADDING = { top: 40, right: 0, bottom: 50, left: 0 }
 const INNER_WIDTH = WIDTH - PADDING.left - PADDING.right
 const INNER_HEIGHT = HEIGHT - PADDING.top - PADDING.bottom
 
@@ -72,6 +78,29 @@ function formatDelta(delta: number) {
   if (rounded === 0) return "0"
   const sign = rounded > 0 ? "+" : "-"
   return `${sign} ${Math.abs(rounded)}`
+}
+
+function formatRankShort(tier?: string | null, division?: string | null) {
+  if (!tier) return "UR"
+  const normalizedTier = tier.toUpperCase()
+  const tierMap: Record<string, string> = {
+    IRON: "I",
+    BRONZE: "B",
+    SILVER: "S",
+    GOLD: "G",
+    PLATINUM: "P",
+    EMERALD: "E",
+    DIAMOND: "D",
+    MASTER: "M",
+    GRANDMASTER: "GM",
+    CHALLENGER: "C",
+  }
+  const tierShort = tierMap[normalizedTier] ?? normalizedTier[0] ?? "U"
+  if (["MASTER", "GRANDMASTER", "CHALLENGER"].includes(normalizedTier)) return tierShort
+  const divMap: Record<string, string> = { I: "1", II: "2", III: "3", IV: "4" }
+  const div = division?.toUpperCase() ?? ""
+  const divShort = divMap[div] ?? div
+  return divShort ? `${tierShort}${divShort}` : tierShort
 }
 
 function baseMasterLadder() {
@@ -280,17 +309,43 @@ function smartSampleByGames(points: NormalizedPoint[]) {
     .map((i) => points[i])
 }
 
-function buildSmoothPath(points: Array<{ x: number; y: number }>) {
+function buildSharpPath(points: Array<{ x: number; y: number }>) {
   if (points.length === 0) return ""
-  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`
-  const commands = [`M ${points[0].x} ${points[0].y}`]
-  for (let i = 0; i < points.length - 1; i += 1) {
-    const current = points[i]
-    const next = points[i + 1]
-    const midX = (current.x + next.x) / 2
-    commands.push(`C ${midX} ${current.y}, ${midX} ${next.y}, ${next.x} ${next.y}`)
+  return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
+}
+
+function buildColoredLineSegments(
+  points: Array<{ x: number; y: number; point: NormalizedPoint }>,
+  getColor: (point: NormalizedPoint) => string
+) {
+  if (points.length === 0) return []
+  const segments: Array<{ d: string; color: string }> = []
+
+  let currentColor = getColor(points[0].point)
+  let currentPath = `M ${points[0].x} ${points[0].y}`
+
+  for (let i = 1; i < points.length; i += 1) {
+    const next = points[i]
+    const nextColor = getColor(next.point)
+    currentPath += ` L ${next.x} ${next.y}`
+
+    if (nextColor !== currentColor) {
+      segments.push({ d: currentPath, color: currentColor })
+      currentColor = nextColor
+      currentPath = `M ${next.x} ${next.y}`
+    }
   }
-  return commands.join(" ")
+
+  segments.push({ d: currentPath, color: currentColor })
+  return segments
+}
+
+function buildAreaPath(points: Array<{ x: number; y: number }>, baseY: number) {
+  if (points.length === 0) return ""
+  const first = points[0]
+  const last = points[points.length - 1]
+  const line = points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
+  return `${line} L ${last.x} ${baseY} L ${first.x} ${baseY} Z`
 }
 
 function describeProgression(first: NormalizedPoint, last: NormalizedPoint) {
@@ -309,13 +364,20 @@ export default function LeaderboardGraphClient({
   cutoffs: RankCutoffs
 }) {
   const [selectedPuuid, setSelectedPuuid] = useState(players[0]?.puuid ?? "")
+  const [showAll, setShowAll] = useState(false)
+  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [plotButtonStyle, setPlotButtonStyle] = useState<React.CSSProperties | null>(null)
+  const [plotLabelStyle, setPlotLabelStyle] = useState<React.CSSProperties | null>(null)
+  const clipId = useId().replace(/:/g, "")
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const svgRef = useRef<SVGSVGElement | null>(null)
 
   useEffect(() => {
     if (!selectedPuuid && players[0]?.puuid) setSelectedPuuid(players[0].puuid)
   }, [players, selectedPuuid])
+
 
   const playersByPuuid = useMemo(() => new Map(players.map((p) => [p.puuid, p])), [players])
 
@@ -375,26 +437,34 @@ export default function LeaderboardGraphClient({
 
   const rawFiltered = useMemo(() => (selectedPuuid ? pointsByPlayer.get(selectedPuuid) ?? [] : []), [pointsByPlayer, selectedPuuid])
 
-  // Smart sampling: plot by games-played thresholds
+  const filteredWithLp = useMemo(() => rawFiltered.filter((p) => p.lp !== null && p.lp !== undefined), [rawFiltered])
+  const last30Raw = useMemo(() => (filteredWithLp.length > 30 ? filteredWithLp.slice(-30) : filteredWithLp), [filteredWithLp])
+  const visibleRaw = showAll ? rawFiltered : last30Raw
+
+  // Smart sampling only when showing full history; keep all last-30 points intact.
   const filteredPoints = useMemo(() => {
-    return smartSampleByGames(rawFiltered)
-  }, [rawFiltered])
+    return showAll ? smartSampleByGames(visibleRaw) : visibleRaw
+  }, [showAll, visibleRaw])
+
+  const currentRankContext = useMemo(() => {
+    if (filteredPoints.length === 0) return null
+    const midPoint = filteredPoints[Math.floor(filteredPoints.length / 2)]
+    const tier = getTierWord(midPoint.tier ?? "")
+    const div = (midPoint.rank ?? "").toUpperCase()
+    const tierIndex = TIER_ORDER.indexOf(tier as any)
+    const divIndex = DIV_ORDER.indexOf(div as any)
+    return { tier, div, tierIndex, divIndex }
+  }, [filteredPoints])
 
   const chart = useMemo(() => {
     if (filteredPoints.length === 0) return null
-    const baseMaster = baseMasterLadder()
-    const gmFloor = baseMaster + cutoffs.grandmaster
-    const challFloor = baseMaster + cutoffs.challenger
-
     const ladderValues = filteredPoints.map((p) => p.ladderValue)
-    const rawMin = Math.min(...ladderValues, gmFloor, challFloor)
-    const rawMax = Math.max(...ladderValues, gmFloor, challFloor)
-
-    const min = rawMin - 20
-    const max = rawMax + 20
-
-    return { min, max, range: max - min || 1 }
-  }, [cutoffs, filteredPoints])
+    const rawMin = Math.min(...ladderValues)
+    const rawMax = Math.max(...ladderValues)
+    const min = rawMin - 50
+    const max = rawMax + 50
+    return { min, max, range: Math.max(max - min, 1) }
+  }, [filteredPoints])
 
   const firstMatch = filteredPoints.length > 0 ? filteredPoints[0].totalGames : 1
   const lastMatch = filteredPoints.length > 0 ? filteredPoints[filteredPoints.length - 1].totalGames : 1
@@ -402,13 +472,17 @@ export default function LeaderboardGraphClient({
 
   const plotPoints = useMemo(() => {
     if (!chart || filteredPoints.length === 0) return []
+    const useIndexSpacing = !showAll
+    const maxIndex = Math.max(filteredPoints.length - 1, 1)
     return filteredPoints.map((point, idx) => {
-      const normalizedX = (point.totalGames - firstMatch) / matchRange
+      const normalizedX = useIndexSpacing ? idx / maxIndex : (point.totalGames - firstMatch) / matchRange
       const x = PADDING.left + normalizedX * INNER_WIDTH
       const y = PADDING.top + INNER_HEIGHT - ((point.ladderValue - chart.min) / chart.range) * INNER_HEIGHT
       return { x, y, point, idx }
     })
-  }, [chart, filteredPoints, firstMatch, matchRange])
+  }, [chart, filteredPoints, firstMatch, matchRange, showAll])
+
+  const activePoint = hoveredIdx !== null ? plotPoints.find((p) => p.idx === hoveredIdx) ?? null : null
 
   const cutoffPositions = useMemo(() => {
     if (!chart) return null
@@ -431,13 +505,36 @@ export default function LeaderboardGraphClient({
     }
   }, [chart, cutoffs])
 
+  const gmOffset = useMemo(() => {
+    if (!cutoffPositions) return 0.5
+    const pct = (cutoffPositions.gmY - PADDING.top) / INNER_HEIGHT
+    return clamp(pct, 0, 1)
+  }, [cutoffPositions])
+
   const ladderTicks = useMemo(() => {
     if (!chart) return []
-    return buildLadderTicksAdaptive(chart.min, chart.max, cutoffs)
-  }, [chart, cutoffs])
+    const all = buildLadderTicksAdaptive(chart.min, chart.max, cutoffs)
+    if (filteredPoints.length === 0) return all
+    return all
+  }, [chart, cutoffs, filteredPoints])
 
   const xTicks = useMemo(() => {
     if (filteredPoints.length === 0) return []
+    if (!showAll) {
+      const tickCount = Math.min(6, filteredPoints.length)
+      const maxIndex = Math.max(filteredPoints.length - 1, 1)
+      const ticks = Array.from({ length: tickCount }, (_, idx) => {
+        const normalized = tickCount === 1 ? 0 : idx / (tickCount - 1)
+        const pointIndex = Math.round(normalized * maxIndex)
+        const point = filteredPoints[pointIndex]
+        const x = PADDING.left + (pointIndex / maxIndex) * INNER_WIDTH
+        return { x, label: point?.totalGames ?? 0 }
+      })
+      const unique = new Map<number, { x: number; label: number }>()
+      ticks.forEach((t) => unique.set(t.label, t))
+      return Array.from(unique.values()).sort((a, b) => a.label - b.label)
+    }
+
     const tickCount = Math.min(6, matchRange + 1)
     const step = matchRange / (tickCount - 1 || 1)
 
@@ -452,9 +549,26 @@ export default function LeaderboardGraphClient({
     const unique = new Map<number, { x: number; label: number }>()
     ticks.forEach((t) => unique.set(t.label, t))
     return Array.from(unique.values()).sort((a, b) => a.label - b.label)
-  }, [filteredPoints.length, firstMatch, lastMatch, matchRange])
+  }, [filteredPoints, firstMatch, lastMatch, matchRange, showAll])
 
-  const linePath = useMemo(() => buildSmoothPath(plotPoints), [plotPoints])
+  const normalizedTierForPoint = useMemo(() => {
+    const baseMaster = baseMasterLadder()
+    const gmFloor = baseMaster + cutoffs.grandmaster
+    const challFloor = baseMaster + cutoffs.challenger
+    return (point: NormalizedPoint) => {
+      const tier = getTierWord(point.tier ?? "")
+      if (tier === "CHALLENGER" && point.ladderValue < challFloor) return "MASTER"
+      if (tier === "GRANDMASTER" && point.ladderValue < gmFloor) return "MASTER"
+      return tier || "UNRANKED"
+    }
+  }, [cutoffs])
+
+  const colorForLinePoint = useMemo(() => {
+    return (point: NormalizedPoint) => colorForPoint({ tier: normalizedTierForPoint(point), rank: point.rank })
+  }, [normalizedTierForPoint])
+
+  const linePath = useMemo(() => buildSharpPath(plotPoints), [plotPoints])
+  const lineSegments = useMemo(() => buildColoredLineSegments(plotPoints, colorForLinePoint), [plotPoints, colorForLinePoint])
   const areaPath = useMemo(() => {
     if (plotPoints.length === 0) return ""
     const baseY = PADDING.top + INNER_HEIGHT
@@ -462,6 +576,45 @@ export default function LeaderboardGraphClient({
     const last = plotPoints[plotPoints.length - 1]
     return `${linePath} L ${last.x} ${baseY} L ${first.x} ${baseY} Z`
   }, [plotPoints, linePath])
+  const tierBands = useMemo(() => {
+    if (!chart) return [] as Array<{ y: number; height: number; color: string }>
+    const bands: Array<{ min: number; max: number; color: string }> = []
+    const baseMaster = baseMasterLadder()
+
+    for (let tierIndex = 0; tierIndex < TIER_ORDER.length; tierIndex += 1) {
+      const tier = TIER_ORDER[tierIndex]
+      if (tierIndex <= TIER_ORDER.indexOf("DIAMOND")) {
+        bands.push({
+          min: tierIndex * 400,
+          max: (tierIndex + 1) * 400,
+          color: TIER_COLORS[tier],
+        })
+      }
+    }
+
+    bands.push({ min: baseMaster, max: baseMaster + cutoffs.grandmaster, color: TIER_COLORS.MASTER })
+    bands.push({
+      min: baseMaster + cutoffs.grandmaster,
+      max: baseMaster + cutoffs.challenger,
+      color: TIER_COLORS.GRANDMASTER,
+    })
+    bands.push({
+      min: baseMaster + cutoffs.challenger,
+      max: baseMaster + cutoffs.challenger + 1000,
+      color: TIER_COLORS.CHALLENGER,
+    })
+
+    return bands
+      .map((band) => {
+        const clampedMin = Math.max(band.min, chart.min)
+        const clampedMax = Math.min(band.max, chart.max)
+        if (clampedMax <= clampedMin) return null
+        const yTop = PADDING.top + INNER_HEIGHT - ((clampedMax - chart.min) / chart.range) * INNER_HEIGHT
+        const yBottom = PADDING.top + INNER_HEIGHT - ((clampedMin - chart.min) / chart.range) * INNER_HEIGHT
+        return { y: yTop, height: yBottom - yTop, color: band.color }
+      })
+      .filter((band): band is { y: number; height: number; color: string } => band !== null)
+  }, [chart, cutoffs])
 
   // Tooltip positioning (pixel-correct)
   const setTooltipFromEvent = (p: NormalizedPoint, idx: number, e: React.MouseEvent) => {
@@ -472,6 +625,35 @@ export default function LeaderboardGraphClient({
     const y = e.clientY - rect.top
     const preferBelow = y < 120
     setTooltip({ point: p, idx, x, y, preferBelow })
+  }
+
+  const handleChartHover = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (plotPoints.length === 0) return
+    const wrap = wrapRef.current
+    if (!wrap) return
+    const wrapRect = wrap.getBoundingClientRect()
+    const svgRect = e.currentTarget.getBoundingClientRect()
+    const scaleX = WIDTH / Math.max(svgRect.width, 1)
+    const x = (e.clientX - svgRect.left) * scaleX
+    const chartX = clamp(x, PADDING.left, PADDING.left + INNER_WIDTH)
+    let nearest = plotPoints[0]
+    for (let i = 0; i < plotPoints.length; i += 1) {
+      const left = i === 0 ? PADDING.left : (plotPoints[i - 1].x + plotPoints[i].x) / 2
+      const right =
+        i === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plotPoints[i].x + plotPoints[i + 1].x) / 2
+      if (chartX >= left && chartX <= right) {
+        nearest = plotPoints[i]
+        break
+      }
+    }
+    const y = e.clientY - wrapRect.top
+    setHoveredIdx(nearest.idx)
+    setTooltip({ point: nearest.point, idx: nearest.idx, x: chartX, y, preferBelow: y < 120 })
+  }
+
+  const handleChartLeave = () => {
+    setHoveredIdx(null)
+    setTooltip(null)
   }
 
   const summary = useMemo(() => {
@@ -487,7 +669,25 @@ export default function LeaderboardGraphClient({
   }, [rawFiltered])
 
   const activePlayer = playersByPuuid.get(selectedPuuid)
-  const lineColor = "#2563eb"
+  const latestPoint = rawFiltered.length > 0 ? rawFiltered[rawFiltered.length - 1] : null
+  const winRateSummary = useMemo(() => {
+    if (!latestPoint) return null
+    const wins = latestPoint.wins ?? 0
+    const losses = latestPoint.losses ?? 0
+    const games = wins + losses
+    if (!games) return { wins, losses, games: 0, rate: 0 }
+    const rate = (wins / games) * 100
+    return { wins, losses, games, rate }
+  }, [latestPoint])
+  const lineColor = "#a78bfa"
+  const activeSlice = useMemo(() => {
+    if (!activePoint) return null
+    const idx = activePoint.idx
+    const left = idx === 0 ? PADDING.left : (plotPoints[idx - 1].x + plotPoints[idx].x) / 2
+    const right =
+      idx === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plotPoints[idx].x + plotPoints[idx + 1].x) / 2
+    return { left, right, width: right - left }
+  }, [activePoint, plotPoints])
 
   // Point radius: smaller when many points
   const pointRadius = plotPoints.length > 150 ? 4.5 : 6
@@ -504,205 +704,426 @@ export default function LeaderboardGraphClient({
 
     const cur = filteredPoints[tooltip.idx]
     const prev = filteredPoints[tooltip.idx - 1]
-    const lpChange = prev ? cur.lpValue - prev.lpValue : 0
+    const lpChange = prev ? cur.ladderValue - prev.ladderValue : 0
     const gamesSpan = prev ? cur.totalGames - prev.totalGames : 0
 
     const style = tooltip.preferBelow
-      ? { left: x, top: y + 14, transform: "translateX(-50%)" }
-      : { left: x, top: y - 12, transform: "translate(-50%, -100%)" }
+      ? { left: x - 14, top: y + 14, transform: "translateX(-100%)" }
+      : { left: x - 14, top: y - 12, transform: "translate(-100%, -100%)" }
 
     return (
       <div
-        className="pointer-events-none absolute z-10 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-lg"
+        className="pointer-events-none absolute z-10 rounded-2xl border border-slate-800/70 bg-slate-950/85 px-3 py-2 text-xs text-slate-200 shadow-lg backdrop-blur"
         style={style as any}
       >
-        <div className="font-semibold text-slate-900">
+        <div className="font-semibold text-slate-100">
           {cur.totalGames === 0 ? "Placement" : `Game #${cur.totalGames}`}
         </div>
-        <div className="mt-1 text-slate-600">
-          {formatRank(cur.tier, cur.rank, cur.lp)}
+        <div className="mt-1 text-slate-400">
+          {formatRank(normalizedTierForPoint(cur), cur.rank, cur.lp)}
         </div>
-        <div className={`mt-1 ${lpChange >= 0 ? "text-emerald-600" : "text-red-600"}`}>
+        <div className={`mt-1 ${lpChange >= 0 ? "text-emerald-400" : "text-red-400"}`}>
           {formatDelta(lpChange)} LP • {cur.lpValue} LP
         </div>
       </div>
     )
   })()
 
+  const handleShowAll = () => setShowAll(true)
+  const handleReset = () => setShowAll(false)
+  const matchesAgo = showAll ? matchRange : filteredPoints.length
+  const peakPoint = useMemo(() => {
+    if (rawFiltered.length === 0) return null
+    const peakRaw = rawFiltered.reduce((best, cur) => (cur.ladderValue > best.ladderValue ? cur : best), rawFiltered[0])
+    if (!chart) return null
+    const normalizedX = showAll
+      ? (peakRaw.totalGames - firstMatch) / matchRange
+      : Math.max(0, rawFiltered.length - 1) === 0
+        ? 0
+        : rawFiltered.indexOf(peakRaw) / Math.max(rawFiltered.length - 1, 1)
+    const x = PADDING.left + normalizedX * INNER_WIDTH
+    const y = PADDING.top + INNER_HEIGHT - ((peakRaw.ladderValue - chart.min) / chart.range) * INNER_HEIGHT
+    return { x, y, point: peakRaw }
+  }, [chart, firstMatch, matchRange, rawFiltered, showAll])
+  const peakSummary = useMemo(() => {
+    if (!peakPoint) return null
+    const tier = normalizedTierForPoint(peakPoint.point)
+    const peakColor = colorForPoint({ tier, rank: peakPoint.point.rank })
+    return {
+      short: formatRankShort(tier, peakPoint.point.rank),
+      lp: peakPoint.point.lpValue,
+      color: peakColor,
+    }
+  }, [normalizedTierForPoint, peakPoint])
+  const currentRankColor = useMemo(() => {
+    if (!activePlayer?.rankTier) return "#94a3b8"
+    return colorForPoint({ tier: activePlayer.rankTier, rank: activePlayer.rankDivision ?? null })
+  }, [activePlayer])
+  useEffect(() => {
+    const wrap = wrapRef.current
+    const svg = svgRef.current
+    if (!wrap || !svg) return
+
+    const update = () => {
+      const wrapRect = wrap.getBoundingClientRect()
+      const svgRect = svg.getBoundingClientRect()
+      const scaleX = svgRect.width / WIDTH
+      const scaleY = svgRect.height / HEIGHT
+      const plotLeft = svgRect.left - wrapRect.left + PADDING.left * scaleX
+      const plotRight = svgRect.left - wrapRect.left + (PADDING.left + INNER_WIDTH) * scaleX
+      const plotBottom = svgRect.top - wrapRect.top + (PADDING.top + INNER_HEIGHT) * scaleY
+      setPlotButtonStyle({ left: plotRight - 2, top: plotBottom - 2, transform: "translate(-100%, -100%)" })
+      setPlotLabelStyle({ left: plotLeft, top: plotBottom + 8, width: plotRight - plotLeft })
+    }
+
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(wrap)
+    window.addEventListener("resize", update)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener("resize", update)
+    }
+  }, [])
+
   return (
-    <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-      <div className="space-y-1">
-        <h2 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">LP Graph by Player</h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400">Rank progression by total games played</p>
-      </div>
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden dark:border-slate-800/80 dark:bg-slate-900/80 dark:shadow-[0_30px_80px_-40px_rgba(0,0,0,0.75)]">
+      <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="p-4 lg:border-r border-slate-200 dark:border-slate-800/80">
+          <div className="mb-4 flex items-center gap-2">
+            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
+            <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Leaderboard</h2>
+          </div>
+          <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70">
+            {players.map((player, idx) => {
+              const isActive = player.puuid === selectedPuuid
+              const lpLabel = player.lp ?? 0
+              const tier = (player.rankTier ?? "").toUpperCase()
+              const div = (player.rankDivision ?? "").toUpperCase()
+              const tierMap: Record<string, string> = {
+                IRON: "I",
+                BRONZE: "B",
+                SILVER: "S",
+                GOLD: "G",
+                PLATINUM: "P",
+                EMERALD: "E",
+                DIAMOND: "D",
+                MASTER: "M",
+                GRANDMASTER: "GM",
+                CHALLENGER: "C",
+              }
+              const rankAbbr = `${tierMap[tier] ?? ""}${div ? div.replace("IV", "4").replace("III", "3").replace("II", "2").replace("I", "1") : ""}`.trim()
+              return (
+                <button
+                  key={player.puuid}
+                  type="button"
+                  onClick={() => setSelectedPuuid(player.puuid)}
+                  className={`w-full px-1.5 py-2 text-left transition ${
+                    isActive
+                      ? "bg-blue-500/10"
+                      : "hover:bg-slate-100/80 dark:hover:bg-slate-800/60"
+                  } [direction:ltr]`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-6 text-right text-[11px] font-semibold ${
+                      isActive ? "text-blue-600 dark:text-blue-400" : "text-slate-500"
+                    }`}>
+                      {player.order ?? idx + 1}
+                    </div>
+                    <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-slate-100">
+                      {player.name}
+                    </div>
+                    <div className="flex items-center gap-2 text-[12px] font-semibold tabular-nums text-slate-600 dark:text-slate-300">
+                      {rankAbbr ? <span className="text-[11px] text-slate-500 dark:text-slate-500">{rankAbbr}</span> : null}
+                      <span>{lpLabel}</span>
+                    </div>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        </aside>
 
-      <div className="mt-6">
-        <div className="flex flex-wrap items-center gap-3">
-          {players.map((player) => {
-            const isActive = player.puuid === selectedPuuid
-            return (
-              <button
-                key={player.puuid}
-                type="button"
-                onClick={() => setSelectedPuuid(player.puuid)}
-                className={`rounded-full border px-4 py-1.5 text-xs font-semibold transition ${
-                  isActive
-                    ? "border-blue-500 bg-blue-500 text-white shadow-sm"
-                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600"
-                }`}
-              >
-                {player.name}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      <div
-        ref={wrapRef}
-        className="relative mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950"
-      >
-        {chart ? (
-          <>
-            <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="h-auto w-full">
+        <div className="bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+          <div className="p-0">
+            <div
+              ref={wrapRef}
+              className="relative overflow-hidden bg-transparent pt-16"
+            >
+              {activePlayer ? (
+                <div className="absolute left-6 top-4 flex items-center gap-4">
+                  {activePlayer.profileIconUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={activePlayer.profileIconUrl}
+                      alt=""
+                      className="h-16 w-16 rounded-full border border-slate-200 shadow-[0_14px_36px_-18px_rgba(0,0,0,0.25)] dark:border-slate-800 dark:shadow-[0_14px_36px_-18px_rgba(0,0,0,0.9)]"
+                    />
+                  ) : (
+                    <div className="h-16 w-16 rounded-full bg-slate-200 dark:bg-slate-800" />
+                  )}
+                  <div className="space-y-1 text-xs">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      <span className="font-semibold text-slate-500 dark:text-slate-400">#{activePlayer.order ?? 0}</span>{" "}
+                      {activePlayer.name}
+                      {activePlayer.tagLine ? (
+                        <span className="text-slate-400 dark:text-slate-500 font-medium"> #{activePlayer.tagLine}</span>
+                      ) : null}
+                    </div>
+                    <div className="text-slate-600 dark:text-slate-300">
+                      <span className="font-semibold" style={{ color: currentRankColor }}>
+                        {formatRank(activePlayer.rankTier, activePlayer.rankDivision, activePlayer.lp)}
+                      </span>
+                      {peakSummary ? (
+                        <span className="text-slate-500 dark:text-slate-400">
+                          {" "}|{" "}
+                          <span style={{ color: peakSummary.color }}>{peakSummary.short}</span> {peakSummary.lp} peak lp
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="text-slate-500 dark:text-slate-400">
+                      {winRateSummary
+                        ? `${winRateSummary.rate.toFixed(0)}% winrate | ${winRateSummary.games} games`
+                        : "No games"}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {chart ? (
+                <>
+            <svg
+              ref={svgRef}
+              viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+              className="h-auto w-full"
+              onMouseMove={handleChartHover}
+              onMouseLeave={handleChartLeave}
+            >
               <rect
                 x={PADDING.left}
                 y={PADDING.top}
                 width={INNER_WIDTH}
                 height={INNER_HEIGHT}
-                rx={16}
-                className="fill-white dark:fill-slate-900"
+                rx={0}
+                className="fill-white dark:fill-slate-950"
               />
 
-              {/* Subtle Master+ bands (kept clean; not rainbow everywhere) */}
-              {cutoffPositions ? (
-                <>
+              <defs>
+                <clipPath id={`plot-clip-${clipId}`}>
                   <rect
                     x={PADDING.left}
-                    y={cutoffPositions.topY}
+                    y={PADDING.top}
                     width={INNER_WIDTH}
-                    height={Math.max(0, cutoffPositions.highY - cutoffPositions.topY)}
-                    fill={lighten(TIER_COLORS.CHALLENGER, 0.75)}
-                    opacity={0.18}
+                    height={INNER_HEIGHT}
+                    rx={0}
                   />
-                  <rect
-                    x={PADDING.left}
-                    y={cutoffPositions.highY}
-                    width={INNER_WIDTH}
-                    height={Math.max(0, cutoffPositions.lowY - cutoffPositions.highY)}
-                    fill={lighten(TIER_COLORS.GRANDMASTER, 0.78)}
-                    opacity={0.12}
-                  />
-                  <rect
-                    x={PADDING.left}
-                    y={cutoffPositions.lowY}
-                    width={INNER_WIDTH}
-                    height={Math.max(0, cutoffPositions.bottomY - cutoffPositions.lowY)}
-                    fill={lighten(TIER_COLORS.MASTER, 0.84)}
-                    opacity={0.10}
-                  />
-                </>
-              ) : null}
+                </clipPath>
+                {areaPath ? (
+                  <clipPath id={`area-clip-${clipId}`}>
+                    <path d={areaPath} />
+                  </clipPath>
+                ) : null}
+                <linearGradient id={`plot-fill-${clipId}`} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#a78bfa" stopOpacity={0.28} />
+                  <stop offset={`${gmOffset * 100}%`} stopColor="#a78bfa" stopOpacity={0.22} />
+                  <stop offset={`${gmOffset * 100}%`} stopColor="#38bdf8" stopOpacity={0.16} />
+                  <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.14} />
+                </linearGradient>
+              </defs>
+              <g clipPath={`url(#plot-clip-${clipId})`}>
+                {areaPath ? (
+                  <g clipPath={`url(#area-clip-${clipId})`}>
+                    {tierBands.map((band, idx) => (
+                      <rect
+                        key={`tier-band-${idx}`}
+                        x={PADDING.left}
+                        y={band.y}
+                        width={INNER_WIDTH}
+                        height={band.height}
+                        fill={band.color}
+                        opacity={0.22}
+                      />
+                    ))}
+                  </g>
+                ) : null}
+                {/* Subtle Master+ bands (kept clean; not rainbow everywhere) */}
+                {cutoffPositions ? null : null}
 
-              {ladderTicks.map((tick) => {
-                const y = PADDING.top + INNER_HEIGHT - ((tick.value - chart.min) / chart.range) * INNER_HEIGHT
-                const labelColor = colorForTickLabel(tick.label)
-                return (
-                  <g key={`${tick.label}-${tick.value}`}>
+                {ladderTicks.map((tick) => {
+                  const y = PADDING.top + INNER_HEIGHT - ((tick.value - chart.min) / chart.range) * INNER_HEIGHT
+                  const labelColor = colorForTickLabel(tick.label)
+                  return (
+                    <g key={`${tick.label}-${tick.value}`}>
+                      <text
+                        x={PADDING.left + 10}
+                        y={y - 6}
+                        textAnchor="start"
+                        className="text-[11px] font-semibold"
+                        style={{ fill: labelColor, opacity: 0.85 }}
+                      >
+                        {tick.label}
+                      </text>
+                    </g>
+                  )
+                })}
+
+                {xTicks.map((tick, idx) => (
+                  <g key={`${tick.label}-${idx}`}></g>
+                ))}
+
+                {chart ? (
+                  (() => {
+                    const lines: Array<{ value: number; label: string }> = []
+                    const start = Math.floor(chart.min / 50) * 50
+                    const end = Math.ceil(chart.max / 50) * 50
+                    const baseMaster = baseMasterLadder()
+                    const labelForValue = (value: number) => {
+                      if (value >= baseMaster) {
+                        return String(Math.max(0, Math.round(value - baseMaster)))
+                      }
+                      return ""
+                    }
+
+                    for (let value = start; value <= end; value += 50) {
+                      lines.push({ value, label: labelForValue(value) })
+                    }
+
+                    return lines.map((line, idx) => {
+                      const y = PADDING.top + INNER_HEIGHT - ((line.value - chart.min) / chart.range) * INNER_HEIGHT
+                      return (
+                        <g key={`lp-grid-${line.value}-${idx}`}>
+                          <line
+                            x1={PADDING.left}
+                            x2={PADDING.left + INNER_WIDTH}
+                            y1={y}
+                            y2={y}
+                            className="stroke-slate-200/70 dark:stroke-slate-800/70"
+                          />
+                          {line.label ? (
+                            <text
+                              x={PADDING.left + 8}
+                              y={y + 4}
+                              textAnchor="start"
+                              className="text-[10px] font-semibold fill-slate-400 dark:fill-slate-500"
+                            >
+                              {line.label}
+                            </text>
+                          ) : null}
+                        </g>
+                      )
+                    })
+                  })()
+                ) : null}
+
+                {areaPath ? <path d={areaPath} fill={`url(#plot-fill-${clipId})`} opacity={0.9} /> : null}
+                {lineSegments.length > 0
+                  ? lineSegments.map((seg, idx) => (
+                      <path key={`line-seg-${idx}`} d={seg.d} fill="none" stroke={seg.color || lineColor} strokeWidth={2.5} />
+                    ))
+                  : null}
+
+                {peakPoint ? (
+                  <g>
                     <line
                       x1={PADDING.left}
-                      x2={WIDTH - PADDING.right}
-                      y1={y}
-                      y2={y}
-                      className="stroke-slate-200 dark:stroke-slate-800"
+                      x2={PADDING.left + INNER_WIDTH}
+                      y1={peakPoint.y}
+                      y2={peakPoint.y}
+                      stroke="rgba(148, 163, 184, 0.45)"
+                      strokeDasharray="4 4"
                     />
                     <text
-                      x={PADDING.left - 12}
-                      y={y + 4}
+                      x={PADDING.left + INNER_WIDTH - 4}
+                      y={peakPoint.y - 6}
                       textAnchor="end"
-                      className="text-[10px] font-semibold"
-                      style={{ fill: labelColor, opacity: 0.9 }}
+                      className="text-[11px] font-semibold"
+                      fill="rgba(148, 163, 184, 0.9)"
                     >
-                      {tick.label}
+                      {formatRank(normalizedTierForPoint(peakPoint.point), peakPoint.point.rank, peakPoint.point.lp)} • Peak
                     </text>
                   </g>
-                )
-              })}
+                ) : null}
 
+                {/* Tier-colored points (all tiers, including iron) */}
+                {plotPoints.map((plot, idx) => {
+                  const x0 = idx === 0 ? PADDING.left : (plotPoints[idx - 1].x + plot.x) / 2
+                  const x1 = idx === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plot.x + plotPoints[idx + 1].x) / 2
+                  return (
+                    <rect
+                      key={`hover-${plot.idx}`}
+                      x={x0}
+                      y={PADDING.top}
+                      width={Math.max(4, x1 - x0)}
+                      height={INNER_HEIGHT}
+                      fill="transparent"
+                    />
+                  )
+                })}
 
-              {xTicks.map((tick, idx) => (
-                <g key={`${tick.label}-${idx}`}>
-                  <line
-                    x1={tick.x}
-                    x2={tick.x}
-                    y1={PADDING.top}
-                    y2={PADDING.top + INNER_HEIGHT}
-                    className="stroke-slate-100 dark:stroke-slate-900"
-                  />
-                  <text
-                    x={tick.x}
-                    y={HEIGHT - 16}
-                    textAnchor="middle"
-                    className="fill-slate-400 text-[10px] font-semibold dark:fill-slate-500"
-                  >
-                    {tick.label}
-                  </text>
-                </g>
-              ))}
-
-              {areaPath ? <path d={areaPath} fill={lineColor} opacity={0.10} /> : null}
-              {linePath ? <path d={linePath} fill="none" stroke={lineColor} strokeWidth={2.5} /> : null}
-
-              {/* Tier-colored points (all tiers, including iron) */}
-              {plotPoints.map((plot) => {
-                const c = colorForPoint(plot.point)
-                return (
-                  <circle
-                    key={`point-${plot.idx}`}
-                    cx={plot.x}
-                    cy={plot.y}
-                    r={pointRadius}
-                    fill={c}
-                    stroke="white"
-                    strokeWidth={1.5}
-                    onMouseEnter={(e) => setTooltipFromEvent(plot.point, plot.idx, e)}
-                    onMouseMove={(e) => setTooltipFromEvent(plot.point, plot.idx, e)}
-                    onMouseLeave={() => setTooltip(null)}
-                    className="cursor-pointer"
-                  />
-                )
-              })}
+                {activePoint && activeSlice ? (
+                  <g>
+                    <rect
+                      x={activeSlice.left}
+                      y={PADDING.top}
+                      width={activeSlice.width}
+                      height={INNER_HEIGHT}
+                      fill="rgba(148, 163, 184, 0.12)"
+                    />
+                    <line
+                      x1={activePoint.x}
+                      x2={activePoint.x}
+                      y1={PADDING.top}
+                      y2={PADDING.top + INNER_HEIGHT}
+                      stroke="rgba(148, 163, 184, 0.3)"
+                      strokeWidth={1}
+                    />
+                    <circle
+                      cx={activePoint.x}
+                      cy={activePoint.y}
+                      r={pointRadius + 8}
+                      fill="none"
+                      stroke="rgba(148, 163, 184, 0.4)"
+                      strokeWidth={1.5}
+                    />
+                    <circle
+                      cx={activePoint.x}
+                      cy={activePoint.y}
+                      r={pointRadius + 2}
+                      fill={colorForLinePoint(activePoint.point)}
+                      stroke="#0f172a"
+                      strokeWidth={2}
+                    />
+                  </g>
+                ) : null}
+              </g>
             </svg>
 
-              <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                <span>Total Games</span>
-                <span>{activePlayer?.name ?? "Player"} selection</span>
-              </div>
-            </>
+                  <button
+                    type="button"
+                    onClick={showAll ? handleReset : handleShowAll}
+                    className="absolute z-10 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-white hover:text-slate-900 dark:border-slate-800/70 dark:bg-slate-950/70 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900 dark:hover:text-slate-100"
+                    style={plotButtonStyle ?? undefined}
+                  >
+                    {showAll ? "Reset" : "Show all"}
+                  </button>
+                </>
           ) : (
-          <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-            No ranking history available.
-          </div>
-        )}
-
-        {tooltipRender}
-      </div>
-
-      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 px-6 py-5 dark:border-slate-800 dark:bg-slate-950">
-        <div className="grid gap-6 text-center sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: "Current Rank", value: summary?.current ?? "—" },
-            { label: "Rank Debut", value: summary?.debut ?? "—" },
-            { label: "Progression", value: summary?.progression ?? "—" },
-            { label: "Matches", value: summary?.matches.toString() ?? "—" },
-          ].map((item) => (
-            <div key={item.label}>
-              <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
-                {item.label}
-              </div>
-              <div className="mt-2 text-lg font-bold text-slate-900 dark:text-slate-100">{item.value}</div>
+            <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+              No ranking history available.
             </div>
-          ))}
+          )}
+
+              {tooltipRender}
+              {plotLabelStyle ? (
+                <div
+                  className="absolute z-10 flex justify-between px-1 text-xs text-slate-500 dark:text-slate-400"
+                  style={plotLabelStyle}
+                >
+                  <span>{matchesAgo} matches ago</span>
+                  <span>Last match</span>
+                </div>
+              ) : null}
+            </div>
+          </div>
         </div>
       </div>
     </div>

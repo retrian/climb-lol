@@ -709,10 +709,21 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const initialImagesReady = useRef(false)
   const preloadIdRef = useRef(0)
   const imagesTimeoutRef = useRef<number | null>(null)
+  const [isCompact, setIsCompact] = useState(false)
   
   const modalRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
   const fetchingMatches = useRef(new Set<string>())
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onResize = () => {
+      setIsCompact(window.matchMedia('(min-width: 1024px) and (max-width: 1400px)').matches)
+    }
+    onResize()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
 
   const { top3, rest } = useMemo(() => ({ top3: playerCards.slice(0, 3), rest: playerCards.slice(3) }), [playerCards])
 
@@ -1164,7 +1175,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
             <div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" />
             <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Top Players</h2>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 items-end">
+          <div className={`grid grid-cols-1 sm:grid-cols-3 gap-6 items-end ${isCompact ? 'max-w-[720px] mx-auto' : ''}`}>
             {top3.map((card, idx) => {
               const actualRank = idx + 1
               const orderClass = actualRank === 1 ? 'sm:order-2' : actualRank === 2 ? 'sm:order-1' : 'sm:order-3'
@@ -1179,8 +1190,8 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       )}
 
       {rest.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 mb-4">
+        <div className={isCompact ? 'max-w-[720px] mx-auto space-y-3' : 'space-y-3'}>
+          <div className="flex items-center gap-2 mb-4 mt-8">
             <div className="h-1 w-6 bg-gradient-to-r from-slate-400 to-slate-600 rounded-full" />
             <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Runnerups</h2>
           </div>

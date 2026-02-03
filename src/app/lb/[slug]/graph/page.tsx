@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getSeasonStartIso } from '@/lib/riot/season'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
+import { compareRanks } from '@/lib/rankSort'
 
 // --- Constants ---
 const DEFAULT_GRANDMASTER_CUTOFF = 200
@@ -25,6 +26,7 @@ type LpHistoryRow = {
   losses: number | null
   fetched_at: string
 }
+
 
 // --- Helpers ---
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
@@ -58,20 +60,20 @@ function TeamHeaderCard({
   bannerUrl: string | null
 }) {
   return (
-    <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
-      <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
-      <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
-
-      {bannerUrl && (
-        <div className="relative h-48 w-full border-b border-slate-100 bg-slate-100 dark:border-slate-800 dark:bg-slate-800">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={bannerUrl}
-            alt="Leaderboard Banner"
-            className="h-full w-full object-cover"
-          />
-        </div>
-      )}
+    <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
+        {bannerUrl ? (
+          <div className="absolute inset-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
+            <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-white/45 to-white/25 dark:from-slate-950/80 dark:via-slate-950/55 dark:to-slate-900/35" />
+            <div className="absolute inset-0 bg-gradient-to-t from-white/75 via-white/25 to-transparent dark:from-slate-950/80 dark:via-slate-950/40 dark:to-transparent" />
+          </div>
+        ) : (
+          <>
+            <div className="absolute inset-0 bg-gradient-to-br from-white to-slate-50 dark:from-slate-950 dark:to-slate-900" />
+            <div className="absolute inset-0 bg-grid-slate-100 [mask-image:linear-gradient(0deg,white,rgba(255,255,255,0.5))] pointer-events-none dark:bg-grid-slate-800 dark:[mask-image:linear-gradient(0deg,rgba(15,23,42,0.9),rgba(15,23,42,0.4))]" />
+          </>
+        )}
 
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
@@ -99,7 +101,7 @@ function TeamHeaderCard({
             {cutoffs.map((c) => (
               <div
                 key={c.label}
-                className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
+                className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900/80 dark:hover:border-slate-700"
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" />
@@ -167,8 +169,8 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   if (puuids.length === 0) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-        <div className="mx-auto max-w-5xl px-4 py-12 space-y-6">
+      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 text-slate-900 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 dark:text-slate-100">
+        <div className="mx-auto w-full max-w-[1460px] px-6 py-12 space-y-6">
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
@@ -193,6 +195,14 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
+  const { data: rankSnapshotRaw } = await supabase
+    .from('player_rank_snapshot')
+    .select('puuid, queue_type, tier, rank, league_points, wins, losses, fetched_at')
+    .in('puuid', puuids)
+    .eq('queue_type', 'RANKED_SOLO_5x5')
+
+  const rankBy = new Map((rankSnapshotRaw ?? []).map((row) => [row.puuid, row]))
+
   const seasonStartIso = getSeasonStartIso()
   const { data: historyRaw } = await supabase
     .from('player_lp_history')
@@ -202,31 +212,49 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .gte('fetched_at', seasonStartIso)
     .order('fetched_at', { ascending: true })
 
-  const playerSummaries = players.map((player) => ({
-    puuid: player.puuid,
-    name: displayRiotId(player),
-    profileIconUrl: profileIconUrl(stateBy.get(player.puuid)?.profile_icon_id ?? null),
-  }))
+
+  const playersSorted = [...players].sort((a, b) =>
+    compareRanks(rankBy.get(a.puuid) ?? undefined, rankBy.get(b.puuid) ?? undefined)
+  )
+
+  const playerSummaries = playersSorted.map((player, index) => {
+    const rankData = rankBy.get(player.puuid)
+    return {
+      puuid: player.puuid,
+      name: displayRiotId(player),
+      tagLine: player.tag_line ?? null,
+      profileIconUrl: profileIconUrl(stateBy.get(player.puuid)?.profile_icon_id ?? null),
+      rankTier: rankData?.tier ?? null,
+      rankDivision: rankData?.rank ?? null,
+      lp: rankData?.league_points ?? null,
+      order: index + 1,
+    }
+  })
 
   const cutoffs = {
     grandmaster: cutoffsByTier.get('GRANDMASTER') ?? DEFAULT_GRANDMASTER_CUTOFF,
     challenger: cutoffsByTier.get('CHALLENGER') ?? DEFAULT_CHALLENGER_CUTOFF,
   }
 
-  return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-6xl px-4 py-10 lg:py-14 space-y-8">
-        <TeamHeaderCard
-          name={lb.name}
-          description={lb.description}
-          slug={slug}
-          visibility={lb.visibility}
-          activeTab="graph"
-          cutoffs={cutoffsDisplay}
-          bannerUrl={lb.banner_url}
-        />
 
-        <LeaderboardGraphClient players={playerSummaries} points={(historyRaw as LpHistoryRow[]) ?? []} cutoffs={cutoffs} />
+  return (
+    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 text-slate-900 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 dark:text-slate-100">
+      <div className="mx-auto w-full max-w-none px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
+        <div className="mx-auto w-full max-w-[1460px]">
+          <TeamHeaderCard
+            name={lb.name}
+            description={lb.description}
+            slug={slug}
+            visibility={lb.visibility}
+            activeTab="graph"
+            cutoffs={cutoffsDisplay}
+            bannerUrl={lb.banner_url}
+          />
+        </div>
+
+        <div className="mx-auto w-full max-w-[1460px]">
+          <LeaderboardGraphClient players={playerSummaries} points={(historyRaw as LpHistoryRow[]) ?? []} cutoffs={cutoffs} />
+        </div>
       </div>
     </main>
   )
