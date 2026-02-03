@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
 import { createPortal } from 'react-dom'
 import FitText from './FitText'
+import MatchDetailsModal from './MatchDetailsModal'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
@@ -487,7 +488,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 })
 RunnerupRow.displayName = 'RunnerupRow'
 
-const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpand, spellMap, runeMap, currentRankData }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, isExpanded: boolean, onExpand: (id: string) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any }) => {
+const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, spellMap, runeMap, currentRankData }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any }) => {
     // 5. Defensive Checks: Guard against undefined maps
     const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
@@ -535,7 +536,7 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
 
     return (
       <div className={`rounded-2xl border ${rowBorder} ${rowBg} shadow-sm`}>
-        <button type="button" onClick={() => onExpand(match.matchId)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
+        <button type="button" onClick={() => onOpen(match)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
           <div className={`flex items-center gap-3 text-xs text-slate-500 ${rowAccent} border-l-4 pl-3 min-w-0`}>
             
             {/* --- COLUMN 1: Result, Duration, LP, Queue, Time --- */}
@@ -641,56 +642,13 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, isExpanded, onExpan
                 ))}
             </div>
             <div className="ml-2 text-slate-400">
-              <svg className={`h-4 w-4 transition-transform ${isExpanded ? 'rotate-180' : ''}`} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.17l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" /></svg>
+              <svg className="h-4 w-4 transition-transform group-hover:translate-x-0.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" /></svg>
             </div>
           </div>
         </button>
-        {isExpanded && (
-          <div className="border-t border-slate-200 bg-slate-50 px-4 py-4 dark:border-slate-800 dark:bg-slate-900">
-            {!detail ? <MatchDetailSkeleton /> : (
-              <div className="space-y-4">
-                <div className="grid gap-4 lg:grid-cols-2">
-                  {[100, 200].map(teamId => {
-                    const team = detail.info.teams.find(t => t.teamId === teamId)
-                    return (
-                      <div key={teamId} className="rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-xs font-bold uppercase tracking-widest text-slate-400">{teamId === 100 ? 'Blue Team' : 'Red Team'}</span>
-                          <span className={`text-xs font-semibold ${team?.win ? 'text-emerald-500' : 'text-rose-500'}`}>{team?.win ? 'Victory' : 'Defeat'}</span>
-                        </div>
-                        <div className="space-y-2">
-                          {detail.info.participants.filter(p => p.teamId === teamId).map(p => {
-                            // Defensive Check
-                            const c = champMap?.[p.championId]
-                            const icon = c ? championIconUrl(ddVersion, c.id) : null
-                            return (
-                              <div key={p.puuid} className="flex items-center gap-2 text-xs">
-                                {icon ? <img loading="lazy" decoding="async" src={icon} alt="" className="h-7 w-7 rounded-md border border-slate-200 dark:border-slate-700" /> : <div className="h-7 w-7 rounded-md bg-slate-200 dark:bg-slate-800" />}
-                                <div className="min-w-0 flex-1">
-                                  <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{p.riotIdGameName ? `${p.riotIdGameName}#${p.riotIdTagline}` : p.summonerName}</div>
-                                  <div className="text-[11px] text-slate-400">{p.kills}/{p.deaths}/{p.assists} | {(p.totalMinionsKilled || 0) + (p.neutralMinionsKilled || 0)} CS</div>
-                                </div>
-                                <div className="flex items-center gap-1">
-                                  {[p.item0, p.item1, p.item2, p.item3, p.item4, p.item5, p.item6, p.roleBoundItem ?? 0].map((itm, i) => {
-                                    const itmIcon = buildItemIconUrl(ddVersion, itm)
-                                    return itmIcon ? <img loading="lazy" decoding="async" key={i} src={itmIcon} alt="" className="h-6 w-6 rounded border border-slate-200 dark:border-slate-700" /> : <div key={i} className="h-6 w-6 rounded bg-slate-200 dark:bg-slate-800" />
-                                  })}
-                                </div>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
       </div>
     )
-  }, (prev, next) => prev.match === next.match && prev.isExpanded === next.isExpanded && prev.detail === next.detail)
+  }, (prev, next) => prev.match === next.match && prev.detail === next.detail)
   MatchRow.displayName = 'MatchRow'
 
 // --- Main Component ---
@@ -702,7 +660,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [loadingMatches, setLoadingMatches] = useState(false)
   const [activeTab, setActiveTab] = useState<'matches' | 'stats' | 'champions'>('matches')
-  const [expandedMatchId, setExpandedMatchId] = useState<string | null>(null)
+  const [selectedMatch, setSelectedMatch] = useState<MatchSummary | null>(null)
   const [matchDetails, setMatchDetails] = useState<Record<string, MatchDetailResponse>>({})
   const [visibleMatchesCount, setVisibleMatchesCount] = useState(10)
   const [imagesReady, setImagesReady] = useState(true)
@@ -986,7 +944,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
 
     const puuid = selectedPlayer.player.puuid
     setActiveTab('matches')
-    setExpandedMatchId(null)
+    setSelectedMatch(null)
     setVisibleMatchesCount(10)
 
     const cachedSummary = getCacheValue(summaryCache, puuid)
@@ -1141,7 +1099,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setSelectedPlayer(null)
     setSummary(null)
     setMatches([])
-    setExpandedMatchId(null)
+    setSelectedMatch(null)
     setVisibleMatchesCount(10)
     // 2. Memory Leak Fix: Clear heavy detail state
     setMatchDetails({})
@@ -1159,13 +1117,14 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     return links
   }, [selectedPlayer])
 
-  const toggleExpand = useCallback((matchId: string) => {
-    setExpandedMatchId(prev => {
-      const next = prev === matchId ? null : matchId
-      if (next) ensureMatchDetail(next)
-      return next
-    })
+  const handleOpenMatch = useCallback((match: MatchSummary) => {
+    setSelectedMatch(match)
+    ensureMatchDetail(match.matchId)
   }, [ensureMatchDetail])
+
+  const handleCloseMatchModal = useCallback(() => {
+    setSelectedMatch(null)
+  }, [])
 
   return (
     <>
@@ -1378,8 +1337,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               champMap={champMap}
                               ddVersion={ddVersion}
                               detail={matchDetails[match.matchId] || null}
-                              isExpanded={expandedMatchId === match.matchId}
-                              onExpand={toggleExpand}
+                              onOpen={handleOpenMatch}
                               spellMap={spellMap}
                               runeMap={runeMap}
                               currentRankData={summary?.rank}
@@ -1552,6 +1510,18 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
           </div>,
           document.body
         )}
+      <MatchDetailsModal
+        open={Boolean(selectedMatch)}
+        matchId={selectedMatch?.matchId ?? null}
+        focusedPuuid={selectedMatch?.puuid ?? null}
+        champMap={champMap}
+        ddVersion={ddVersion}
+        participants={[]}
+        onClose={handleCloseMatchModal}
+        preloadedData={selectedMatch?.matchId && matchDetails[selectedMatch.matchId]
+          ? { match: matchDetails[selectedMatch.matchId] }
+          : undefined}
+      />
     </>
   )
 }
