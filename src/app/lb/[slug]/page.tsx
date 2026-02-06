@@ -318,12 +318,14 @@ export default async function LeaderboardDetail({
   const seasonStartIso = getSeasonStartIso({ ddVersion })
   const seasonStartMsLatest = new Date(seasonStartIso).getTime()
 
+  const moversTimeZone = process.env.MOVERS_TIMEZONE ?? 'America/Chicago'
   const now = new Date()
-  const todayStart = new Date(now)
+  const zonedNow = new Date(now.toLocaleString('en-US', { timeZone: moversTimeZone }))
+  const todayStart = new Date(zonedNow)
   todayStart.setHours(0, 0, 0, 0)
   const todayStartTs = todayStart.getTime()
 
-  const weekStart = new Date(now)
+  const weekStart = new Date(zonedNow)
   weekStart.setDate(weekStart.getDate() - 7)
   const weekStartIso = weekStart.toISOString()
   const weekStartTs = weekStart.getTime()
@@ -561,8 +563,11 @@ export default async function LeaderboardDetail({
   }
 
   const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
-  const dailyTopGain = dailyLpEntries.length
+  const dailyTopGainCandidate = dailyLpEntries.length
     ? dailyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
+    : null
+  const dailyTopGain = dailyTopGainCandidate && dailyTopGainCandidate[1] > 0
+    ? dailyTopGainCandidate
     : null
   const dailyTopLoss = dailyLpEntries.length
     ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
@@ -660,7 +665,7 @@ export default async function LeaderboardDetail({
                 )
               })() : (
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                  No LP changes today yet.
+                  No one has gained any LP today yet.
                 </div>
               )}
 
