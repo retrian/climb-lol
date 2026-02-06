@@ -301,6 +301,32 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     // Reset state but keep participants prop data active
     setActiveTab('overview'); setMatch(null); setTimeline(null); setAccounts({}); setError(null); setLoading(true); setDdragonVersion(ddVersion)
     
+    // Use AbortController to cancel requests if modal closes
+    const abortController = new AbortController()
+    let fetched = false
+
+    const fetchMatch = () => {
+      if (fetched || abortController.signal.aborted) return
+      fetched = true
+      fetch(`/api/match/${matchId}`, { signal: abortController.signal })
+        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(d => {
+          if (!abortController.signal.aborted) {
+            setMatch(d.match)
+          }
+        })
+        .catch((err) => {
+          if (!abortController.signal.aborted && err.name !== 'AbortError') {
+            setError('Match details unavailable.')
+          }
+        })
+        .finally(() => {
+          if (!abortController.signal.aborted) {
+            setLoading(false)
+          }
+        })
+    }
+
     // Check if we have preloaded data (server-side preloaded - instant!)
     if (preloadedData?.match) {
       // Handle both resolved values and promises
@@ -310,6 +336,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       
       matchDataPromise
         .then((matchData) => {
+          if (abortController.signal.aborted) return
           if (matchData) {
             setMatch(matchData)
             setLoading(false)
@@ -334,34 +361,17 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
             }
             return
           }
+
+          // Preload resolved to null/undefined; fall back to API fetch
+          fetchMatch()
         })
         .catch(() => {
           // Fall through to normal fetch if preload failed
+          fetchMatch()
         })
-    }
-    
-    // Use AbortController to cancel requests if modal closes
-    const abortController = new AbortController()
-    
-    // Only fetch if we don't have preloaded data or preload failed
-    if (!preloadedData?.match) {
-      fetch(`/api/match/${matchId}`, { signal: abortController.signal })
-        .then(r => r.ok ? r.json() : Promise.reject())
-        .then(d => {
-          if (!abortController.signal.aborted) {
-            setMatch(d.match)
-          }
-        })
-        .catch((err) => {
-          if (!abortController.signal.aborted && err.name !== 'AbortError') {
-            setError('Match details unavailable.')
-          }
-        })
-        .finally(() => {
-          if (!abortController.signal.aborted) {
-            setLoading(false)
-          }
-        })
+    } else {
+      // No preloaded match at all
+      fetchMatch()
     }
     
     return () => {
@@ -429,8 +439,8 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       Promise.all(match.metadata.participants.map(puuid => 
         fetch(`/api/riot/account/${puuid}`, { signal: abortController.signal })
           .then(r => r.ok ? r.json() : null)
-          .then(d => [puuid, d?.account] as const)
-          .catch(() => [puuid, null] as const)
+          .then(d => [puuid, d?.account ?? null, d?.error ?? null] as const)
+          .catch(() => [puuid, null, null] as const)
       ))
     ]).then(([timelineData, accountEntries]) => {
       if (abortController.signal.aborted) return
@@ -438,8 +448,20 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       if (timelineData) setTimeline(timelineData)
       
       const accs: Record<string, AccountResponse> = {}
+      const needsRetry = accountEntries.some(([, , err]) => err === 'BAD_PUUID')
       accountEntries.forEach(([id, a]) => { if (a) accs[id] = a })
       setAccounts(accs)
+
+      if (needsRetry) {
+        fetch(`/api/match/${match.metadata.matchId}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(d => {
+            const nextMatch = d?.match
+            if (!nextMatch || abortController.signal.aborted) return
+            setMatch(nextMatch)
+          })
+          .catch(() => {})
+      }
     }).catch((err) => {
       if (err.name !== 'AbortError') {
         // Silently handle errors for timeline/accounts as they're not critical
