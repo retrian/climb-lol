@@ -150,6 +150,49 @@ async function upsertRiotState(puuid: string, patch: Record<string, any>) {
   if (error) throw error
 }
 
+async function migratePuuid(oldPuuid: string, newPuuid: string) {
+  console.log(`[migrate] Starting PUUID migration...`)
+  console.log(`  Old: ${oldPuuid.slice(0, 12)}...`)
+  console.log(`  New: ${newPuuid.slice(0, 12)}...`)
+
+  try {
+    // Update all tables with the new PUUID
+    const updates = await Promise.allSettled([
+      supabase.from('players').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('club_members').update({ player_puuid: newPuuid }).eq('player_puuid', oldPuuid),
+      supabase.from('leaderboard_players').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('match_participants').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_lp_events').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_lp_history').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_rank_history').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_rank_snapshot').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_riot_state').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_top_champions').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+      supabase.from('player_top_champions_snapshot').update({ puuid: newPuuid }).eq('puuid', oldPuuid),
+    ])
+
+    // Check for errors
+    const errors = updates
+      .map((result, index) => ({ result, index }))
+      .filter(({ result }) => result.status === 'rejected')
+    
+    if (errors.length > 0) {
+      console.error('[migrate] Some updates failed:', errors)
+      throw new Error('PUUID migration partially failed')
+    }
+
+    // Check if any updates actually modified rows
+    const successfulUpdates = updates.filter(result => 
+      result.status === 'fulfilled' && result.value.error === null
+    )
+
+    console.log(`[migrate] ✅ Successfully updated ${successfulUpdates.length} tables`)
+  } catch (error: any) {
+    console.error('[migrate] ❌ Migration failed:', error.message)
+    throw error
+  }
+}
+
 async function syncSummonerBasics(puuid: string) {
   const data = await riotFetch<{ id: string; profileIconId: number }>(
     `${NA1}/lol/summoner/v4/summoners/by-puuid/${encodeURIComponent(puuid)}`
@@ -166,40 +209,92 @@ async function syncSummonerBasics(puuid: string) {
 }
 
 type RiotAccount = {
+  puuid?: string
   gameName?: string | null
   tagLine?: string | null
 }
 
 async function syncAccountIdentity(puuid: string) {
-  const account = await riotFetch<RiotAccount>(
-    `${AMERICAS}/riot/account/v1/accounts/by-puuid/${encodeURIComponent(puuid)}`
-  )
-
+  const { data: player } = await supabase
+    .from('players')
+    .select('game_name, tag_line')
+    .eq('puuid', puuid)
+    .maybeSingle()
+  
+  let account: RiotAccount | null = null
+  let newPuuid = puuid
+  
+  // Strategy 1: Try by Riot ID first (if we have it)
+  if (player?.game_name && player?.tag_line) {
+    try {
+      account = await riotFetch<RiotAccount>(
+        `${AMERICAS}/riot/account/v1/accounts/by-riot-id/${encodeURIComponent(player.game_name)}/${encodeURIComponent(player.tag_line)}`
+      )
+      newPuuid = account.puuid || puuid
+      console.log(`[sync] ✅ Fetched by Riot ID: ${player.game_name}#${player.tag_line}`)
+    } catch (e: any) {
+      // Name changed or doesn't exist - fall through to Strategy 2
+      console.warn(`[sync] ⚠️ Riot ID fetch failed for ${player.game_name}#${player.tag_line}:`, e.message)
+      account = null
+    }
+  }
+  
+  // Strategy 2: If Riot ID failed, try by PUUID (might fail with production key)
+  if (!account) {
+    try {
+      account = await riotFetch<RiotAccount>(
+        `${AMERICAS}/riot/account/v1/accounts/by-puuid/${encodeURIComponent(puuid)}`
+      )
+      newPuuid = account.puuid || puuid
+      console.log(`[sync] ✅ Fetched by PUUID: ${puuid.slice(0, 12)}`)
+    } catch (e: any) {
+      // PUUID decryption failed (production key mismatch)
+      console.error(`[sync] ❌ Both strategies failed for ${puuid.slice(0, 12)}:`, e.message)
+      
+      // Strategy 3: Manual intervention needed
+      await upsertRiotState(puuid, { 
+        last_error: `MIGRATION_NEEDED: Cannot fetch account. Riot ID may have changed and PUUID is encrypted with different key. Last known: ${player?.game_name}#${player?.tag_line}`
+      })
+      
+      throw new Error(`Cannot sync ${puuid.slice(0, 12)} - manual intervention needed`)
+    }
+  }
+  
   const gameName = String(account?.gameName ?? '').trim()
   const tagLine = String(account?.tagLine ?? '').trim()
-  if (!gameName || !tagLine) return
-
+  
+  if (!gameName || !tagLine) {
+    throw new Error('Account fetch succeeded but missing gameName/tagLine')
+  }
+  
+  // If PUUID changed (due to encryption), migrate it
+  if (newPuuid !== puuid) {
+    console.log(`[sync] 🔄 Migrating PUUID for ${gameName}#${tagLine}`)
+    await migratePuuid(puuid, newPuuid)
+  }
+  
+  // Update stored Riot ID (in case it changed)
   const now = new Date().toISOString()
-
+  
   const [lbRes, clubRes, playerRes] = await Promise.all([
     supabase
       .from('leaderboard_players')
       .update({ game_name: gameName, tag_line: tagLine, updated_at: now })
-      .eq('puuid', puuid),
+      .eq('puuid', newPuuid),
     supabase
       .from('club_members')
       .update({ game_name: gameName, tag_line: tagLine, updated_at: now })
-      .eq('player_puuid', puuid),
+      .eq('player_puuid', newPuuid),
     supabase
       .from('players')
-      .upsert({ puuid, game_name: gameName, tag_line: tagLine, updated_at: now }, { onConflict: 'puuid' }),
+      .upsert({ puuid: newPuuid, game_name: gameName, tag_line: tagLine, updated_at: now }, { onConflict: 'puuid' }),
   ])
 
   if (lbRes.error) throw lbRes.error
   if (clubRes.error) throw clubRes.error
   if (playerRes.error) throw playerRes.error
 
-  await upsertRiotState(puuid, { last_account_sync_at: now })
+  await upsertRiotState(newPuuid, { last_account_sync_at: now, last_error: null })
 }
 
 type RankEntry = {
@@ -756,26 +851,37 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
 
   try {
     await syncAccountIdentity(puuid)
-    await syncSummonerBasics(puuid)
+    
+    // After syncAccountIdentity, the puuid might have been migrated
+    // We need to get the potentially new puuid from the database
+    const { data: playerData } = await supabase
+      .from('players')
+      .select('puuid')
+      .eq('puuid', puuid)
+      .maybeSingle()
+    
+    const actualPuuid = playerData?.puuid || puuid
+    
+    await syncSummonerBasics(actualPuuid)
 
-    const { ids, newIds } = await syncMatchesAll(puuid)
+    const { ids, newIds } = await syncMatchesAll(actualPuuid)
 
-    const soloSnap = await syncRankByPuuid(puuid)
+    const soloSnap = await syncRankByPuuid(actualPuuid)
 
     if (soloSnap) {
-      await insertLpHistory(puuid, soloSnap)
-      await maybeInsertPerGameLpEvent({ puuid, snap: soloSnap, ids, state })
+      await insertLpHistory(actualPuuid, soloSnap)
+      await maybeInsertPerGameLpEvent({ puuid: actualPuuid, snap: soloSnap, ids, state })
       
-      // ✅ NEW: Update LP data for newly fetched matches
+      // Update LP data for newly fetched matches
       if (newIds.length > 0) {
-        await updateMatchParticipantsWithLpData(puuid, newIds)
+        await updateMatchParticipantsWithLpData(actualPuuid, newIds)
       }
     }
 
-    const missingTop = !(await hasTopChamps(puuid))
-    if (missingTop) await computeTopChamps(puuid)
+    const missingTop = !(await hasTopChamps(actualPuuid))
+    if (missingTop) await computeTopChamps(actualPuuid)
 
-    await upsertRiotState(puuid, { last_error: null })
+    await upsertRiotState(actualPuuid, { last_error: null })
   } catch (e: any) {
     console.error('[player] error', puuid.slice(0, 12), e?.message ?? e)
     await upsertRiotState(puuid, { last_error: String(e?.message ?? e) })
