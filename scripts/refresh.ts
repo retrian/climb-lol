@@ -214,7 +214,7 @@ type RiotAccount = {
   tagLine?: string | null
 }
 
-async function syncAccountIdentity(puuid: string) {
+async function syncAccountIdentity(puuid: string): Promise<string> {
   const { data: player } = await supabase
     .from('players')
     .select('game_name, tag_line')
@@ -295,6 +295,9 @@ async function syncAccountIdentity(puuid: string) {
   if (playerRes.error) throw playerRes.error
 
   await upsertRiotState(newPuuid, { last_account_sync_at: now, last_error: null })
+  
+  // Return the new PUUID (which may be different from the input)
+  return newPuuid
 }
 
 type RankEntry = {
@@ -850,17 +853,8 @@ async function refreshOnePlayer(puuid: string, state: any | undefined) {
   console.log('[player] refresh', puuid.slice(0, 12))
 
   try {
-    await syncAccountIdentity(puuid)
-    
-    // After syncAccountIdentity, the puuid might have been migrated
-    // We need to get the potentially new puuid from the database
-    const { data: playerData } = await supabase
-      .from('players')
-      .select('puuid')
-      .eq('puuid', puuid)
-      .maybeSingle()
-    
-    const actualPuuid = playerData?.puuid || puuid
+    // syncAccountIdentity now returns the potentially migrated PUUID
+    const actualPuuid = await syncAccountIdentity(puuid)
     
     await syncSummonerBasics(actualPuuid)
 
