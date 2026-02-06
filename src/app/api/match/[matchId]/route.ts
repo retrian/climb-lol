@@ -66,6 +66,91 @@ function isFresh(timestamp: string | null | undefined, ttlMs: number) {
   return Number.isFinite(ts) && Date.now() - ts < ttlMs
 }
 
+function getEndType(info: any): 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' {
+  if (!info) return 'NORMAL'
+  if (Number(info.gameDuration ?? 0) < 300) return 'REMAKE'
+  if (info.gameEndedInEarlySurrender) return 'EARLY_SURRENDER'
+  if (info.gameEndedInSurrender) return 'SURRENDER'
+  return 'NORMAL'
+}
+
+async function upsertMatchParticipants(matchId: string, match: any) {
+  const service = createServiceClient()
+  const info = match?.info
+  const meta = match?.metadata
+  if (!info || !meta?.matchId) return
+
+  const { data: existingLp, error: existingError } = await service
+    .from('match_participants')
+    .select('puuid, lp_change, lp_note, rank_tier, rank_division')
+    .eq('match_id', matchId)
+
+  if (existingError) {
+    console.warn('[Match Cache] lp lookup error', existingError.message)
+  }
+
+  const lpByPuuid = new Map(
+    (existingLp ?? []).map((row: any) => [row.puuid, row])
+  )
+
+  const endType = getEndType(info)
+  const participants = (info.participants as any[]) ?? []
+  const upserts = participants.map((part) => {
+    const existing = lpByPuuid.get(part.puuid)
+    return {
+      match_id: meta.matchId,
+      puuid: part.puuid,
+      champion_id: Number(part.championId ?? 0),
+      kills: Number(part.kills ?? 0),
+      deaths: Number(part.deaths ?? 0),
+      assists: Number(part.assists ?? 0),
+      cs: Number((part.totalMinionsKilled ?? 0) + (part.neutralMinionsKilled ?? 0)),
+      win: Boolean(part.win),
+      vision_score: Number(part.visionScore ?? 0),
+      end_type: endType,
+      lp_change: existing?.lp_change ?? null,
+      lp_note: existing?.lp_note ?? null,
+      rank_tier: existing?.rank_tier ?? null,
+      rank_division: existing?.rank_division ?? null,
+    }
+  })
+
+  if (upserts.length === 0) return
+
+  const { error } = await service
+    .from('match_participants')
+    .upsert(upserts, { onConflict: 'match_id,puuid' })
+
+  if (error) {
+    console.warn('[Match Cache] participants upsert error', error.message)
+  }
+}
+
+async function upsertMatchMeta(match: any) {
+  const service = createServiceClient()
+  const info = match?.info
+  const meta = match?.metadata
+  if (!info || !meta?.matchId) return
+
+  const gameEndTs = Number(info.gameEndTimestamp ?? (info.gameStartTimestamp + info.gameDuration * 1000))
+
+  const { error } = await service
+    .from('matches')
+    .upsert(
+      [{
+        match_id: meta.matchId,
+        queue_id: Number(info.queueId ?? 0),
+        game_end_ts: gameEndTs,
+        game_duration_s: Number(info.gameDuration ?? 0),
+      }],
+      { onConflict: 'match_id' }
+    )
+
+  if (error) {
+    console.warn('[Match Cache] matches upsert error', error.message)
+  }
+}
+
 async function getDbCachedMatch(matchId: string) {
   const service = createServiceClient()
   const { data, error } = await service
@@ -106,9 +191,30 @@ async function upsertDbMatch(matchId: string, match: any) {
   }
 }
 
-export async function GET(_: Request, { params }: { params: Promise<{ matchId: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ matchId: string }> }) {
   try {
     const { matchId } = await params
+    const url = new URL(request.url)
+    const forceRefresh = url.searchParams.has('refresh')
+
+    if (forceRefresh) {
+      const routing = getRoutingFromMatchId(matchId)
+      if (!routing) return NextResponse.json({ error: 'Unsupported match id' }, { status: 400 })
+      const apiKey = getRiotApiKey()
+      const match = await riotFetchWithRetry(
+        `https://${routing}.api.riotgames.com/lol/match/v5/matches/${matchId}`,
+        apiKey,
+        { maxRetries: 3, retryDelay: 2000 }
+      )
+      setCachedMatch(matchId, match)
+      await Promise.all([
+        upsertDbMatch(matchId, match),
+        upsertMatchMeta(match),
+        upsertMatchParticipants(matchId, match),
+      ])
+      return NextResponse.json({ match }, { headers: buildCacheHeaders('MISS') })
+    }
+
     const cached = getCachedMatch(matchId)
     if (cached) {
       return NextResponse.json({ match: cached }, { headers: buildCacheHeaders('HIT') })

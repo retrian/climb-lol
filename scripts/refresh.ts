@@ -553,6 +553,7 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
   if (participantUpserts.length > 0) {
     const { error } = await supabase
       .from('match_participants')
+      // IMPORTANT: composite conflict to avoid one-row-per-match overwrites.
       .upsert(participantUpserts, { onConflict: 'match_id,puuid' })
     if (error) throw error
   }
@@ -689,6 +690,12 @@ async function maybeInsertPerGameLpEvent(opts: {
 
   if (gamesDelta === 1 && newSince.length === 1) {
     const matchId = newSince[0]
+    const { count: matchCount, error: verifyError } = await supabase
+      .from('match_participants')
+      .select('match_id', { count: 'exact', head: true })
+      .eq('match_id', matchId)
+      .eq('puuid', puuid)
+    const matchVerified = !verifyError && (matchCount ?? 0) > 0
     const lastStep = rankStepIndex(lastTier, lastRank)
     const nextStep = rankStepIndex(snap.tier, snap.rank)
     const stepDelta = lastStep !== null && nextStep !== null ? nextStep - lastStep : 0
@@ -704,7 +711,7 @@ async function maybeInsertPerGameLpEvent(opts: {
     const { error } = await supabase.from('player_lp_events').insert({
       puuid,
       queue_type: snap.queue_type,
-      match_id: matchId,
+      match_id: matchVerified ? matchId : null,
       lp_before: lastLp,
       lp_after: snap.lp,
       lp_delta: lpDelta,
@@ -714,6 +721,8 @@ async function maybeInsertPerGameLpEvent(opts: {
       losses_after: snap.losses,
       recorded_at: snap.fetched_at,
       note: stepDelta > 0 ? 'PROMOTED' : stepDelta < 0 ? 'DEMOTED' : null,
+      match_verified: matchVerified,
+      match_verify_error: matchVerified ? null : verifyError ? 'match_verify_query_failed' : 'puuid_not_in_match',
     })
 
     if (error && !String(error.message ?? '').toLowerCase().includes('duplicate')) {

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react'
 import { createPortal } from 'react-dom'
 import FitText from './FitText'
-import MatchDetailsModal from './MatchDetailsModal'
+import MatchDetailsModal, { preloadStaticData } from './MatchDetailsModal'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
@@ -488,7 +488,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 })
 RunnerupRow.displayName = 'RunnerupRow'
 
-const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, spellMap, runeMap, currentRankData }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any }) => {
+const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, spellMap, runeMap, currentRankData }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, onHover: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any }) => {
     // 5. Defensive Checks: Guard against undefined maps
     const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
@@ -536,7 +536,7 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, spellMap, r
 
     return (
       <div className={`rounded-2xl border ${rowBorder} ${rowBg} shadow-sm`}>
-        <button type="button" onClick={() => onOpen(match)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
+        <button type="button" onClick={() => onOpen(match)} onMouseEnter={() => onHover(match)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
           <div className={`flex items-center gap-3 text-xs text-slate-500 ${rowAccent} border-l-4 pl-3 min-w-0`}>
             
             {/* --- COLUMN 1: Result, Duration, LP, Queue, Time --- */}
@@ -1036,6 +1036,11 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
   }, [])
 
+  const handleMatchUpdate = useCallback((matchId: string, match: MatchDetailResponse) => {
+    setCacheValue(matchDetailCache, matchId, match, CACHE_TTL_MS.matchDetail)
+    setMatchDetails(prev => ({ ...prev, [matchId]: match }))
+  }, [])
+
   useEffect(() => {
     if (!open || prefetchMatchIds.length === 0) return
 
@@ -1117,14 +1122,61 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     return links
   }, [selectedPlayer])
 
-  const handleOpenMatch = useCallback((match: MatchSummary) => {
+  const openMatchWithAutoRepair = useCallback((match: MatchSummary, recordedAt?: string | null, queueType?: string | null) => {
     setSelectedMatch(match)
     ensureMatchDetail(match.matchId)
+
+    void (async () => {
+      try {
+        const res = await fetch('/api/lp-events/repair', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            puuid: match.puuid,
+            wrongMatchId: match.matchId,
+            recordedAt: recordedAt ?? undefined,
+            queueType: queueType ?? null,
+          })
+        })
+
+        if (res.ok) {
+          const data = await res.json()
+          if (data?.newMatchId && data.newMatchId !== match.matchId) {
+            setSelectedMatch((prev) => {
+              if (!prev || prev.matchId !== match.matchId) return prev
+              return { ...prev, matchId: data.newMatchId }
+            })
+            ensureMatchDetail(data.newMatchId)
+          }
+        }
+      } catch {
+        // ignore repair failure
+      }
+    })()
   }, [ensureMatchDetail])
+
+  const handleMatchHover = useCallback((match: MatchSummary) => {
+    preloadStaticData(ddVersion)
+    void ensureMatchDetail(match.matchId)
+  }, [ddVersion, ensureMatchDetail])
+
+  const handleOpenMatch = useCallback((match: MatchSummary) => {
+    console.log('[openMatchModal]', {
+      row_puuid: match.puuid,
+      row_match_id: match.matchId,
+      globalFocusedPuuid: selectedPlayer?.player?.puuid ?? null,
+    })
+    openMatchWithAutoRepair(match, match.endTs ? new Date(match.endTs).toISOString() : null, 'RANKED_SOLO_5x5')
+  }, [openMatchWithAutoRepair, selectedPlayer])
 
   const handleCloseMatchModal = useCallback(() => {
     setSelectedMatch(null)
   }, [])
+
+  useEffect(() => {
+    if (!open) return
+    preloadStaticData(ddVersion)
+  }, [open, ddVersion])
 
   return (
     <>
@@ -1338,6 +1390,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               ddVersion={ddVersion}
                               detail={matchDetails[match.matchId] || null}
                               onOpen={handleOpenMatch}
+                              onHover={handleMatchHover}
                               spellMap={spellMap}
                               runeMap={runeMap}
                               currentRankData={summary?.rank}
@@ -1510,18 +1563,19 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
           </div>,
           document.body
         )}
-      <MatchDetailsModal
-        open={Boolean(selectedMatch)}
-        matchId={selectedMatch?.matchId ?? null}
-        focusedPuuid={selectedMatch?.puuid ?? null}
+        <MatchDetailsModal
+          open={Boolean(selectedMatch)}
+          matchId={selectedMatch?.matchId ?? null}
+          focusedPuuid={selectedMatch?.puuid ?? null}
         champMap={champMap}
         ddVersion={ddVersion}
         participants={[]}
-        onClose={handleCloseMatchModal}
-        preloadedData={selectedMatch?.matchId && matchDetails[selectedMatch.matchId]
-          ? { match: matchDetails[selectedMatch.matchId] }
-          : undefined}
-      />
+          onClose={handleCloseMatchModal}
+          onMatchUpdate={handleMatchUpdate}
+          preloadedData={selectedMatch?.matchId && matchDetails[selectedMatch.matchId]
+            ? { match: matchDetails[selectedMatch.matchId] }
+            : undefined}
+        />
     </>
   )
 }

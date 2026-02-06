@@ -112,12 +112,35 @@ interface SeasonChampionRaw {
   champion_id: number | null
 }
 
+interface LpHistoryRaw {
+  puuid: string
+  tier: string | null
+  rank: string | null
+  lp: number | null
+  fetched_at: string | null
+  queue_type?: string | null
+}
+
+interface RecentParticipantRaw {
+  puuid: string
+  matches: {
+    game_end_ts: number | null
+    queue_id: number | null
+  } | null
+}
+
 // --- Helpers ---
 
 async function safeDb<T>(query: Promise<{ data: T | null; error: any }> | any, fallback: T): Promise<T> {
   const { data, error } = await query
   if (error) {
-    console.error('Database Error:', error)
+    console.error('Database Error:', {
+      message: error?.message,
+      details: error?.details,
+      hint: error?.hint,
+      code: error?.code,
+      raw: error,
+    })
     return fallback
   }
   return (data as T) ?? fallback
@@ -156,6 +179,83 @@ function computeEndType({
 
 function makeLpKey(matchId: string, puuid: string): string {
   return `${matchId}-${puuid}`
+}
+
+const TIER_ORDER = [
+  'IRON',
+  'BRONZE',
+  'SILVER',
+  'GOLD',
+  'PLATINUM',
+  'EMERALD',
+  'DIAMOND',
+  'MASTER',
+  'GRANDMASTER',
+  'CHALLENGER',
+] as const
+
+const DIV_ORDER = ['IV', 'III', 'II', 'I'] as const
+
+function baseMasterLadder() {
+  const diamondIndex = TIER_ORDER.indexOf('DIAMOND')
+  return diamondIndex * 400 + 3 * 100 + 100
+}
+
+function ladderLpValue(point: Pick<LpHistoryRaw, 'tier' | 'rank' | 'lp'>) {
+  const tier = (point.tier ?? '').toUpperCase()
+  const div = (point.rank ?? '').toUpperCase()
+  const lp = Math.max(0, point.lp ?? 0)
+  const tierIndex = TIER_ORDER.indexOf(tier as any)
+  if (tierIndex === -1) return null
+
+  const divIndex = DIV_ORDER.indexOf(div as any)
+
+  if (tierIndex <= TIER_ORDER.indexOf('DIAMOND')) {
+    const base = tierIndex * 400
+    const divOffset = divIndex === -1 ? 0 : divIndex * 100
+    return base + divOffset + lp
+  }
+
+  return baseMasterLadder() + lp
+}
+
+function computeMoverDeltas(rows: LpHistoryRaw[], startTs: number) {
+  const firstBy = new Map<string, { ts: number; row: LpHistoryRaw }>()
+  const lastBy = new Map<string, { ts: number; row: LpHistoryRaw }>()
+
+  for (const row of rows) {
+    if (!row.puuid || !row.fetched_at) continue
+    const ts = new Date(row.fetched_at).getTime()
+    if (!Number.isFinite(ts) || ts < startTs) continue
+
+    const first = firstBy.get(row.puuid)
+    if (!first || ts < first.ts) firstBy.set(row.puuid, { ts, row })
+
+    const last = lastBy.get(row.puuid)
+    if (!last || ts > last.ts) lastBy.set(row.puuid, { ts, row })
+  }
+
+  const deltas = new Map<string, number>()
+  for (const [puuid, first] of firstBy.entries()) {
+    const last = lastBy.get(puuid)
+    if (!last) continue
+    const startValue = ladderLpValue(first.row)
+    const endValue = ladderLpValue(last.row)
+    if (startValue === null || endValue === null) continue
+    const delta = first.ts === last.ts ? 0 : endValue - startValue
+    deltas.set(puuid, delta)
+  }
+
+  return deltas
+}
+
+function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) {
+  if (active.size === 0) return new Map<string, number>()
+  const filtered = new Map<string, number>()
+  for (const [puuid, delta] of deltas.entries()) {
+    if (active.has(puuid)) filtered.set(puuid, delta)
+  }
+  return filtered
 }
 
 // --- Components ---
@@ -339,7 +439,8 @@ export default async function LeaderboardDetail({
     latestMatchesRaw,
     lpEventsRaw,
     matchParticipantsRaw,
-    lpEventRows
+    recentParticipantsRaw,
+    lpHistoryRows
   ] = await Promise.all([
     allRelevantPuuids.length > 0
       ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[])
@@ -367,14 +468,25 @@ export default async function LeaderboardDetail({
     allRelevantPuuids.length > 0
       ? safeDb(
           supabase
-            .from('player_lp_events')
-            .select('puuid, lp_delta, recorded_at, queue_type')
+            .from('match_participants')
+            .select('puuid, matches!inner(game_end_ts, queue_id)')
+            .in('puuid', allRelevantPuuids)
+            .eq('matches.queue_id', 420)
+            .gte('matches.game_end_ts', weekStartTs),
+          [] as RecentParticipantRaw[]
+        )
+      : ([] as RecentParticipantRaw[]),
+    allRelevantPuuids.length > 0
+      ? safeDb(
+          supabase
+            .from('player_lp_history')
+            .select('puuid, tier, rank, lp, fetched_at, queue_type')
             .in('puuid', allRelevantPuuids)
             .eq('queue_type', 'RANKED_SOLO_5x5')
-            .gte('recorded_at', weekStartIso),
-          [] as Array<{ puuid: string; lp_delta: number; recorded_at: string | null; queue_type: string | null }>
+            .gte('fetched_at', weekStartIso),
+          [] as LpHistoryRaw[]
         )
-      : ([] as Array<{ puuid: string; lp_delta: number; recorded_at: string | null; queue_type: string | null }>),
+      : ([] as LpHistoryRaw[]),
   ])
 
   // --- Processing Data ---
@@ -487,10 +599,13 @@ export default async function LeaderboardDetail({
     }
   }
 
+  const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
+
   const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
     const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
     const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
     const durationS = row.game_duration_s ?? row.gameDuration
+    const fallbackEndTs = latestMatchEndById.get(row.match_id) ?? null
     
     return {
       matchId: row.match_id,
@@ -501,7 +616,7 @@ export default async function LeaderboardDetail({
       d: row.deaths ?? 0,
       a: row.assists ?? 0,
       cs: row.cs ?? 0,
-      endTs: row.game_end_ts,
+      endTs: row.game_end_ts ?? fallbackEndTs ?? null,
       durationS,
       queueId: row.queue_id,
       lpChange,
@@ -542,6 +657,15 @@ export default async function LeaderboardDetail({
   const playerIconsByPuuidRecord = Object.fromEntries(
     Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
   ) as Record<string, number | null>
+
+  const dailyActivePuuids = new Set<string>()
+  const weeklyActivePuuids = new Set<string>()
+  for (const row of recentParticipantsRaw) {
+    if (!row.puuid || !row.matches?.game_end_ts) continue
+    const endTs = row.matches.game_end_ts
+    if (endTs >= weekStartTs) weeklyActivePuuids.add(row.puuid)
+    if (endTs >= todayStartTs) dailyActivePuuids.add(row.puuid)
+  }
   
   const preloadedMatchDataRecord: Record<string, any> = {}
 
@@ -553,14 +677,10 @@ export default async function LeaderboardDetail({
     topChamps: champsBy.get(player.puuid) ?? [],
   }))
 
-  const dailyLpByPuuid = new Map<string, number>()
-  for (const row of lpEventRows) {
-    const lpChange = typeof row.lp_delta === 'number' && Number.isFinite(row.lp_delta) ? row.lp_delta : null
-    const recordedAt = row.recorded_at ? new Date(row.recorded_at).getTime() : null
-    if (lpChange === null || recordedAt === null) continue
-    if (recordedAt < todayStartTs) continue
-    dailyLpByPuuid.set(row.puuid, (dailyLpByPuuid.get(row.puuid) ?? 0) + lpChange)
-  }
+  const dailyLpByPuuid = filterDeltasByActive(
+    computeMoverDeltas(lpHistoryRows, todayStartTs),
+    dailyActivePuuids
+  )
 
   const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
   const dailyTopGainCandidate = dailyLpEntries.length
@@ -572,20 +692,16 @@ export default async function LeaderboardDetail({
   const dailyTopLoss = dailyLpEntries.length
     ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
     : null
-  const resolvedTopLoss = dailyTopLoss && dailyTopLoss[1] < 0
-    ? dailyTopLoss
-    : dailyLpEntries.length
-      ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
-      : null
+  const resolvedTopLoss = dailyLpEntries.length > 1
+    ? (dailyTopLoss && dailyTopLoss[1] < 0
+        ? dailyTopLoss
+        : dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
+    : null
 
-  const weeklyLpByPuuid = new Map<string, number>()
-  for (const row of lpEventRows) {
-    const lpChange = typeof row.lp_delta === 'number' && Number.isFinite(row.lp_delta) ? row.lp_delta : null
-    const recordedAt = row.recorded_at ? new Date(row.recorded_at).getTime() : null
-    if (lpChange === null || recordedAt === null) continue
-    if (recordedAt < weekStartTs) continue
-    weeklyLpByPuuid.set(row.puuid, (weeklyLpByPuuid.get(row.puuid) ?? 0) + lpChange)
-  }
+  const weeklyLpByPuuid = filterDeltasByActive(
+    computeMoverDeltas(lpHistoryRows, weekStartTs),
+    weeklyActivePuuids
+  )
 
   const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
   const weeklyTopGain = weeklyLpEntries.length
@@ -594,11 +710,11 @@ export default async function LeaderboardDetail({
   const weeklyTopLoss = weeklyLpEntries.length
     ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
     : null
-  const resolvedWeeklyTopLoss = weeklyTopLoss && weeklyTopLoss[1] < 0
-    ? weeklyTopLoss
-    : weeklyLpEntries.length
-      ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
-      : null
+  const resolvedWeeklyTopLoss = weeklyLpEntries.length > 1
+    ? (weeklyTopLoss && weeklyTopLoss[1] < 0
+        ? weeklyTopLoss
+        : weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
+    : null
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">

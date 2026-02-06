@@ -70,6 +70,33 @@ const getItemIconUrl = (v: string, id: number) => `https://ddragon.leagueoflegen
 const getChampionIconUrl = (v: string, img: string) => `https://ddragon.leagueoflegends.com/cdn/${v}/img/champion/${img}`
 const getShardIconUrl = (img: string) => `https://ddragon.leagueoflegends.com/cdn/img/perk-images/StatMods/${img}`
 
+async function fetchStaticData(patch: string, signal?: AbortSignal): Promise<StaticDataState> {
+  const [i, s, r, c] = await Promise.all([
+    fetch(buildStaticUrl(patch, 'data/en_US/item.json'), { signal }),
+    fetch(buildStaticUrl(patch, 'data/en_US/summoner.json'), { signal }),
+    fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/runesReforged.json`, { signal }),
+    fetch(buildStaticUrl(patch, 'data/en_US/champion.json'), { signal })
+  ])
+  if (!i.ok || !s.ok || !r.ok || !c.ok) throw new Error('static-data-fetch-failed')
+  return {
+    items: (await i.json()).data,
+    spells: (await s.json()).data,
+    runes: await r.json(),
+    champions: buildChampionMap((await c.json()).data),
+  }
+}
+
+export async function preloadStaticData(patch: string) {
+  if (STATIC_CACHE.has(patch)) return STATIC_CACHE.get(patch)!
+  try {
+    const data = await fetchStaticData(patch)
+    STATIC_CACHE.set(patch, data)
+    return data
+  } catch {
+    return null
+  }
+}
+
 function getChampionImageFull(champion?: { image?: { full: string }; id?: string }) {
   return champion?.image?.full ?? (champion?.id ? `${champion.id}.png` : null)
 }
@@ -271,19 +298,19 @@ const PlayerRow = memo(({ p, match, focusedPuuid, staticData, champMap, ddragonV
 })
 
 // --- Main Component ---
-export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose, participants, preloadedData }: {
-  open: boolean; matchId: string | null; focusedPuuid: string | null; champMap: any; ddVersion: string; onClose: () => void; participants: MatchParticipant[]; preloadedData?: { match?: Promise<any> | any; timeline?: Promise<any> | any; accounts?: Promise<Record<string, any>> | Record<string, any> }
+export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMap, ddVersion, onClose, participants, preloadedData, onMatchUpdate }: {
+  open: boolean; matchId: string | null; focusedPuuid: string | null; champMap: any; ddVersion: string; onClose: () => void; participants: MatchParticipant[]; preloadedData?: { match?: Promise<any> | any; timeline?: Promise<any> | any; accounts?: Promise<Record<string, any>> | Record<string, any> }; onMatchUpdate?: (matchId: string, match: MatchResponse) => void
 }) {
   const [mounted, setMounted] = useState(false)
   const [activeTab, setActiveTab] = useState<'overview' | 'analysis' | 'build'>('overview')
   const [match, setMatch] = useState<MatchResponse | null>(null)
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null)
-  const [accounts, setAccounts] = useState<Record<string, AccountResponse>>({})
   const [staticData, setStaticData] = useState<StaticDataState>(EMPTY_STATIC)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [ddragonVersion, setDdragonVersion] = useState(ddVersion)
   const containerRef = useRef<HTMLDivElement>(null)
+  const lastRevalidateKeyRef = useRef<string | null>(null)
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -299,7 +326,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   useEffect(() => {
     if (!open || !matchId) return
     // Reset state but keep participants prop data active
-    setActiveTab('overview'); setMatch(null); setTimeline(null); setAccounts({}); setError(null); setLoading(true); setDdragonVersion(ddVersion)
+    setActiveTab('overview'); setMatch(null); setTimeline(null); setError(null); setLoading(true); setDdragonVersion(ddVersion)
     
     // Use AbortController to cancel requests if modal closes
     const abortController = new AbortController()
@@ -308,16 +335,22 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     const fetchMatch = () => {
       if (fetched || abortController.signal.aborted) return
       fetched = true
+      console.log('[MatchDetailsModal] fetchMatch:start', { matchId })
       fetch(`/api/match/${matchId}`, { signal: abortController.signal })
-        .then(r => r.ok ? r.json() : Promise.reject())
+        .then(r => {
+          console.log('[MatchDetailsModal] fetchMatch:response', { matchId, ok: r.ok, status: r.status })
+          return r.ok ? r.json() : Promise.reject(new Error(`match fetch failed ${r.status}`))
+        })
         .then(d => {
           if (!abortController.signal.aborted) {
+            console.log('[MatchDetailsModal] fetchMatch:json', { matchId, hasMatch: Boolean(d?.match), participants: d?.match?.info?.participants?.length ?? 0 })
             setMatch(d.match)
           }
         })
         .catch((err) => {
           if (!abortController.signal.aborted && err.name !== 'AbortError') {
             setError('Match details unavailable.')
+            console.warn('[MatchDetailsModal] fetchMatch:error', { matchId, message: err?.message ?? String(err) })
           }
         })
         .finally(() => {
@@ -329,6 +362,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
 
     // Check if we have preloaded data (server-side preloaded - instant!)
     if (preloadedData?.match) {
+      console.log('[MatchDetailsModal] preload:found', { matchId, preloadType: preloadedData.match instanceof Promise ? 'promise' : typeof preloadedData.match })
       // Handle both resolved values and promises
       const matchDataPromise = preloadedData.match instanceof Promise 
         ? preloadedData.match 
@@ -338,6 +372,7 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
         .then((matchData) => {
           if (abortController.signal.aborted) return
           if (matchData) {
+            console.log('[MatchDetailsModal] preload:resolved', { matchId, participants: matchData?.info?.participants?.length ?? 0 })
             setMatch(matchData)
             setLoading(false)
             
@@ -351,25 +386,20 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
               }).catch(() => {})
             }
             
-            if (preloadedData.accounts) {
-              const accountsPromise = preloadedData.accounts instanceof Promise
-                ? preloadedData.accounts
-                : Promise.resolve(preloadedData.accounts)
-              accountsPromise.then((accountsData) => {
-                if (accountsData) setAccounts(accountsData)
-              }).catch(() => {})
-            }
             return
           }
 
           // Preload resolved to null/undefined; fall back to API fetch
+          console.log('[MatchDetailsModal] preload:empty', { matchId })
           fetchMatch()
         })
         .catch(() => {
           // Fall through to normal fetch if preload failed
+          console.warn('[MatchDetailsModal] preload:error', { matchId })
           fetchMatch()
         })
     } else {
+      console.log('[MatchDetailsModal] preload:missing', { matchId })
       // No preloaded match at all
       fetchMatch()
     }
@@ -378,6 +408,41 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
       abortController.abort()
     }
   }, [open, matchId, ddVersion, preloadedData])
+
+  useEffect(() => {
+    if (!open || !matchId || !focusedPuuid) {
+      if (!open) lastRevalidateKeyRef.current = null
+      return
+    }
+
+    const key = `${matchId}:${focusedPuuid}`
+    if (lastRevalidateKeyRef.current === key) return
+    lastRevalidateKeyRef.current = key
+
+    const abortController = new AbortController()
+    const url = `/api/match/${matchId}?refresh=${Date.now()}`
+
+    console.log('[MatchDetailsModal] revalidate:start', { matchId, focusedPuuid })
+    fetch(url, { signal: abortController.signal, cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (abortController.signal.aborted) return
+        if (d?.match) {
+          console.log('[MatchDetailsModal] revalidate:success', { matchId, participants: d?.match?.info?.participants?.length ?? 0 })
+          setMatch(d.match)
+          onMatchUpdate?.(matchId, d.match)
+        }
+      })
+      .catch((err) => {
+        if (!abortController.signal.aborted && err?.name !== 'AbortError') {
+          console.warn('[MatchDetailsModal] revalidate:error', { matchId, message: err?.message ?? String(err) })
+        }
+      })
+
+    return () => {
+      abortController.abort()
+    }
+  }, [open, matchId, focusedPuuid])
 
   useEffect(() => {
     if (!open || !match) return
@@ -400,24 +465,17 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
     
     // Only fetch static data if we have a match OR if we are just opening it (using default version)
     // We want this to run for preview too so champ icons map correctly
-    Promise.all([
-      fetch(buildStaticUrl(patch, 'data/en_US/item.json'), { signal: abortController.signal }),
-      fetch(buildStaticUrl(patch, 'data/en_US/summoner.json'), { signal: abortController.signal }),
-      fetch(`https://ddragon.leagueoflegends.com/cdn/${patch}/data/en_US/runesReforged.json`, { signal: abortController.signal }),
-      fetch(buildStaticUrl(patch, 'data/en_US/champion.json'), { signal: abortController.signal })
-    ]).then(async ([i, s, r, c]) => {
+    fetchStaticData(patch, abortController.signal)
+      .then((d) => {
         if (abortController.signal.aborted) return
-        if (!i.ok || !s.ok || !r.ok || !c.ok) throw new Error()
-        const d = { items: (await i.json()).data, spells: (await s.json()).data, runes: await r.json(), champions: buildChampionMap((await c.json()).data) }
         STATIC_CACHE.set(patch, d)
-        if (!abortController.signal.aborted) {
-          setStaticData(d)
+        setStaticData(d)
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError' && !abortController.signal.aborted) {
+          setStaticData(EMPTY_STATIC)
         }
-    }).catch((err) => {
-      if (err.name !== 'AbortError' && !abortController.signal.aborted) {
-        setStaticData(EMPTY_STATIC)
-      }
-    })
+      })
     
     return () => {
       abortController.abort()
@@ -425,53 +483,28 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [open, match, ddragonVersion, ddVersion])
 
   useEffect(() => {
-    if (!open || !match) return
+    if (!open || !match || activeTab !== 'build' || timeline) return
     
     // Use AbortController to cancel requests if modal closes
     const abortController = new AbortController()
     
-    // Load timeline and accounts in parallel but with cancellation support
-    Promise.all([
-      fetch(`/api/riot/match/${match.metadata.matchId}/timeline`, { signal: abortController.signal })
-        .then(r => r.ok ? r.json() : null)
-        .then(d => d && !abortController.signal.aborted ? d.timeline : null)
-        .catch(() => null),
-      Promise.all(match.metadata.participants.map(puuid => 
-        fetch(`/api/riot/account/${puuid}`, { signal: abortController.signal })
-          .then(r => r.ok ? r.json() : null)
-          .then(d => [puuid, d?.account ?? null, d?.error ?? null] as const)
-          .catch(() => [puuid, null, null] as const)
-      ))
-    ]).then(([timelineData, accountEntries]) => {
-      if (abortController.signal.aborted) return
-      
-      if (timelineData) setTimeline(timelineData)
-      
-      const accs: Record<string, AccountResponse> = {}
-      const needsRetry = accountEntries.some(([, , err]) => err === 'BAD_PUUID')
-      accountEntries.forEach(([id, a]) => { if (a) accs[id] = a })
-      setAccounts(accs)
-
-      if (needsRetry) {
-        fetch(`/api/match/${match.metadata.matchId}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(d => {
-            const nextMatch = d?.match
-            if (!nextMatch || abortController.signal.aborted) return
-            setMatch(nextMatch)
-          })
-          .catch(() => {})
-      }
-    }).catch((err) => {
-      if (err.name !== 'AbortError') {
-        // Silently handle errors for timeline/accounts as they're not critical
-      }
-    })
+    // Load timeline only (avoid account-v1 calls from client-triggered flows)
+    fetch(`/api/riot/match/${match.metadata.matchId}/timeline`, { signal: abortController.signal })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && !abortController.signal.aborted ? d.timeline : null)
+      .then((timelineData) => {
+        if (!abortController.signal.aborted && timelineData) setTimeline(timelineData)
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          // Silently handle errors for timeline as it's not critical
+        }
+      })
     
     return () => {
       abortController.abort()
     }
-  }, [open, match])
+  }, [open, match, activeTab, timeline])
 
   const spellMap = useMemo(() => {
     const m = new Map<number, any>(); Object.values(staticData.spells).forEach((s: any) => m.set(Number(s.key), s))
@@ -509,6 +542,30 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [match, participants]);
 
   const focusedParticipant = useMemo(() => displayParticipants.find(p => p.puuid === focusedPuuid), [displayParticipants, focusedPuuid])
+
+  const participantPuuids = match?.metadata?.participants ?? []
+  const focusedFound = Boolean(focusedPuuid && participantPuuids.includes(focusedPuuid))
+
+  useEffect(() => {
+    if (!open || !matchId) return
+    console.log('[MatchDetailsModal] match', {
+      matchId,
+      focusedPuuid,
+      hasMatch: Boolean(match),
+      displayCount: displayParticipants.length,
+      focusedFound,
+      focusedInList: focusedFound,
+      samplePuuids: participantPuuids.slice(0, 3),
+    })
+    if (focusedPuuid && match && !focusedFound) {
+      console.warn('[MatchDetailsModal] focused puuid NOT in match', {
+        matchId,
+        focusedPuuid,
+        participantCount: participantPuuids.length,
+        samplePuuids: participantPuuids.slice(0, 5),
+      })
+    }
+  }, [open, matchId, focusedPuuid, match, displayParticipants.length, focusedFound, participantPuuids])
   
   const { teams, teamTotals } = useMemo(() => {
     // If we have neither match nor participants, return empty
@@ -574,9 +631,8 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [timeline, focusedParticipant, staticData.items])
 
   const getPlayerName = useCallback((p: RiotParticipant) => {
-    const acc = accounts[p.puuid]; 
-    return acc ? `${acc.gameName} #${acc.tagLine}` : p.riotIdGameName ? `${p.riotIdGameName} #${p.riotIdTagline}` : p.summonerName || 'Unknown'
-  }, [accounts])
+    return p.riotIdGameName ? `${p.riotIdGameName} #${p.riotIdTagline}` : p.summonerName || 'Unknown'
+  }, [])
 
   const [isPending, startTransition] = useTransition()
   
@@ -587,9 +643,6 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
   }, [])
 
   if (!open || !mounted) return null
-
-  // If we have absolutely no data (no match API, no summary prop), show nothing or basic loading
-  if (!match && participants.length === 0 && loading) return null;
 
   const isWin = focusedParticipant?.win ?? true;
 
@@ -619,6 +672,11 @@ export default function MatchDetailsModal({ open, matchId, focusedPuuid, champMa
                 <span className="text-xs text-slate-400 font-mono dark:text-slate-500 italic">Fetching full stats...</span>
               )}
             </div>
+            {!focusedFound && (
+              <div className="mt-2 rounded-xl border border-yellow-500/40 bg-yellow-500/10 p-3 text-sm text-yellow-700 dark:text-yellow-300">
+                This match doesn’t contain the selected player. This usually means the LP event is linked to the wrong match_id (or the modal was opened with the wrong puuid).
+              </div>
+            )}
           </div>
           <button onClick={handleClose} className="group rounded-full bg-slate-100 border border-slate-200 p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-600 dark:bg-slate-900 dark:border-slate-800 dark:hover:bg-slate-800 dark:hover:text-white">
             <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 10-1.06-1.06L10 8.94 6.28 5.22z"/></svg>

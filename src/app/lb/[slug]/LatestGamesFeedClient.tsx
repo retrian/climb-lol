@@ -4,7 +4,7 @@ import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
-import MatchDetailsModal from './MatchDetailsModal'
+import MatchDetailsModal, { preloadStaticData } from './MatchDetailsModal'
 import { useMatchPrefetch } from './useMatchPrefetch'
 
 interface Player {
@@ -97,6 +97,7 @@ const GameItem = memo(({
   rankData, 
   profileIconSrc,
   hasMatchDetails,
+  when,
   onSelect,
   onHover
 }: {
@@ -107,13 +108,11 @@ const GameItem = memo(({
   rankData: any
   profileIconSrc: string | null
   hasMatchDetails: boolean
+  when: string
   onSelect: () => void
   onHover: () => void
 }) => {
   const name = useMemo(() => player ? displayRiotId(player) : 'Unknown', [player])
-  
-  // Memoize timeAgo calculation - only recalculate if endTs changes
-  const when = useMemo(() => game.endTs ? timeAgo(game.endTs) : '', [game.endTs])
   
   const isRemake = game.endType === 'REMAKE'
   
@@ -308,6 +307,7 @@ const GameItem = memo(({
     prev.game.endTs === next.game.endTs &&
     prev.game.lpChange === next.game.lpChange &&
     prev.game.lpNote === next.game.lpNote &&
+    prev.when === next.when &&
     prev.hasMatchDetails === next.hasMatchDetails &&
     prev.player?.id === next.player?.id &&
     prev.rankData?.tier === next.rankData?.tier &&
@@ -336,19 +336,33 @@ export default function LatestGamesFeedClient({
   participantsByMatch: Record<string, MatchParticipant[]>
   preloadedMatchData?: Record<string, { match: any; timeline: any; accounts: Record<string, any> }>
 }) {
+  const normalizeEndTs = useCallback((value?: number | string | null) => {
+    if (value === null || value === undefined) return null
+    const num = typeof value === 'string' ? Number(value) : value
+    if (!Number.isFinite(num)) return null
+    return num < 1_000_000_000_000 ? num * 1000 : num
+  }, [])
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
   const { prefetchMatch, getPrefetchedData } = useMatchPrefetch()
   const prefetchedMatches = useRef<Set<string>>(new Set())
   const prefetchTimers = useRef<number[]>([])
+  const [nowTs, setNowTs] = useState<number | null>(null)
+
+  useEffect(() => {
+    setNowTs(Date.now())
+    const timer = window.setInterval(() => setNowTs(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   // Prefetch on hover only; avoid eager network work on initial page load
 
   const handleGameHover = useCallback((matchId: string) => {
     if (!matchId || participantsByMatch[matchId]?.length === 0) return
     if (prefetchedMatches.current.has(matchId)) return
+    preloadStaticData(ddVersion)
     prefetchMatch(matchId)
     prefetchedMatches.current.add(matchId)
-  }, [prefetchMatch, participantsByMatch])
+  }, [prefetchMatch, participantsByMatch, ddVersion])
 
   // Memoize the game items data to avoid recalculating on every render
   const gameItemsData = useMemo(() => {
@@ -361,18 +375,21 @@ export default function LatestGamesFeedClient({
       const profileIconSrc = profileIconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${profileIconId}.png` : null
       const matchParticipants = participantsByMatch[g.matchId] ?? []
       const hasMatchDetails = matchParticipants.length > 0
+      const normalizedEndTs = normalizeEndTs(g.endTs ?? null)
+      const when = nowTs && normalizedEndTs ? timeAgo(normalizedEndTs, nowTs) : '—'
       
-      return {
-        game: g,
-        player,
+        return {
+          game: g,
+          player,
         champ,
         champSrc,
         rankData,
         profileIconSrc,
         hasMatchDetails,
+        when,
       }
     })
-  }, [games, playersByPuuid, champMap, ddVersion, rankByPuuid, participantsByMatch, playerIconsByPuuid])
+  }, [games, playersByPuuid, champMap, ddVersion, rankByPuuid, participantsByMatch, playerIconsByPuuid, nowTs])
 
   const handleSelectGame = useCallback((game: Game) => {
     setSelectedGame(game)
@@ -413,6 +430,7 @@ export default function LatestGamesFeedClient({
             rankData={item.rankData}
             profileIconSrc={item.profileIconSrc}
             hasMatchDetails={item.hasMatchDetails}
+            when={item.when}
             onSelect={() => handleSelectGame(item.game)}
             onHover={() => handleGameHover(item.game.matchId)}
           />
