@@ -9,6 +9,7 @@ import { ThemeToggle } from '@/app/_components/ThemeToggle'
 import { MailboxPopoverClient } from '@/app/_components/MailboxPopoverClient'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/next'
+import { Analytics } from '@vercel/analytics/next'
 
 type ClubRow = {
   id: string
@@ -367,6 +368,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </footer>
         <Analytics />
         <SpeedInsights />
+        <Analytics />
       </body>
     </html>
   )
