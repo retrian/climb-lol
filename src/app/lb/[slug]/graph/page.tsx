@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getSeasonStartIso } from '@/lib/riot/season'
+import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 import { compareRanks } from '@/lib/rankSort'
@@ -35,10 +36,9 @@ function displayRiotId(player: { game_name: string | null; tag_line: string | nu
   return player.puuid
 }
 
-function profileIconUrl(profileIconId?: number | null) {
+function profileIconUrl(profileIconId: number | null | undefined, ddVersion: string) {
   if (!profileIconId && profileIconId !== 0) return null
-  const v = process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-  return `https://ddragon.leagueoflegends.com/cdn/${v}/img/profileicon/${profileIconId}.png`
+  return `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${profileIconId}.png`
 }
 
 // --- Components ---
@@ -123,6 +123,8 @@ function TeamHeaderCard({
 export default async function LeaderboardGraphPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const supabase = await createClient()
+  const latestPatch = await getLatestDdragonVersion()
+  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
 
   const { data: lb } = await supabase
     .from('leaderboards')
@@ -223,7 +225,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
       puuid: player.puuid,
       name: displayRiotId(player),
       tagLine: player.tag_line ?? null,
-      profileIconUrl: profileIconUrl(stateBy.get(player.puuid)?.profile_icon_id ?? null),
+      profileIconUrl: profileIconUrl(stateBy.get(player.puuid)?.profile_icon_id ?? null, ddVersion),
       rankTier: rankData?.tier ?? null,
       rankDivision: rankData?.rank ?? null,
       lp: rankData?.league_points ?? null,

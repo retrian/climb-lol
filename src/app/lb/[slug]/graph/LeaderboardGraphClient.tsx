@@ -973,17 +973,20 @@ export default function LeaderboardGraphClient({
                 {chart ? (
                   (() => {
                     const lines: Array<{ value: number; label: string }> = []
-                    const start = Math.floor(chart.min / 50) * 50
-                    const end = Math.ceil(chart.max / 50) * 50
+                    const step = showAll ? 100 : 50
+                    const start = Math.floor(chart.min / step) * step
+                    const end = showAll ? Math.ceil(chart.max / 100) * 100 + 100 : Math.ceil(chart.max / 50) * 50
                     const baseMaster = baseMasterLadder()
                     const labelForValue = (value: number) => {
                       if (value >= baseMaster) {
-                        return String(Math.max(0, Math.round(value - baseMaster)))
+                        const diff = Math.max(0, Math.round(value - baseMaster))
+                        if (showAll) return diff === 0 ? "" : String(diff)
+                        return String(diff)
                       }
                       return ""
                     }
 
-                    for (let value = start; value <= end; value += 50) {
+                    for (let value = start; value <= end; value += step) {
                       lines.push({ value, label: labelForValue(value) })
                     }
 
