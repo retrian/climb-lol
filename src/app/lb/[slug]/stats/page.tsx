@@ -286,7 +286,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   // ✅ BATCHED QUERY FIX: Fetch matches in chunks to avoid URL length limits
   const matchesRaw: MatchRow[] = []
-  const BATCH_SIZE = 500
+  const BATCH_SIZE = 50
   
   if (matchIds.length > 0) {
     for (let i = 0; i < matchIds.length; i += BATCH_SIZE) {
@@ -298,24 +298,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       
       if (data) {
         matchesRaw.push(...data)
-      }
-    }
-  }
-
-  const matchCacheById = new Map<string, any>()
-
-  if (matchIds.length > 0) {
-    for (let i = 0; i < matchIds.length; i += BATCH_SIZE) {
-      const batch = matchIds.slice(i, i + BATCH_SIZE)
-      const { data } = await supabase
-        .from('match_cache')
-        .select('match_id, match_json')
-        .in('match_id', batch)
-
-      if (data) {
-        for (const row of data) {
-          matchCacheById.set(row.match_id, row.match_json)
-        }
       }
     }
   }
