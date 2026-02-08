@@ -435,7 +435,11 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
       </div>
       <div className="flex items-center gap-3 min-w-0 flex-1">
         <div className="h-11 w-11 shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-slate-100 to-slate-200 border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:from-slate-800 dark:to-slate-900 dark:border-slate-700">
-          <img loading="lazy" decoding="async" src={icon || ''} alt="" className="h-full w-full object-cover" />
+          {icon ? (
+            <img loading="lazy" decoding="async" src={icon} alt="" className="h-full w-full object-cover" />
+          ) : (
+            <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <button

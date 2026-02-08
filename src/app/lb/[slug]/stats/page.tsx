@@ -26,6 +26,7 @@ type MatchParticipant = {
   cs: number
   win: boolean
   vision_score?: number | null
+  end_type?: string | null
 }
 
 type MatchRow = {
@@ -50,6 +51,7 @@ type StatTotals = {
 type ChampionPlayerRow = {
   puuid: string
   name: string
+  tagLine: string | null
   iconUrl: string | null
   games: number
   wins: number
@@ -57,6 +59,13 @@ type ChampionPlayerRow = {
   winrate: string
   kda: { value: number; label: string }
   avgCs: number
+  overallGames: number
+  overallWins: number
+  overallLosses: number
+  overallWinrate: string
+  rankTier: string | null
+  rankDivision: string | null
+  rankLp: number | null
 }
 
 type ChampionRow = {
@@ -261,9 +270,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
+  const { data: rankSnapshotRaw } = await supabase
+    .from('player_rank_snapshot')
+    .select('puuid, queue_type, tier, rank, league_points')
+    .in('puuid', puuids)
+
+  const rankByPuuid = new Map((rankSnapshotRaw ?? []).map((row) => [row.puuid, row]))
+
   const { data: participantsRaw } = await supabase
     .from('match_participants')
-    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score')
+    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, end_type')
     .in('puuid', puuids)
 
   const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id)))
@@ -282,6 +298,24 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       
       if (data) {
         matchesRaw.push(...data)
+      }
+    }
+  }
+
+  const matchCacheById = new Map<string, any>()
+
+  if (matchIds.length > 0) {
+    for (let i = 0; i < matchIds.length; i += BATCH_SIZE) {
+      const batch = matchIds.slice(i, i + BATCH_SIZE)
+      const { data } = await supabase
+        .from('match_cache')
+        .select('match_id, match_json')
+        .in('match_id', batch)
+
+      if (data) {
+        for (const row of data) {
+          matchCacheById.set(row.match_id, row.match_json)
+        }
       }
     }
   }
@@ -385,6 +419,21 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     champPlayer.durationS += durationS
   }
 
+  const playerLeaderboard = Array.from(playersTotals.entries()).map(([puuid, stats]) => {
+    const player = playersByPuuid.get(puuid)
+    const kda = formatAverageKda(stats.kills, stats.assists, stats.deaths)
+    return {
+      puuid,
+      name: player ? displayRiotId(player) : puuid,
+      iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+      ...stats,
+      winrate: formatWinrate(stats.wins, stats.games),
+      kda,
+    }
+  })
+
+  const playerTotalsByPuuid = new Map(playerLeaderboard.map((player) => [player.puuid, player]))
+
   const championLeaderboard = Array.from(championsTotals.entries()).map(([championId, stats]) => {
     const champion = champMap[championId]
     const kda = formatAverageKda(stats.kills, stats.assists, stats.deaths)
@@ -395,9 +444,12 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       const player = playersByPuuid.get(puuid)
       const playerKda = formatAverageKda(values.kills, values.assists, values.deaths)
       const playerAvgCs = values.games ? values.cs / values.games : 0
+      const overall = playerTotalsByPuuid.get(puuid)
+      const rank = rankByPuuid.get(puuid)
       return {
         puuid,
         name: player ? displayRiotId(player) : puuid,
+        tagLine: player?.tag_line ?? null,
         iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
         games: values.games,
         wins: values.wins,
@@ -405,6 +457,13 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         winrate: formatWinrate(values.wins, values.games),
         kda: playerKda,
         avgCs: playerAvgCs,
+        overallGames: overall?.games ?? values.games,
+        overallWins: overall?.wins ?? values.wins,
+        overallLosses: overall?.losses ?? values.losses,
+        overallWinrate: overall?.winrate ?? formatWinrate(values.wins, values.games),
+        rankTier: rank?.tier ?? null,
+        rankDivision: rank?.rank ?? null,
+        rankLp: rank?.league_points ?? null,
       }
     })
 
@@ -448,19 +507,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     players: champ.players,
   }))
 
-  const playerLeaderboard = Array.from(playersTotals.entries()).map(([puuid, stats]) => {
-    const player = playersByPuuid.get(puuid)
-    const kda = formatAverageKda(stats.kills, stats.assists, stats.deaths)
-    return {
-      puuid,
-      name: player ? displayRiotId(player) : puuid,
-      iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
-      ...stats,
-      winrate: formatWinrate(stats.wins, stats.games),
-      kda,
-    }
-  })
-
   const averagePerGame = (value: number, games: number) => (games > 0 ? value / games : 0)
   const topKills = [...playerLeaderboard]
     .sort((a, b) => averagePerGame(b.kills, b.games) - averagePerGame(a.kills, a.games))
@@ -487,6 +533,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     3,
   )
 
+  const singleGameBlocks = [
+    { title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills', accent: 'from-rose-400 to-rose-600' },
+    { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths', accent: 'from-slate-400 to-slate-600' },
+    { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists', accent: 'from-emerald-400 to-emerald-600' },
+    { title: 'Most CS in One Game', data: topCsSingle, key: 'cs', accent: 'from-sky-400 to-sky-600' },
+    { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision_score', accent: 'from-violet-400 to-violet-600' },
+  ]
+  const singleGameTopRow = singleGameBlocks.slice(0, 3)
+  const singleGameBottomRow = singleGameBlocks.slice(3)
+
   const participantsByMatch = new Map<string, MatchParticipant[]>()
   for (const row of participants) {
     const matchParticipants = participantsByMatch.get(row.match_id)
@@ -497,6 +553,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     }
   }
 
+
+  const endTypeByMatch = new Map<string, string>()
+  for (const row of participants) {
+    if (!row.end_type) continue
+    if (!endTypeByMatch.has(row.match_id)) {
+      endTypeByMatch.set(row.match_id, row.end_type)
+    }
+  }
+
+
   const matchSummaries = Array.from(matchById.entries()).map(([matchId, meta]) => {
     const matchParticipants = participantsByMatch.get(matchId) ?? []
     const representative = matchParticipants[0]
@@ -505,6 +571,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       matchId,
       durationS: meta.durationS,
       endTs: meta.endTs,
+      puuid: representative?.puuid ?? 'Unknown',
       playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
       playerIconUrl: representative
         ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
@@ -517,10 +584,57 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .sort((a, b) => b.durationS - a.durationS)
     .slice(0, 5)
 
+
   const longestGamesTop = longestMatches.slice(0, 3)
-  const bestKdaPlayersTop = topKdaPlayers.slice(0, 3)
-  const worstKdaPlayersTop = bottomKdaPlayers.slice(0, 3)
+  const bestKdaPlayersTop = topKdaPlayers.slice(0, 5)
+  const worstKdaPlayersTop = bottomKdaPlayers.slice(0, 5)
   const longestTotalTimeTop = topTotalTime.slice(0, 3)
+  const winsWithDuration = participants.filter((row) => row.win && (matchById.get(row.match_id)?.durationS ?? 0) > 0)
+  const lossesWithDuration = participants.filter((row) => !row.win && (matchById.get(row.match_id)?.durationS ?? 0) > 0)
+  const winDurationByPuuid = new Map<string, { total: number; wins: number }>()
+  for (const row of winsWithDuration) {
+    const durationS = matchById.get(row.match_id)?.durationS ?? 0
+    if (!durationS) continue
+    const entry = winDurationByPuuid.get(row.puuid) ?? { total: 0, wins: 0 }
+    entry.total += durationS
+    entry.wins += 1
+    winDurationByPuuid.set(row.puuid, entry)
+  }
+  const lossDurationByPuuid = new Map<string, { total: number; losses: number }>()
+  for (const row of lossesWithDuration) {
+    const durationS = matchById.get(row.match_id)?.durationS ?? 0
+    if (!durationS) continue
+    const entry = lossDurationByPuuid.get(row.puuid) ?? { total: 0, losses: 0 }
+    entry.total += durationS
+    entry.losses += 1
+    lossDurationByPuuid.set(row.puuid, entry)
+  }
+  const fastestWinTimesTop = Array.from(winDurationByPuuid.entries())
+    .map(([puuid, stats]) => {
+      const player = playersByPuuid.get(puuid)
+      return {
+        puuid,
+        name: player ? displayRiotId(player) : puuid,
+        iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+        avgWinDurationS: stats.wins ? stats.total / stats.wins : 0,
+      }
+    })
+    .filter((row) => row.avgWinDurationS > 0)
+    .sort((a, b) => a.avgWinDurationS - b.avgWinDurationS)
+    .slice(0, 3)
+  const fastestLossTimesTop = Array.from(lossDurationByPuuid.entries())
+    .map(([puuid, stats]) => {
+      const player = playersByPuuid.get(puuid)
+      return {
+        puuid,
+        name: player ? displayRiotId(player) : puuid,
+        iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+        avgLossDurationS: stats.losses ? stats.total / stats.losses : 0,
+      }
+    })
+    .filter((row) => row.avgLossDurationS > 0)
+    .sort((a, b) => a.avgLossDurationS - b.avgLossDurationS)
+    .slice(0, 3)
 
   const noGames = participants.length === 0
 
@@ -585,93 +699,17 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               </h2>
             </div>
 
-            <details className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-4 border-b border-slate-100 px-6 py-4 transition hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/60">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    Unique Champions
-                  </div>
-                  <div className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                    {championLeaderboard.length}
-                  </div>
-                </div>
-                <span className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Toggle
-                </span>
-              </summary>
-
+            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
               {noGames ? (
                 <div className="p-6 text-center text-sm text-slate-500 dark:text-slate-400">No champion data yet.</div>
               ) : (
                 <ChampionTable rows={championTableRows} />
               )}
-            </details>
+            </div>
           </section>
 
           <section className="grid gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex items-center gap-2">
-                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-amber-400 to-amber-600" />
-                <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  Player Accumulative Rankings
-                </h3>
-              </div>
-
-              <div className="mt-4 space-y-4">
-                {[
-                  {
-                    title: 'Most Avg Kills / Game',
-                    data: topKills,
-                    value: (row: typeof topKills[number]) => averagePerGame(row.kills, row.games).toFixed(2),
-                  },
-                  {
-                    title: 'Most Avg Deaths / Game',
-                    data: topDeaths,
-                    value: (row: typeof topDeaths[number]) => averagePerGame(row.deaths, row.games).toFixed(2),
-                  },
-                  {
-                    title: 'Most Avg Assists / Game',
-                    data: topAssists,
-                    value: (row: typeof topAssists[number]) => averagePerGame(row.assists, row.games).toFixed(2),
-                  },
-                ].map((block) => (
-                  <div key={block.title}>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                      {block.title}
-                    </div>
-                    {block.data.length === 0 ? (
-                      <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                    ) : (
-                      <ol className="mt-2 space-y-1 text-sm">
-                        {block.data.map((row, idx) => (
-                          <li key={row.puuid} className="flex items-center justify-between">
-                            <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                              <span className="text-slate-400">{idx + 1}.</span>
-                              {row.iconUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={row.iconUrl}
-                                  alt=""
-                                  className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                                />
-                              ) : (
-                                <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                              )}
-                              <span>{row.name}</span>
-                            </span>
-                            <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                              {block.value(row)}
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="lg:col-span-2">
               <div className="flex items-center gap-2">
                 <div className="h-1 w-8 rounded-full bg-gradient-to-r from-rose-400 to-rose-600" />
                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
@@ -680,105 +718,277 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               </div>
 
               <div className="mt-4 space-y-4">
-                {[
-                  { title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills' },
-                  { title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths' },
-                  { title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists' },
-                  { title: 'Most CS in One Game', data: topCsSingle, key: 'cs' },
-                  { title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision_score' },
-                ].map((block) => (
-                  <div key={block.title}>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                      {block.title}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {singleGameTopRow.map((block) => (
+                    <div
+                      key={block.title}
+                      className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60"
+                    >
+                      <div className="p-4">
+                        <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                          {block.title}
+                        </div>
+                        {block.data.length === 0 ? (
+                          <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                        ) : (
+                          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                              {block.data.map((row, idx) => {
+                                const player = playersByPuuid.get(row.puuid)
+                                const iconUrl = profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion)
+                                const champ = champMap[row.champion_id]
+                                const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
+                                const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+                                return (
+                                  <div key={`${row.match_id}-${row.puuid}`} className={orderClass}>
+                                    <div className={`relative px-4 py-3 ${sizeClass}`}>
+                                      <div className="flex flex-col items-center text-center gap-2">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
+                                        <div className={`relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 ${
+                                          idx === 0
+                                            ? 'border-amber-400'
+                                            : idx === 1
+                                              ? 'border-slate-300'
+                                              : 'border-orange-500'
+                                        }`}>
+                                          <div className="h-full w-full overflow-hidden rounded-full">
+                                            {iconUrl ? (
+                                              // eslint-disable-next-line @next/next/no-img-element
+                                              <img src={iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
+                                            ) : (
+                                              <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                            )}
+                                          </div>
+                                          {champ?.id ? (
+                                            <span className="absolute -bottom-2 -right-2 h-8 w-8 rounded-full border-2 border-slate-900 bg-slate-100 shadow-sm overflow-hidden dark:border-slate-900 dark:bg-slate-800">
+                                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                                              <img
+                                                src={championIconUrl(ddVersion, champ.id)}
+                                                alt=""
+                                                className="h-full w-full rounded-full object-cover"
+                                              />
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-100">
+                                            {player ? displayRiotId(player) : row.puuid}
+                                          </div>
+                                        </div>
+                                        <div className="text-2xl font-black tabular-nums text-slate-100">
+                                          {row[block.key as keyof typeof row]}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {block.data.length === 0 ? (
-                      <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                    ) : (
-                      <ol className="mt-2 space-y-1 text-sm">
-                        {block.data.map((row, idx) => {
-                          const player = playersByPuuid.get(row.puuid)
-                          const iconUrl = profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion)
-                          const champ = champMap[row.champion_id]
-                          return (
-                            <li key={`${row.match_id}-${row.puuid}`} className="flex items-center justify-between">
-                              <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                                <span className="text-slate-400">{idx + 1}.</span>
-                                {iconUrl ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={iconUrl}
-                                    alt=""
-                                    className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                                  />
-                                ) : (
-                                  <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                                )}
-                                <span>{player ? displayRiotId(player) : row.puuid}</span>
-                                <span className="text-slate-400"> • {champ?.name ?? 'Unknown'}</span>
-                              </span>
-                              <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                                {row[block.key as keyof typeof row]}
-                              </span>
-                            </li>
-                          )
-                        })}
-                      </ol>
-                    )}
+                  ))}
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+                  {singleGameBottomRow.map((block, idx) => (
+                    <div
+                      key={block.title}
+                      className={`relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60 lg:col-span-2 ${
+                        idx === 0 ? 'lg:col-start-2' : 'lg:col-start-4'
+                      }`}
+                    >
+                      <div className="p-4">
+                      <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                        {block.title}
+                      </div>
+                      {block.data.length === 0 ? (
+                        <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                        ) : (
+                          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                              {block.data.map((row, idx) => {
+                                const player = playersByPuuid.get(row.puuid)
+                                const iconUrl = profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion)
+                                const champ = champMap[row.champion_id]
+                                const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
+                                const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+                                return (
+                                  <div key={`${row.match_id}-${row.puuid}`} className={orderClass}>
+                                    <div className={`relative px-4 py-3 ${sizeClass}`}>
+                                      <div className="flex flex-col items-center text-center gap-2">
+                                        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
+                                        <div className={`relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 ${
+                                          idx === 0
+                                            ? 'border-amber-400'
+                                            : idx === 1
+                                              ? 'border-slate-300'
+                                              : 'border-orange-500'
+                                        }`}>
+                                          <div className="h-full w-full overflow-hidden rounded-full">
+                                            {iconUrl ? (
+                                              // eslint-disable-next-line @next/next/no-img-element
+                                              <img src={iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
+                                            ) : (
+                                              <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                            )}
+                                          </div>
+                                          {champ?.id ? (
+                                            <span className="absolute -bottom-2 -right-2 h-8 w-8 rounded-full border-2 border-slate-900 bg-slate-100 shadow-sm overflow-hidden dark:border-slate-900 dark:bg-slate-800">
+                                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                                              <img
+                                                src={championIconUrl(ddVersion, champ.id)}
+                                                alt=""
+                                                className="h-full w-full rounded-full object-cover"
+                                              />
+                                            </span>
+                                          ) : null}
+                                        </div>
+                                        <div className="min-w-0">
+                                          <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-100">
+                                            {player ? displayRiotId(player) : row.puuid}
+                                          </div>
+                                        </div>
+                                        <div className="text-2xl font-black tabular-nums text-slate-100">
+                                          {row[block.key as keyof typeof row]}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                          </div>
+                        )}
+                    </div>
                   </div>
                 ))}
+                </div>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="lg:col-span-2">
               <div className="flex items-center gap-2">
-                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-sky-400 to-sky-600" />
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-amber-400 to-amber-600" />
                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                  KDA Leaderboard Highlights
+                  Player Accumulative Rankings
                 </h3>
               </div>
 
-              <div className="mt-4 space-y-4">
+              <div className="mt-4 grid gap-4 md:grid-cols-5">
                 {[
-                  { title: 'Best Overall KDA', data: bestKdaPlayersTop },
-                  { title: 'Worst Overall KDA', data: worstKdaPlayersTop },
-                ].map((block) => (
-                  <div key={block.title}>
-                    <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                      {block.title}
+                  {
+                    title: 'Most Avg Kills / Game',
+                    data: topKills,
+                    accent: 'from-rose-400 to-rose-600',
+                    value: (row: typeof topKills[number]) => averagePerGame(row.kills, row.games).toFixed(2),
+                  },
+                  {
+                    title: 'Most Avg Deaths / Game',
+                    data: topDeaths,
+                    accent: 'from-slate-400 to-slate-600',
+                    value: (row: typeof topDeaths[number]) => averagePerGame(row.deaths, row.games).toFixed(2),
+                  },
+                  {
+                    title: 'Most Avg Assists / Game',
+                    data: topAssists,
+                    accent: 'from-emerald-400 to-emerald-600',
+                    value: (row: typeof topAssists[number]) => averagePerGame(row.assists, row.games).toFixed(2),
+                  },
+                  {
+                    title: 'Best Overall KDA',
+                    data: bestKdaPlayersTop,
+                    accent: 'from-sky-400 to-sky-600',
+                    value: (row: typeof bestKdaPlayersTop[number]) => row.kda.label,
+                    valueClass: (row: typeof bestKdaPlayersTop[number]) => getKdaColor(row.kda.value),
+                  },
+                  {
+                    title: 'Worst Overall KDA',
+                    data: worstKdaPlayersTop,
+                    accent: 'from-amber-400 to-amber-600',
+                    value: (row: typeof worstKdaPlayersTop[number]) => row.kda.label,
+                    valueClass: (row: typeof worstKdaPlayersTop[number]) => getKdaColor(row.kda.value),
+                  },
+                ].map((block) => {
+                  const topPlayer = block.data[0]
+                  return (
+                    <div
+                      key={block.title}
+                      className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60"
+                    >
+                      <div className="p-5">
+                        <div className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                          {block.title}
+                        </div>
+                        {block.data.length === 0 ? (
+                          <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                        ) : (
+                          <>
+                            <div className="mt-4 flex items-center gap-3">
+                              <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+                                {topPlayer.iconUrl ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={topPlayer.iconUrl} alt="" className="h-full w-full object-cover" />
+                                ) : (
+                                  <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="text-[12px] font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap leading-tight tracking-tight">
+                                  {topPlayer.name}
+                                </div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400">
+                                  ({topPlayer.games.toLocaleString()} games)
+                                </div>
+                              </div>
+                              <div
+                                className={`text-3xl font-black tabular-nums ${
+                                  'valueClass' in block && typeof block.valueClass === 'function'
+                                    ? block.valueClass(topPlayer)
+                                    : 'text-slate-900 dark:text-slate-100'
+                                }`}
+                              >
+                                {block.value(topPlayer)}
+                              </div>
+                            </div>
+
+                            <ol className="mt-4 space-y-2 text-sm">
+                              {block.data.slice(1).map((row, idx) => (
+                                <li key={row.puuid} className="flex items-center justify-between">
+                                  <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200 min-w-0">
+                                    <span className="text-slate-400">{idx + 2}.</span>
+                                    {row.iconUrl ? (
+                                      // eslint-disable-next-line @next/next/no-img-element
+                                      <img
+                                        src={row.iconUrl}
+                                        alt=""
+                                        className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
+                                      />
+                                    ) : (
+                                      <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
+                                    )}
+                                    <span className="text-[12px] whitespace-nowrap leading-tight tracking-tight">{row.name}</span>
+                                  </span>
+                                  <span
+                                    className={`font-semibold tabular-nums ${
+                                      'valueClass' in block && typeof block.valueClass === 'function'
+                                        ? block.valueClass(row)
+                                        : 'text-slate-900 dark:text-slate-100'
+                                    }`}
+                                  >
+                                    {block.value(row)}
+                                  </span>
+                                </li>
+                              ))}
+                            </ol>
+                          </>
+                        )}
+                      </div>
                     </div>
-                    {block.data.length === 0 ? (
-                      <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                    ) : (
-                      <ol className="mt-2 space-y-1 text-sm">
-                        {block.data.map((row, idx) => (
-                          <li key={row.puuid} className="flex items-center justify-between">
-                            <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                              <span className="text-slate-400">{idx + 1}.</span>
-                              {row.iconUrl ? (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img
-                                  src={row.iconUrl}
-                                  alt=""
-                                  className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                                />
-                              ) : (
-                                <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                              )}
-                              <span>{row.name}</span>
-                            </span>
-                            <span className={`font-semibold tabular-nums ${getKdaColor(row.kda.value)}`}>
-                              {row.kda.label} KDA
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                  </div>
-                ))}
+                  )
+                })}
+
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="lg:col-span-2">
               <div className="flex items-center gap-2">
                 <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
                 <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
@@ -786,71 +996,221 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 </h3>
               </div>
 
-              <div className="mt-4 space-y-4">
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    Longest Game Length
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60">
+                  <div className="p-4">
+                    <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      Longest Game Length
+                    </div>
+                    {longestGamesTop.length === 0 ? (
+                      <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                        {longestGamesTop.map((row, idx) => {
+                          const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
+                          const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+                          return (
+                            <div key={row.matchId} className={orderClass}>
+                              <div className={`relative px-4 py-3 ${sizeClass}`}>
+                                <div className="flex flex-col items-center text-center gap-2">
+                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
+                                  <div
+                                    className={`relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 ${
+                                      idx === 0
+                                        ? 'border-amber-400'
+                                        : idx === 1
+                                          ? 'border-slate-300'
+                                          : 'border-orange-500'
+                                    }`}
+                                  >
+                                    <div className="h-full w-full overflow-hidden rounded-full">
+                                      {row.playerIconUrl ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img
+                                          src={row.playerIconUrl}
+                                          alt=""
+                                          className="h-full w-full rounded-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-100">
+                                      {row.playerName}
+                                    </div>
+                                  </div>
+                                  <div className="text-2xl font-black tabular-nums text-slate-100">
+                                    {formatMatchDuration(row.durationS)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
-                  {longestGamesTop.length === 0 ? (
-                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <ol className="mt-2 space-y-1 text-sm">
-                      {longestGamesTop.map((row, idx) => (
-                        <li key={row.matchId} className="flex items-center justify-between">
-                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                            <span className="text-slate-400">{idx + 1}.</span>
-                            {row.playerIconUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={row.playerIconUrl}
-                                alt=""
-                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                              />
-                            ) : (
-                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                            )}
-                            <span>{row.playerName}</span>
-                          </span>
-                          <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                            {formatMatchDuration(row.durationS)}
-                          </span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
                 </div>
 
-                <div>
-                  <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    Longest Individual Total Time Played
+                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60">
+                  <div className="p-4">
+                    <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      Fastest Average Win Times
+                    </div>
+                    {fastestWinTimesTop.length === 0 ? (
+                      <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                        {fastestWinTimesTop.map((row, idx) => {
+                          const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
+                          const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+                          return (
+                            <div key={row.puuid} className={orderClass}>
+                              <div className={`relative px-4 py-3 ${sizeClass}`}>
+                                <div className="flex flex-col items-center text-center gap-2">
+                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
+                                  <div
+                                    className={`relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 ${
+                                      idx === 0
+                                        ? 'border-amber-400'
+                                        : idx === 1
+                                          ? 'border-slate-300'
+                                          : 'border-orange-500'
+                                    }`}
+                                  >
+                                    <div className="h-full w-full overflow-hidden rounded-full">
+                                      {row.iconUrl ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={row.iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
+                                      ) : (
+                                        <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-100">
+                                      {row.name}
+                                    </div>
+                                  </div>
+                                  <div className="text-2xl font-black tabular-nums text-slate-100">
+                                    {formatMatchDuration(row.avgWinDurationS)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
                   </div>
-                  {longestTotalTimeTop.length === 0 ? (
-                    <div className="mt-2 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <ol className="mt-2 space-y-1 text-sm">
-                      {longestTotalTimeTop.map((row, idx) => (
-                        <li key={row.puuid} className="flex items-center justify-between">
-                          <span className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                            <span className="text-slate-400">{idx + 1}.</span>
-                            {row.iconUrl ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={row.iconUrl}
-                                alt=""
-                                className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                              />
-                            ) : (
-                              <div className="h-7 w-7 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                            )}
-                            <span>{row.name}</span>
-                          </span>
-                          <span className="text-slate-900 font-semibold tabular-nums dark:text-slate-100">
-                            {formatDaysHoursCaps(row.durationS)}
-                          </span>
-                        </li>
-                      ))}
-                    </ol>
-                  )}
+                </div>
+
+                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60">
+                  <div className="p-4">
+                    <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      Fastest Average Loss Times
+                    </div>
+                    {fastestLossTimesTop.length === 0 ? (
+                      <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                        {fastestLossTimesTop.map((row, idx) => {
+                          const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
+                          const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+                          return (
+                            <div key={row.puuid} className={orderClass}>
+                              <div className={`relative px-4 py-3 ${sizeClass}`}>
+                                <div className="flex flex-col items-center text-center gap-2">
+                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
+                                  <div
+                                    className={`relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 ${
+                                      idx === 0
+                                        ? 'border-amber-400'
+                                        : idx === 1
+                                          ? 'border-slate-300'
+                                          : 'border-orange-500'
+                                    }`}
+                                  >
+                                    <div className="h-full w-full overflow-hidden rounded-full">
+                                      {row.iconUrl ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={row.iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
+                                      ) : (
+                                        <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-100">
+                                      {row.name}
+                                    </div>
+                                  </div>
+                                  <div className="text-2xl font-black tabular-nums text-slate-100">
+                                    {formatMatchDuration(row.avgLossDurationS)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60">
+                  <div className="p-4">
+                    <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
+                      Longest Individual Total Time Played
+                    </div>
+                    {longestTotalTimeTop.length === 0 ? (
+                      <div className="mt-3 text-xs text-slate-400">No data yet.</div>
+                    ) : (
+                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                        {longestTotalTimeTop.map((row, idx) => {
+                          const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
+                          const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+                          return (
+                            <div key={row.puuid} className={orderClass}>
+                              <div className={`relative px-4 py-3 ${sizeClass}`}>
+                                <div className="flex flex-col items-center text-center gap-2">
+                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
+                                  <div
+                                    className={`relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 ${
+                                      idx === 0
+                                        ? 'border-amber-400'
+                                        : idx === 1
+                                          ? 'border-slate-300'
+                                          : 'border-orange-500'
+                                    }`}
+                                  >
+                                    <div className="h-full w-full overflow-hidden rounded-full">
+                                      {row.iconUrl ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={row.iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
+                                      ) : (
+                                        <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                                      )}
+                                    </div>
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-100">
+                                      {row.name}
+                                    </div>
+                                  </div>
+                                  <div className="text-2xl font-black tabular-nums text-slate-100">
+                                    {formatDaysHoursCaps(row.durationS)}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
