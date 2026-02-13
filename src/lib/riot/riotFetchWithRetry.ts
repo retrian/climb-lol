@@ -15,6 +15,65 @@ const DEFAULT_OPTIONS: Required<RiotFetchOptions> = {
   retryOn429: true,
 }
 
+const RATE_LIMIT_WARN_THRESHOLD = 0.8
+const RATE_LIMIT_LOG_EVERY = 100
+let rateLimitLogCounter = 0
+
+type RateLimitSnapshot = {
+  count: number
+  limit: number
+  windowSeconds: number
+  usage: number
+} | null
+
+function parseRateLimitHeader(value: string | null): RateLimitSnapshot {
+  if (!value) return null
+  const [countRaw, windowRaw] = value.split(':')
+  const count = Number(countRaw)
+  const windowSeconds = Number(windowRaw)
+  if (!Number.isFinite(count) || !Number.isFinite(windowSeconds) || windowSeconds <= 0) return null
+  return { count, limit: 0, windowSeconds, usage: 0 }
+}
+
+function parseLimitHeader(value: string | null): { limit: number; windowSeconds: number } | null {
+  if (!value) return null
+  const [limitRaw, windowRaw] = value.split(':')
+  const limit = Number(limitRaw)
+  const windowSeconds = Number(windowRaw)
+  if (!Number.isFinite(limit) || !Number.isFinite(windowSeconds) || windowSeconds <= 0) return null
+  return { limit, windowSeconds }
+}
+
+function maybeLogRateLimit(response: Response, url: string) {
+  const countHeader = parseRateLimitHeader(response.headers.get('X-App-Rate-Limit-Count'))
+  const limitHeader = parseLimitHeader(response.headers.get('X-App-Rate-Limit'))
+  if (!countHeader || !limitHeader || countHeader.windowSeconds !== limitHeader.windowSeconds) return
+
+  const usage = countHeader.count / limitHeader.limit
+  const snapshot = {
+    count: countHeader.count,
+    limit: limitHeader.limit,
+    windowSeconds: countHeader.windowSeconds,
+    usage,
+  }
+
+  if (usage >= RATE_LIMIT_WARN_THRESHOLD) {
+    console.warn(
+      `[Riot API] Rate limit high ${(usage * 100).toFixed(1)}% ` +
+      `(${snapshot.count}/${snapshot.limit} per ${snapshot.windowSeconds}s) for ${url}`
+    )
+    return
+  }
+
+  rateLimitLogCounter += 1
+  if (rateLimitLogCounter % RATE_LIMIT_LOG_EVERY === 0) {
+    console.log(
+      `[Riot API] Rate limit ${Math.round(usage * 100)}% ` +
+      `(${snapshot.count}/${snapshot.limit} per ${snapshot.windowSeconds}s)`
+    )
+  }
+}
+
 /**
  * Parse Retry-After header or calculate delay from rate limit headers
  */
@@ -89,6 +148,7 @@ export async function riotFetchWithRetry<T>(
 
       // Success
       if (response.ok) {
+        maybeLogRateLimit(response, url)
         return await response.json() as T
       }
 

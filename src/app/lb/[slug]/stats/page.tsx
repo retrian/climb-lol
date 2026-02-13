@@ -699,19 +699,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         valueClassName: getKdaColor(row.kda.value),
       })),
     },
-    {
-      id: 'worst-kda',
-      title: 'Worst Overall KDA',
-      accent: 'from-amber-400 to-amber-600',
-      entries: bottomKdaPlayers.map((row) => ({
-        puuid: row.puuid,
-        name: row.name,
-        iconUrl: row.iconUrl,
-        value: row.kda.value,
-        valueLabel: row.kda.label,
-        valueClassName: getKdaColor(row.kda.value),
-      })),
-    },
   ]
 
   const timeBlocks: PodiumBlock[] = [

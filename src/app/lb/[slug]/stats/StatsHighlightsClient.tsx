@@ -185,7 +185,7 @@ export default function StatsHighlightsClient({
             </h3>
           </div>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-5">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {playerBlocks.map((block) => {
               const topPlayer = block.entries[0]
               return (
@@ -267,7 +267,7 @@ export default function StatsHighlightsClient({
             </h3>
           </div>
 
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {timeBlocks.map((block) => (
               <button
                 key={block.id}

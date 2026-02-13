@@ -35,6 +35,11 @@ const MATCH_DB_TTL_MS = 24 * 60 * 60 * 1000
 const CACHE_CONTROL = 'public, s-maxage=300, stale-while-revalidate=600'
 const MATCH_IN_FLIGHT = new Map<string, Promise<any>>()
 
+function isMatchComplete(match: any): boolean {
+  const endTs = match?.info?.gameEndTimestamp
+  return Number(endTs ?? 0) > 0
+}
+
 function buildCacheHeaders(status: 'HIT' | 'HIT-DB' | 'HIT-INFLIGHT' | 'MISS') {
   return {
     'Cache-Control': CACHE_CONTROL,
@@ -164,8 +169,10 @@ async function getDbCachedMatch(matchId: string) {
     return null
   }
 
-  if (data?.match_json && isFresh(data.match_fetched_at, MATCH_DB_TTL_MS)) {
-    return data.match_json
+  if (data?.match_json) {
+    if (isFresh(data.match_fetched_at, MATCH_DB_TTL_MS) || isMatchComplete(data.match_json)) {
+      return data.match_json
+    }
   }
 
   return null

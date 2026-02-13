@@ -442,6 +442,10 @@ async function syncRankByPuuid(puuid: string): Promise<SoloSnapshot | null> {
 }
 
 const MATCHLIST_PAGE_SIZE = Math.min(Math.max(Number(process.env.MATCHLIST_PAGE_SIZE ?? 100), 1), 100)
+const MATCHLIST_FIRST_PAGE_SIZE = Math.min(
+  Math.max(Number(process.env.MATCHLIST_FIRST_PAGE_SIZE ?? 20), 1),
+  MATCHLIST_PAGE_SIZE
+)
 const MATCHLIST_MAX_PAGES = Math.max(Number(process.env.MATCHLIST_MAX_PAGES ?? 5), 1)
 const MATCHLIST_QUEUE = (process.env.MATCHLIST_QUEUE ?? '').trim()
 const MATCHDETAIL_MAX_PER_RUN = Math.max(Number(process.env.MATCHDETAIL_MAX_PER_RUN ?? 60), 1)
@@ -463,11 +467,27 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
   const matchIdsToFetch = new Set<string>()
   let consecutiveFullPages = 0
 
-  for (let page = 0; page < MATCHLIST_MAX_PAGES; page += 1) {
-    const start = page * MATCHLIST_PAGE_SIZE
-    const pageIds = await fetchMatchIdsPage(puuid, start, MATCHLIST_PAGE_SIZE)
-    if (!pageIds.length) break
+  const { data: latestRow, error: latestErr } = await supabase
+    .from('match_participants')
+    .select('match_id, matches!inner(game_end_ts)')
+    .eq('puuid', puuid)
+    .order('matches.game_end_ts', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (latestErr) throw latestErr
 
+  const firstPageIds = await fetchMatchIdsPage(puuid, 0, MATCHLIST_FIRST_PAGE_SIZE)
+  if (!firstPageIds.length) {
+    await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
+    return { ids: [], newIds: [] }
+  }
+
+  if (latestRow?.match_id && firstPageIds[0] === latestRow.match_id) {
+    await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
+    return { ids: firstPageIds, newIds: [] }
+  }
+
+  async function processPage(pageIds: string[]) {
     for (const id of pageIds) {
       if (!idsSet.has(id)) {
         idsSet.add(id)
@@ -489,8 +509,17 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
     else consecutiveFullPages = 0
 
     for (const id of missing) matchIdsToFetch.add(id)
+  }
 
+  await processPage(firstPageIds)
+
+  let start = MATCHLIST_FIRST_PAGE_SIZE
+  for (let page = 1; page < MATCHLIST_MAX_PAGES; page += 1) {
+    const pageIds = await fetchMatchIdsPage(puuid, start, MATCHLIST_PAGE_SIZE)
+    if (!pageIds.length) break
+    await processPage(pageIds)
     if (consecutiveFullPages >= 2) break
+    start += MATCHLIST_PAGE_SIZE
   }
 
   if (!ids.length) {
