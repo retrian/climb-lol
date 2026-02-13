@@ -355,12 +355,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <footer className="border-t border-gray-200 py-6 text-sm text-gray-600 dark:border-slate-800 dark:text-slate-300">
           <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 sm:flex-row sm:items-center sm:justify-between">
             <span>© {new Date().getFullYear()} CWF.LOL</span>
-            <div className="flex gap-4">
+            <div className="flex flex-wrap gap-4">
               <Link className="transition hover:text-gray-900 dark:hover:text-white" href="/faq">
                 FAQ
               </Link>
               <Link className="transition hover:text-gray-900 dark:hover:text-white" href="/changelog">
                 Changelog
+              </Link>
+              <Link className="transition hover:text-gray-900 dark:hover:text-white" href="/terms">
+                Terms
+              </Link>
+              <Link className="transition hover:text-gray-900 dark:hover:text-white" href="/privacy">
+                Privacy
               </Link>
             </div>
           </div>
