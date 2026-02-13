@@ -492,7 +492,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 })
 RunnerupRow.displayName = 'RunnerupRow'
 
-const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, spellMap, runeMap, currentRankData }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, onHover: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any }) => {
+const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, spellMap, runeMap, currentRankData, isRepairingPuuid, repairError }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, onHover: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any, isRepairingPuuid?: boolean, repairError?: string | null }) => {
     // 5. Defensive Checks: Guard against undefined maps
     const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
@@ -521,6 +521,11 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
     const spell1 = participant ? spellMap?.get(participant.summoner1Id) : null
     const spell2 = participant ? spellMap?.get(participant.summoner2Id) : null
     const items = participant ? [participant.item0, participant.item1, participant.item2, participant.item3, participant.item4, participant.item5, participant.item6, participant.roleBoundItem ?? 0] : []
+    const imageIssueReason = !detail
+      ? 'Waiting for match detail data'
+      : !participant
+        ? 'Player PUUID not found in match participants (possible old PUUID)'
+        : null
     const killParticipationPct = useMemo(() => {
       if (!detail?.info?.participants?.length) return null
       const teamId = participant?.teamId
@@ -645,6 +650,19 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
                   <div key={`e-${idx}`} className="h-9 w-9 rounded-md border border-slate-200 bg-slate-100 shadow-sm dark:border-slate-700 dark:bg-slate-800" style={{ aspectRatio: '1 / 1' }} />
                 ))}
             </div>
+            {(imageIssueReason || isRepairingPuuid) && (
+              <div
+                className="ml-2 inline-flex max-w-[220px] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
+                title={isRepairingPuuid ? 'Repairing player PUUID using Riot ID' : (repairError || imageIssueReason || '')}
+              >
+                <span aria-hidden="true">⚠</span>
+                <span className="truncate">
+                  {isRepairingPuuid
+                    ? 'Repairing PUUID…'
+                    : `No images: ${repairError || imageIssueReason}`}
+                </span>
+              </div>
+            )}
             <div className="ml-2 text-slate-400">
               <svg className="h-4 w-4 transition-transform group-hover:translate-x-0.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" /></svg>
             </div>
@@ -672,6 +690,10 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const preloadIdRef = useRef(0)
   const imagesTimeoutRef = useRef<number | null>(null)
   const [isCompact, setIsCompact] = useState(false)
+  const [repairingPuuid, setRepairingPuuid] = useState<string | null>(null)
+  const [puuidRepairError, setPuuidRepairError] = useState<string | null>(null)
+  const puuidRepairAttempts = useRef(new Map<string, number>())
+  const puuidRepairLastAttemptAt = useRef(new Map<string, number>())
   
   const modalRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -1017,6 +1039,84 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
   }, [open, selectedPlayer])
 
+  useEffect(() => {
+    if (!open || activeTab !== 'matches' || !selectedPlayer) return
+
+    const currentPuuid = selectedPlayer.player.puuid
+    if (!currentPuuid) return
+    if (repairingPuuid === currentPuuid) return
+    if (puuidRepairError) return
+
+    const attempts = puuidRepairAttempts.current.get(currentPuuid) ?? 0
+    if (attempts >= 3) return
+
+    const lastAttemptAt = puuidRepairLastAttemptAt.current.get(currentPuuid) ?? 0
+    if (Date.now() - lastAttemptAt < 10_000) return
+
+    const visibleMatches = matches.slice(0, visibleMatchesCount)
+    const hasMismatch = visibleMatches.some((match) => {
+      const detail = matchDetails[match.matchId]
+      if (!detail?.info?.participants?.length) return false
+      return !detail.info.participants.some((p) => p.puuid === currentPuuid)
+    })
+
+    if (!hasMismatch) return
+
+    puuidRepairAttempts.current.set(currentPuuid, attempts + 1)
+    puuidRepairLastAttemptAt.current.set(currentPuuid, Date.now())
+    setRepairingPuuid(currentPuuid)
+    setPuuidRepairError(null)
+
+    void (async () => {
+      try {
+        const res = await fetch(`/api/player/${currentPuuid}/repair-puuid`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            gameName: selectedPlayer.player.game_name ?? undefined,
+            tagLine: selectedPlayer.player.tag_line ?? undefined,
+          }),
+        })
+
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => null)
+          const msg = errBody?.error ? String(errBody.error) : `Repair failed (${res.status})`
+          setPuuidRepairError(msg)
+          return
+        }
+
+        const data = await res.json()
+        if (!data?.updated || !data?.newPuuid || data.newPuuid === currentPuuid) {
+          setPuuidRepairError('No updated PUUID returned by Riot for this Riot ID')
+          return
+        }
+
+        summaryCache.delete(currentPuuid)
+        matchesCache.delete(currentPuuid)
+
+        setMatchDetails({})
+        setSelectedPlayer((prev) => {
+          if (!prev || prev.player.puuid !== currentPuuid) return prev
+          return {
+            ...prev,
+            player: {
+              ...prev.player,
+              puuid: data.newPuuid,
+            },
+          }
+        })
+
+        puuidRepairAttempts.current.delete(currentPuuid)
+        puuidRepairLastAttemptAt.current.delete(currentPuuid)
+        setPuuidRepairError(null)
+      } catch {
+        setPuuidRepairError('Repair request failed before completion')
+      } finally {
+        setRepairingPuuid((prev) => (prev === currentPuuid ? null : prev))
+      }
+    })()
+  }, [open, activeTab, selectedPlayer, matches, visibleMatchesCount, matchDetails, repairingPuuid, puuidRepairError])
+
   const ensureMatchDetail = useCallback(async (matchId: string) => {
     const cachedDetail = getCacheValue(matchDetailCache, matchId)
     if (cachedDetail) {
@@ -1110,6 +1210,10 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setMatches([])
     setSelectedMatch(null)
     setVisibleMatchesCount(10)
+    setRepairingPuuid(null)
+    setPuuidRepairError(null)
+    puuidRepairAttempts.current.clear()
+    puuidRepairLastAttemptAt.current.clear()
     // 2. Memory Leak Fix: Clear heavy detail state
     setMatchDetails({})
   }, [])
@@ -1398,6 +1502,8 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               spellMap={spellMap}
                               runeMap={runeMap}
                               currentRankData={summary?.rank}
+                              isRepairingPuuid={repairingPuuid === selectedPlayer?.player.puuid}
+                              repairError={puuidRepairError}
                             />
                           ))}
                         {visibleMatchesCount < matches.length && (

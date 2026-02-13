@@ -98,6 +98,26 @@ async function upsertMatchParticipants(matchId: string, match: any) {
     (existingLp ?? []).map((row: any) => [row.puuid, row])
   )
 
+  const participantPuuids = new Set(
+    (((info.participants as any[]) ?? []).map((part) => String(part?.puuid ?? '')).filter(Boolean))
+  )
+
+  const stalePuuids = (existingLp ?? [])
+    .map((row: any) => String(row?.puuid ?? ''))
+    .filter((puuid) => puuid && !participantPuuids.has(puuid))
+
+  if (stalePuuids.length > 0) {
+    const { error: deleteError } = await service
+      .from('match_participants')
+      .delete()
+      .eq('match_id', matchId)
+      .in('puuid', stalePuuids)
+
+    if (deleteError) {
+      console.warn('[Match Cache] participants stale-delete error', deleteError.message)
+    }
+  }
+
   const endType = getEndType(info)
   const participants = (info.participants as any[]) ?? []
   const upserts = participants.map((part) => {
@@ -198,6 +218,13 @@ async function upsertDbMatch(matchId: string, match: any) {
   }
 }
 
+async function syncDerivedMatchTables(matchId: string, match: any) {
+  await Promise.all([
+    upsertMatchMeta(match),
+    upsertMatchParticipants(matchId, match),
+  ])
+}
+
 export async function GET(request: Request, { params }: { params: Promise<{ matchId: string }> }) {
   try {
     const { matchId } = await params
@@ -224,11 +251,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ matc
 
     const cached = getCachedMatch(matchId)
     if (cached) {
+      void syncDerivedMatchTables(matchId, cached).catch((error) => {
+        console.warn('[Match Cache] derived sync error (memory cache)', error)
+      })
       return NextResponse.json({ match: cached }, { headers: buildCacheHeaders('HIT') })
     }
     const dbCached = await getDbCachedMatch(matchId)
     if (dbCached) {
       setCachedMatch(matchId, dbCached)
+      void syncDerivedMatchTables(matchId, dbCached).catch((error) => {
+        console.warn('[Match Cache] derived sync error (db cache)', error)
+      })
       return NextResponse.json({ match: dbCached }, { headers: buildCacheHeaders('HIT-DB') })
     }
 
@@ -248,7 +281,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ matc
         { maxRetries: 3, retryDelay: 2000 }
       )
       setCachedMatch(matchId, match)
-      await upsertDbMatch(matchId, match)
+      await Promise.all([
+        upsertDbMatch(matchId, match),
+        syncDerivedMatchTables(matchId, match),
+      ])
       return match
     })().finally(() => {
       MATCH_IN_FLIGHT.delete(matchId)

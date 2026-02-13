@@ -471,7 +471,7 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
     .from('match_participants')
     .select('match_id, matches!inner(game_end_ts)')
     .eq('puuid', puuid)
-    .order('matches.game_end_ts', { ascending: false })
+    .order('game_end_ts', { ascending: false, referencedTable: 'matches' })
     .limit(1)
     .maybeSingle()
   if (latestErr) throw latestErr
