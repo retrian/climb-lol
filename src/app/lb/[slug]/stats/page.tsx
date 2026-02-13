@@ -30,6 +30,14 @@ type MatchParticipant = {
   end_type?: string | null
 }
 
+type MatchParticipantRow = MatchParticipant & {
+  matches: {
+    game_duration_s: number | null
+    game_end_ts: number | null
+    queue_id?: number | null
+  } | null
+}
+
 type MatchRow = {
   match_id: string
   game_duration_s: number | null
@@ -207,6 +215,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .eq('slug', slug)
     .maybeSingle()
 
+
   if (!lb) notFound()
 
   if (lb.visibility === 'PRIVATE') {
@@ -224,6 +233,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .order('sort_order', { ascending: true })
     .limit(500)
 
+
   const players = (playersRaw ?? []) as Player[]
   const puuids = players.map((p) => p.puuid)
 
@@ -231,6 +241,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .from('rank_cutoffs')
     .select('queue_type, tier, cutoff_lp')
     .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+
 
   const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
 
@@ -273,12 +284,14 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .select('puuid, profile_icon_id')
     .in('puuid', puuids)
 
+
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
   const { data: rankSnapshotRaw } = await supabase
     .from('player_rank_snapshot')
     .select('puuid, queue_type, tier, rank, league_points')
     .in('puuid', puuids)
+
 
   const rankByPuuid = new Map(
     (rankSnapshotRaw ?? [])
@@ -288,48 +301,37 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const { data: participantsRaw } = await supabase
     .from('match_participants')
-    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, end_type')
+    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, end_type, matches!inner(game_duration_s, game_end_ts, queue_id)')
     .in('puuid', puuids)
+    .eq('matches.queue_id', 420)
+    .gte('matches.game_end_ts', seasonStartMs)
 
-  const matchIds = Array.from(new Set((participantsRaw ?? []).map((row) => row.match_id)))
 
-  // ✅ BATCHED QUERY FIX: Fetch matches in chunks to avoid URL length limits
-  const matchesRaw: MatchRow[] = []
-  const BATCH_SIZE = 50
-  
-  if (matchIds.length > 0) {
-    for (let i = 0; i < matchIds.length; i += BATCH_SIZE) {
-      const batch = matchIds.slice(i, i + BATCH_SIZE)
-      const { data } = await supabase
-        .from('matches')
-        .select('match_id, game_duration_s, game_end_ts, queue_id')
-        .in('match_id', batch)
-      
-      if (data) {
-        matchesRaw.push(...data)
-      }
-    }
-  }
-
-  // Build match Map with CLIENT-SIDE filtering
+  // Build match Map from joined matches to avoid separate batched queries
   const matchById = new Map<string, { durationS: number; endTs: number }>()
-  
-  for (const row of matchesRaw) {
-    const endTs = typeof row.game_end_ts === 'number' ? row.game_end_ts : null
-    const queueId = typeof row.queue_id === 'number' ? row.queue_id : null
-    
-    // ✅ Filter applied here in JavaScript to be safe against BigInt issues
-    if (!endTs || endTs < seasonStartMs) continue
-    if (queueId !== 420) continue
+  const participants: MatchParticipant[] = []
 
+  const participantRows = (participantsRaw ?? []) as unknown as MatchParticipantRow[]
+  for (const row of participantRows) {
+    const match = Array.isArray(row.matches) ? row.matches[0] : row.matches
+    if (!match || typeof match.game_end_ts !== 'number') continue
     matchById.set(row.match_id, {
-      durationS: typeof row.game_duration_s === 'number' ? row.game_duration_s : 0,
-      endTs,
+      durationS: typeof match.game_duration_s === 'number' ? match.game_duration_s : 0,
+      endTs: match.game_end_ts,
+    })
+    participants.push({
+      match_id: row.match_id,
+      puuid: row.puuid,
+      champion_id: row.champion_id,
+      kills: row.kills,
+      deaths: row.deaths,
+      assists: row.assists,
+      cs: row.cs,
+      win: row.win,
+      vision_score: row.vision_score,
+      end_type: row.end_type,
     })
   }
-
-  // Type assertion verified by previous query logic
-  const participants = (participantsRaw ?? []).filter((row) => matchById.has(row.match_id)) as MatchParticipant[]
 
   const playersByPuuid = new Map(players.map((p) => [p.puuid, p]))
 
@@ -762,6 +764,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       })),
     },
   ]
+
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">

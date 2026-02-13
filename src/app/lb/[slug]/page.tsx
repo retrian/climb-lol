@@ -357,6 +357,7 @@ export default async function LeaderboardDetail({
     .eq('slug', slug)
     .maybeSingle()
 
+
   if (!lb) notFound()
 
   if ((lb.visibility as Visibility) === 'PRIVATE') {
@@ -392,6 +393,7 @@ export default async function LeaderboardDetail({
     ),
     safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 }), [] as any[])
   ])
+
 
   const players: Player[] = playersRaw
   const top50Puuids = players.map((p) => p.puuid).filter(Boolean)
@@ -488,6 +490,7 @@ export default async function LeaderboardDetail({
         )
       : ([] as LpHistoryRaw[]),
   ])
+
 
   // --- Processing Data ---
 
@@ -715,6 +718,7 @@ export default async function LeaderboardDetail({
         ? weeklyTopLoss
         : weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
     : null
+
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">

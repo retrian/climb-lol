@@ -6,6 +6,8 @@ import LeaderboardGraphClient from './LeaderboardGraphClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 import { compareRanks } from '@/lib/rankSort'
 
+export const revalidate = 600
+
 // --- Constants ---
 const DEFAULT_GRANDMASTER_CUTOFF = 200
 const DEFAULT_CHALLENGER_CUTOFF = 500
@@ -132,6 +134,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .eq('slug', slug)
     .maybeSingle()
 
+
   if (!lb) notFound()
 
   if (lb.visibility === 'PRIVATE') {
@@ -148,6 +151,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .order('sort_order', { ascending: true })
     .limit(2000)
 
+
   const players = (playersRaw ?? []) as Player[]
   const puuids = players.map((p) => p.puuid)
 
@@ -155,6 +159,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .from('rank_cutoffs')
     .select('queue_type, tier, cutoff_lp')
     .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+
 
   const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
   
@@ -195,6 +200,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .select('puuid, profile_icon_id')
     .in('puuid', puuids)
 
+
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
   const { data: rankSnapshotRaw } = await supabase
@@ -203,16 +209,17 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     .in('puuid', puuids)
     .eq('queue_type', 'RANKED_SOLO_5x5')
 
+
   const rankBy = new Map((rankSnapshotRaw ?? []).map((row) => [row.puuid, row]))
 
   const seasonStartIso = getSeasonStartIso()
   const { data: historyRaw } = await supabase
-    .from('player_lp_history')
+    .from('leaderboard_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')
-    .in('puuid', puuids)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
+    .eq('leaderboard_id', lb.id)
     .gte('fetched_at', seasonStartIso)
     .order('fetched_at', { ascending: true })
+
 
 
   const playersSorted = [...players].sort((a, b) =>
@@ -237,6 +244,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     grandmaster: cutoffsByTier.get('GRANDMASTER') ?? DEFAULT_GRANDMASTER_CUTOFF,
     challenger: cutoffsByTier.get('CHALLENGER') ?? DEFAULT_CHALLENGER_CUTOFF,
   }
+
 
 
   return (
