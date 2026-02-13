@@ -447,7 +447,9 @@ const MATCHLIST_FIRST_PAGE_SIZE = Math.min(
   MATCHLIST_PAGE_SIZE
 )
 const MATCHLIST_MAX_PAGES = Math.max(Number(process.env.MATCHLIST_MAX_PAGES ?? 5), 1)
-const MATCHLIST_QUEUE = (process.env.MATCHLIST_QUEUE ?? '').trim()
+// Default to Ranked Solo queue so paging isn't diluted by normals/ARAM/etc.
+// This keeps leaderboard/champion stats aligned with ranked-only season sites.
+const MATCHLIST_QUEUE = (process.env.MATCHLIST_QUEUE ?? '420').trim()
 const MATCHDETAIL_MAX_PER_RUN = Math.max(Number(process.env.MATCHDETAIL_MAX_PER_RUN ?? 60), 1)
 const MATCHDETAIL_SLEEP_MS = Math.max(Number(process.env.MATCHDETAIL_SLEEP_MS ?? 400), 0)
 
@@ -482,10 +484,10 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
     return { ids: [], newIds: [] }
   }
 
-  if (latestRow?.match_id && firstPageIds[0] === latestRow.match_id) {
-    await upsertRiotState(puuid, { last_matches_sync_at: now, last_error: null })
-    return { ids: firstPageIds, newIds: [] }
-  }
+  // Do not early-return when latest match id is unchanged.
+  // We still need to scan additional pages because past sync runs may have
+  // missed historical matches (rate limits, run caps, interrupted jobs, etc.).
+  // Missing historical rows directly cause champion/game under-counting.
 
   async function processPage(pageIds: string[]) {
     for (const id of pageIds) {

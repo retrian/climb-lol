@@ -492,7 +492,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
 })
 RunnerupRow.displayName = 'RunnerupRow'
 
-const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, spellMap, runeMap, currentRankData, isRepairingPuuid, repairError }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, onHover: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any, isRepairingPuuid?: boolean, repairError?: string | null }) => {
+const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, spellMap, runeMap, currentRankData, focusedPuuid }: { match: MatchSummary, champMap: any, ddVersion: string, detail: MatchDetailResponse | null, onOpen: (match: MatchSummary) => void, onHover: (match: MatchSummary) => void, spellMap: Map<number, any>, runeMap: Map<number, any>, currentRankData?: any, focusedPuuid?: string | null }) => {
     // 5. Defensive Checks: Guard against undefined maps
     const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
@@ -512,7 +512,30 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
     const when = match.endTs ? timeAgo(match.endTs) : '—'
     const queueLabel = match.queueId ? QUEUE_LABELS[match.queueId] ?? 'Custom' : 'Custom'
     const csPerMin = formatCsPerMin(match.cs, match.durationS)
-    const participant = detail?.info.participants.find(p => p.puuid === match.puuid)
+    const targetPuuid = focusedPuuid ?? match.puuid
+    const participants = detail?.info.participants ?? []
+    const participantByPuuid =
+      participants.find((p) => p.puuid === targetPuuid) ??
+      (targetPuuid !== match.puuid
+        ? participants.find((p) => p.puuid === match.puuid)
+        : undefined)
+
+    // If PUUID matching fails (stale migrated IDs), recover row assets by strict stat signature.
+    // This keeps spells/runes/items rendering even when historical participant PUUID differs.
+    const participantByStats = !participantByPuuid
+      ? participants.find((p) => {
+          const participantCs = Number(p.totalMinionsKilled ?? 0) + Number(p.neutralMinionsKilled ?? 0)
+          return (
+            Number(p.championId ?? 0) === Number(match.championId ?? 0) &&
+            Number(p.kills ?? 0) === Number(match.k ?? 0) &&
+            Number(p.deaths ?? 0) === Number(match.d ?? 0) &&
+            Number(p.assists ?? 0) === Number(match.a ?? 0) &&
+            participantCs === Number(match.cs ?? 0)
+          )
+        })
+      : undefined
+
+    const participant = participantByPuuid ?? participantByStats
   
     const runePrimary = participant?.perks?.styles?.[0]
     const runeSecondary = participant?.perks?.styles?.[1]
@@ -524,7 +547,7 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
     const imageIssueReason = !detail
       ? 'Waiting for match detail data'
       : !participant
-        ? 'Player PUUID not found in match participants (possible old PUUID)'
+        ? 'Player PUUID not found in match participants'
         : null
     const killParticipationPct = useMemo(() => {
       if (!detail?.info?.participants?.length) return null
@@ -650,17 +673,13 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
                   <div key={`e-${idx}`} className="h-9 w-9 rounded-md border border-slate-200 bg-slate-100 shadow-sm dark:border-slate-700 dark:bg-slate-800" style={{ aspectRatio: '1 / 1' }} />
                 ))}
             </div>
-            {(imageIssueReason || isRepairingPuuid) && (
+            {imageIssueReason && (
               <div
                 className="ml-2 inline-flex max-w-[220px] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
-                title={isRepairingPuuid ? 'Repairing player PUUID using Riot ID' : (repairError || imageIssueReason || '')}
+                title={imageIssueReason}
               >
                 <span aria-hidden="true">⚠</span>
-                <span className="truncate">
-                  {isRepairingPuuid
-                    ? 'Repairing PUUID…'
-                    : `No images: ${repairError || imageIssueReason}`}
-                </span>
+                <span className="truncate">{`No images: ${imageIssueReason}`}</span>
               </div>
             )}
             <div className="ml-2 text-slate-400">
@@ -690,10 +709,6 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const preloadIdRef = useRef(0)
   const imagesTimeoutRef = useRef<number | null>(null)
   const [isCompact, setIsCompact] = useState(false)
-  const [repairingPuuid, setRepairingPuuid] = useState<string | null>(null)
-  const [puuidRepairError, setPuuidRepairError] = useState<string | null>(null)
-  const puuidRepairAttempts = useRef(new Map<string, number>())
-  const puuidRepairLastAttemptAt = useRef(new Map<string, number>())
   
   const modalRef = useRef<HTMLDivElement>(null)
   const closeButtonRef = useRef<HTMLButtonElement>(null)
@@ -850,6 +865,46 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       })
       .sort((a, b) => b.games - a.games || b.winrate - a.winrate)
   }, [playerMatches, champMap, ddVersion])
+
+  const championTotals = useMemo(() => {
+    if (!championSnapshot.length) {
+      return {
+        totalGames: 0,
+        wins: 0,
+        losses: 0,
+        kda: 0,
+        avgCs: 0,
+      }
+    }
+
+    const totals = championSnapshot.reduce(
+      (acc, champ) => {
+        acc.totalGames += champ.games
+        acc.wins += champ.wins
+        acc.kills += champ.kills
+        acc.deaths += champ.deaths
+        acc.assists += champ.assists
+        acc.cs += champ.cs
+        return acc
+      },
+      { totalGames: 0, wins: 0, kills: 0, deaths: 0, assists: 0, cs: 0 }
+    )
+
+    return {
+      totalGames: totals.totalGames,
+      wins: totals.wins,
+      losses: Math.max(0, totals.totalGames - totals.wins),
+      kda: (totals.kills + totals.assists) / Math.max(1, totals.deaths),
+      avgCs: totals.cs / Math.max(1, totals.totalGames),
+    }
+  }, [championSnapshot])
+
+  const championTotalsMismatch = useMemo(() => {
+    if (!summaryRecord || championTotals.totalGames === 0) return false
+    return championTotals.totalGames !== summaryRecord.total
+      || championTotals.wins !== summaryRecord.wins
+      || championTotals.losses !== summaryRecord.losses
+  }, [championTotals, summaryRecord])
 
   const topChampions = useMemo(() => championSnapshot.slice(0, 5), [championSnapshot])
 
@@ -1039,84 +1094,6 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
   }, [open, selectedPlayer])
 
-  useEffect(() => {
-    if (!open || activeTab !== 'matches' || !selectedPlayer) return
-
-    const currentPuuid = selectedPlayer.player.puuid
-    if (!currentPuuid) return
-    if (repairingPuuid === currentPuuid) return
-    if (puuidRepairError) return
-
-    const attempts = puuidRepairAttempts.current.get(currentPuuid) ?? 0
-    if (attempts >= 3) return
-
-    const lastAttemptAt = puuidRepairLastAttemptAt.current.get(currentPuuid) ?? 0
-    if (Date.now() - lastAttemptAt < 10_000) return
-
-    const visibleMatches = matches.slice(0, visibleMatchesCount)
-    const hasMismatch = visibleMatches.some((match) => {
-      const detail = matchDetails[match.matchId]
-      if (!detail?.info?.participants?.length) return false
-      return !detail.info.participants.some((p) => p.puuid === currentPuuid)
-    })
-
-    if (!hasMismatch) return
-
-    puuidRepairAttempts.current.set(currentPuuid, attempts + 1)
-    puuidRepairLastAttemptAt.current.set(currentPuuid, Date.now())
-    setRepairingPuuid(currentPuuid)
-    setPuuidRepairError(null)
-
-    void (async () => {
-      try {
-        const res = await fetch(`/api/player/${currentPuuid}/repair-puuid`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            gameName: selectedPlayer.player.game_name ?? undefined,
-            tagLine: selectedPlayer.player.tag_line ?? undefined,
-          }),
-        })
-
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => null)
-          const msg = errBody?.error ? String(errBody.error) : `Repair failed (${res.status})`
-          setPuuidRepairError(msg)
-          return
-        }
-
-        const data = await res.json()
-        if (!data?.updated || !data?.newPuuid || data.newPuuid === currentPuuid) {
-          setPuuidRepairError('No updated PUUID returned by Riot for this Riot ID')
-          return
-        }
-
-        summaryCache.delete(currentPuuid)
-        matchesCache.delete(currentPuuid)
-
-        setMatchDetails({})
-        setSelectedPlayer((prev) => {
-          if (!prev || prev.player.puuid !== currentPuuid) return prev
-          return {
-            ...prev,
-            player: {
-              ...prev.player,
-              puuid: data.newPuuid,
-            },
-          }
-        })
-
-        puuidRepairAttempts.current.delete(currentPuuid)
-        puuidRepairLastAttemptAt.current.delete(currentPuuid)
-        setPuuidRepairError(null)
-      } catch {
-        setPuuidRepairError('Repair request failed before completion')
-      } finally {
-        setRepairingPuuid((prev) => (prev === currentPuuid ? null : prev))
-      }
-    })()
-  }, [open, activeTab, selectedPlayer, matches, visibleMatchesCount, matchDetails, repairingPuuid, puuidRepairError])
-
   const ensureMatchDetail = useCallback(async (matchId: string) => {
     const cachedDetail = getCacheValue(matchDetailCache, matchId)
     if (cachedDetail) {
@@ -1210,10 +1187,6 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setMatches([])
     setSelectedMatch(null)
     setVisibleMatchesCount(10)
-    setRepairingPuuid(null)
-    setPuuidRepairError(null)
-    puuidRepairAttempts.current.clear()
-    puuidRepairLastAttemptAt.current.clear()
     // 2. Memory Leak Fix: Clear heavy detail state
     setMatchDetails({})
   }, [])
@@ -1230,38 +1203,14 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     return links
   }, [selectedPlayer])
 
-  const openMatchWithAutoRepair = useCallback((match: MatchSummary, recordedAt?: string | null, queueType?: string | null) => {
-    setSelectedMatch(match)
+  const openMatchWithAutoRepair = useCallback((match: MatchSummary) => {
+    const focusedPuuid = selectedPlayer?.player.puuid ?? match.puuid
+    setSelectedMatch({
+      ...match,
+      puuid: focusedPuuid,
+    })
     ensureMatchDetail(match.matchId)
-
-    void (async () => {
-      try {
-        const res = await fetch('/api/lp-events/repair', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            puuid: match.puuid,
-            wrongMatchId: match.matchId,
-            recordedAt: recordedAt ?? undefined,
-            queueType: queueType ?? null,
-          })
-        })
-
-        if (res.ok) {
-          const data = await res.json()
-          if (data?.newMatchId && data.newMatchId !== match.matchId) {
-            setSelectedMatch((prev) => {
-              if (!prev || prev.matchId !== match.matchId) return prev
-              return { ...prev, matchId: data.newMatchId }
-            })
-            ensureMatchDetail(data.newMatchId)
-          }
-        }
-      } catch {
-        // ignore repair failure
-      }
-    })()
-  }, [ensureMatchDetail])
+  }, [ensureMatchDetail, selectedPlayer])
 
   const handleMatchHover = useCallback((match: MatchSummary) => {
     preloadStaticData(ddVersion)
@@ -1274,7 +1223,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       row_match_id: match.matchId,
       globalFocusedPuuid: selectedPlayer?.player?.puuid ?? null,
     })
-    openMatchWithAutoRepair(match, match.endTs ? new Date(match.endTs).toISOString() : null, 'RANKED_SOLO_5x5')
+    openMatchWithAutoRepair(match)
   }, [openMatchWithAutoRepair, selectedPlayer])
 
   const handleCloseMatchModal = useCallback(() => {
@@ -1502,8 +1451,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               spellMap={spellMap}
                               runeMap={runeMap}
                               currentRankData={summary?.rank}
-                              isRepairingPuuid={repairingPuuid === selectedPlayer?.player.puuid}
-                              repairError={puuidRepairError}
+                              focusedPuuid={selectedPlayer?.player.puuid ?? null}
                             />
                           ))}
                         {visibleMatchesCount < matches.length && (
@@ -1605,64 +1553,98 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                         No champion data available.
                       </div>
                     ) : (
-                      <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                        <div className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:border-slate-800 dark:bg-slate-950">
-                          <div>Champion</div>
-                          <div className="text-right tabular-nums">KDA</div>
-                          <div className="text-right tabular-nums">CS</div>
-                          <div className="text-right tabular-nums">Games</div>
+                      <div className="space-y-3">
+                        <div className={`rounded-2xl border px-4 py-3 ${championTotalsMismatch ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
+                          <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
+                            <div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Games</div>
+                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.totalGames}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">W-L</div>
+                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.wins}W {championTotals.losses}L</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Overall KDA</div>
+                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.kda.toFixed(2)}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg CS</div>
+                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.avgCs.toFixed(1)}</div>
+                            </div>
+                            <div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Rank Record</div>
+                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                                {summaryRecord ? `${summaryRecord.wins}W ${summaryRecord.losses}L` : '—'}
+                              </div>
+                            </div>
+                          </div>
+                          {championTotalsMismatch && (
+                            <div className="mt-2 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                              Champion totals do not match rank W-L. Data sync may be incomplete.
+                            </div>
+                          )}
                         </div>
-                        <div className="divide-y divide-slate-200 dark:divide-slate-800">
-                          {championSnapshot.map((champ) => {
-                            const losses = Math.max(0, champ.games - champ.wins)
-                            const winPct = champ.games ? (champ.wins / champ.games) * 100 : 0
-                            return (
-                              <div key={champ.championId} className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 px-5 py-3 text-[13px] text-slate-700 dark:text-slate-200">
-                                <div className="flex items-center gap-3 min-w-0">
-                                  {champ.icon ? (
-                                    <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-12 w-12 rounded-lg border border-slate-200 dark:border-slate-700" />
-                                  ) : (
-                                    <div className="h-12 w-12 rounded-lg bg-slate-200 dark:bg-slate-800" />
-                                  )}
-                                  <div className="grid min-w-0 flex-1 items-center gap-3" style={{ gridTemplateColumns: '160px 240px 44px' }}>
-                                    <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
-                                    <div className="flex h-6 overflow-hidden rounded-full border border-slate-200 text-[11px] font-semibold tabular-nums dark:border-slate-700">
-                                      {winPct === 100 ? (
-                                        <span className="flex w-full items-center justify-center bg-blue-400 px-2 text-white">
-                                          {champ.wins}W
-                                        </span>
-                                      ) : winPct === 0 ? (
-                                        <span className="flex w-full items-center justify-center bg-rose-400 px-2 text-white">
-                                          {losses}L
-                                        </span>
-                                      ) : (
-                                        <>
-                                          <span
-                                            className="flex items-center justify-center bg-blue-400 px-2 text-white"
-                                            style={{ width: `${winPct}%` }}
-                                          >
+
+                        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                          <div className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:border-slate-800 dark:bg-slate-950">
+                            <div>Champion</div>
+                            <div className="text-right tabular-nums">KDA</div>
+                            <div className="text-right tabular-nums">CS</div>
+                            <div className="text-right tabular-nums">Games</div>
+                          </div>
+                          <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                            {championSnapshot.map((champ) => {
+                              const losses = Math.max(0, champ.games - champ.wins)
+                              const winPct = champ.games ? (champ.wins / champ.games) * 100 : 0
+                              return (
+                                <div key={champ.championId} className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 px-5 py-3 text-[13px] text-slate-700 dark:text-slate-200">
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    {champ.icon ? (
+                                      <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-12 w-12 rounded-lg border border-slate-200 dark:border-slate-700" />
+                                    ) : (
+                                      <div className="h-12 w-12 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                    )}
+                                    <div className="grid min-w-0 flex-1 items-center gap-3" style={{ gridTemplateColumns: '160px 240px 44px' }}>
+                                      <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
+                                      <div className="flex h-6 overflow-hidden rounded-full border border-slate-200 text-[11px] font-semibold tabular-nums dark:border-slate-700">
+                                        {winPct === 100 ? (
+                                          <span className="flex w-full items-center justify-center bg-blue-400 px-2 text-white">
                                             {champ.wins}W
                                           </span>
-                                          <span
-                                            className="flex items-center justify-center bg-rose-400 px-2 text-white"
-                                            style={{ width: `${100 - winPct}%` }}
-                                          >
+                                        ) : winPct === 0 ? (
+                                          <span className="flex w-full items-center justify-center bg-rose-400 px-2 text-white">
                                             {losses}L
                                           </span>
-                                        </>
-                                      )}
+                                        ) : (
+                                          <>
+                                            <span
+                                              className="flex items-center justify-center bg-blue-400 px-2 text-white"
+                                              style={{ width: `${winPct}%` }}
+                                            >
+                                              {champ.wins}W
+                                            </span>
+                                            <span
+                                              className="flex items-center justify-center bg-rose-400 px-2 text-white"
+                                              style={{ width: `${100 - winPct}%` }}
+                                            >
+                                              {losses}L
+                                            </span>
+                                          </>
+                                        )}
+                                      </div>
+                                      <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                                        {champ.winrate}%
+                                      </span>
                                     </div>
-                                    <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
-                                      {champ.winrate}%
-                                    </span>
                                   </div>
+                                  <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.kda.toFixed(2)}</div>
+                                  <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.avgCs.toFixed(1)}</div>
+                                  <div className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">{champ.games}</div>
                                 </div>
-                                <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.kda.toFixed(2)}</div>
-                                <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.avgCs.toFixed(1)}</div>
-                                <div className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">{champ.games}</div>
-                              </div>
-                            )
-                          })}
+                              )
+                            })}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1676,7 +1658,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
         <MatchDetailsModal
           open={Boolean(selectedMatch)}
           matchId={selectedMatch?.matchId ?? null}
-          focusedPuuid={selectedMatch?.puuid ?? null}
+          focusedPuuid={selectedPlayer?.player.puuid ?? null}
         champMap={champMap}
         ddVersion={ddVersion}
         participants={[]}

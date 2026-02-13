@@ -75,6 +75,10 @@ type ChampionPlayerRow = {
   rankTier: string | null
   rankDivision: string | null
   rankLp: number | null
+  rankWins: number | null
+  rankLosses: number | null
+  rankTotalGames: number | null
+  recordMismatch: boolean
 }
 
 type ChampionRow = {
@@ -289,7 +293,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const { data: rankSnapshotRaw } = await supabase
     .from('player_rank_snapshot')
-    .select('puuid, queue_type, tier, rank, league_points')
+    .select('puuid, queue_type, tier, rank, league_points, wins, losses')
     .in('puuid', puuids)
 
 
@@ -439,6 +443,12 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       const playerAvgCs = values.games ? values.cs / values.games : 0
       const overall = playerTotalsByPuuid.get(puuid)
       const rank = rankByPuuid.get(puuid)
+      const rankWins = typeof rank?.wins === 'number' ? rank.wins : null
+      const rankLosses = typeof rank?.losses === 'number' ? rank.losses : null
+      const rankTotalGames = rankWins != null && rankLosses != null ? rankWins + rankLosses : null
+      const recordMismatch = rankTotalGames != null
+        ? (values.games !== rankTotalGames || values.wins !== rankWins || values.losses !== rankLosses)
+        : false
       return {
         puuid,
         name: player ? displayRiotId(player) : puuid,
@@ -457,6 +467,10 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         rankTier: rank?.tier ?? null,
         rankDivision: rank?.rank ?? null,
         rankLp: rank?.league_points ?? null,
+        rankWins,
+        rankLosses,
+        rankTotalGames,
+        recordMismatch,
       }
     })
 
@@ -499,6 +513,46 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     avgCs: champ.avgCs,
     players: champ.players,
   }))
+
+  const championTotalsKda = (totals.kills + totals.assists) / Math.max(1, totals.deaths)
+  const championTotalsAvgCs = totals.games > 0 ? totals.cs / totals.games : 0
+
+  const rankRecords = Array.from(rankByPuuid.values())
+    .filter((rank) => typeof rank?.wins === 'number' && typeof rank?.losses === 'number')
+    .map((rank) => ({
+      puuid: rank.puuid,
+      wins: Number(rank.wins ?? 0),
+      losses: Number(rank.losses ?? 0),
+      total: Number(rank.wins ?? 0) + Number(rank.losses ?? 0),
+    }))
+
+  const rankRecordByPuuid = new Map(rankRecords.map((row) => [row.puuid, row]))
+  const playerRecordChecks = Array.from(playersTotals.entries())
+    .map(([puuid, stats]) => {
+      const rank = rankRecordByPuuid.get(puuid)
+      if (!rank) return null
+      const mismatch = stats.games !== rank.total || stats.wins !== rank.wins || stats.losses !== rank.losses
+      return {
+        puuid,
+        player: playersByPuuid.get(puuid),
+        stats,
+        rank,
+        mismatch,
+        deltaGames: stats.games - rank.total,
+      }
+    })
+    .filter(Boolean) as Array<{
+      puuid: string
+      player: Player | undefined
+      stats: StatTotals
+      rank: { wins: number; losses: number; total: number }
+      mismatch: boolean
+      deltaGames: number
+    }>
+
+  const mismatchPlayers = playerRecordChecks
+    .filter((row) => row.mismatch)
+    .sort((a, b) => Math.abs(b.deltaGames) - Math.abs(a.deltaGames))
 
   const averagePerGame = (value: number, games: number) => (games > 0 ? value / games : 0)
   const topKills = uniqueByPuuid([...playerLeaderboard].sort((a, b) => averagePerGame(b.kills, b.games) - averagePerGame(a.kills, a.games)))
@@ -812,6 +866,49 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               <h2 className="text-sm font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
                 Champion Analytics
               </h2>
+            </div>
+
+            <div className={`rounded-2xl border p-4 ${mismatchPlayers.length > 0 ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
+              <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-5">
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Games</div>
+                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{totals.games.toLocaleString()}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">W-L</div>
+                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{totals.wins}W {totals.losses}L</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Overall KDA</div>
+                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotalsKda.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg CS</div>
+                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotalsAvgCs.toFixed(1)}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Integrity</div>
+                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">
+                    {playerRecordChecks.length ? `${mismatchPlayers.length}/${playerRecordChecks.length} mismatch` : 'No rank baseline'}
+                  </div>
+                </div>
+              </div>
+
+              {mismatchPlayers.length > 0 && (
+                <div className="mt-3 text-[11px] text-amber-700 dark:text-amber-300">
+                  <div className="font-semibold">Champion totals do not align with player ranked W-L for some players.</div>
+                  <div className="mt-1">
+                    {mismatchPlayers.slice(0, 5).map((row) => {
+                      const name = row.player ? displayRiotId(row.player) : row.puuid
+                      return (
+                        <div key={row.puuid} className="tabular-nums">
+                          {name}: champs {row.stats.wins}W {row.stats.losses}L ({row.stats.games}) vs rank {row.rank.wins}W {row.rank.losses}L ({row.rank.total})
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">

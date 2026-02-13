@@ -5,6 +5,7 @@ import { resolvePuuid } from '@/lib/riot/resolvePuuid'
 type RepairBody = {
   gameName?: string
   tagLine?: string
+  candidatePuuid?: string
 }
 
 async function migrateMatchParticipantsPuuid(oldPuuid: string, newPuuid: string) {
@@ -143,6 +144,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ puuid: 
     const body = (await req.json().catch(() => null)) as RepairBody | null
     let gameName = body?.gameName?.trim() ?? ''
     let tagLine = body?.tagLine?.trim() ?? ''
+    const candidatePuuid = body?.candidatePuuid?.trim() ?? ''
 
     if (!gameName || !tagLine) {
       const fromDb = await resolveRiotIdFromDb(oldPuuid)
@@ -159,10 +161,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ puuid: 
       )
     }
 
-    const newPuuid = await resolvePuuid(gameName, tagLine)
+    const newPuuid = candidatePuuid || (await resolvePuuid(gameName, tagLine))
 
     if (!newPuuid || newPuuid === oldPuuid) {
-      return NextResponse.json({ updated: false, oldPuuid, newPuuid: oldPuuid })
+      return NextResponse.json({
+        updated: false,
+        oldPuuid,
+        newPuuid: oldPuuid,
+        reason: candidatePuuid
+          ? 'Candidate PUUID matched existing PUUID'
+          : 'No updated PUUID returned by Riot for this Riot ID',
+      })
     }
 
     await migratePuuid(oldPuuid, newPuuid)
