@@ -200,7 +200,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
 
   return (
     <div className="relative">
-      <div className="absolute inset-y-0 right-0 left-[calc(300px+24px)] bg-slate-950/70 pointer-events-none z-0" />
+      <div className="absolute inset-y-0 right-0 left-[calc(300px+24px)] bg-slate-100/80 dark:bg-slate-950/70 pointer-events-none z-0" />
       <div className="absolute left-[calc(300px+24px)] top-0 bottom-0 w-px bg-slate-200/70 dark:bg-slate-800/70 z-0" />
       <div className="p-6 relative z-10">
         <div className="grid gap-0 lg:grid-cols-[300px_320px_minmax(0,1fr)] items-stretch">
