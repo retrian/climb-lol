@@ -71,7 +71,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
       if (!fetchAll) done = true
     }
 
-    const payload = matches.map((row: any) => ({
+    // Defensive de-duplication: keep one row per match_id for this player.
+    // Historical backfills/migrations can leave duplicate participant rows.
+    const uniqueRows = new Map<string, any>()
+    for (const row of matches) {
+      const matchId = String(row?.match_id ?? '')
+      if (!matchId || uniqueRows.has(matchId)) continue
+      uniqueRows.set(matchId, row)
+    }
+
+    const payload = Array.from(uniqueRows.values()).map((row: any) => ({
       matchId: row.match_id,
       puuid: row.puuid,
       championId: row.champion_id,

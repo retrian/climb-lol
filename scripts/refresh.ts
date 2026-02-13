@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import dotenv from 'dotenv'
+import { getSeasonStartIso } from '../src/lib/riot/season'
 
 dotenv.config({ path: '.env.local' })
 dotenv.config({ path: '.env' })
@@ -31,6 +32,13 @@ const CUTOFF_POLL_MS = 60 * 60 * 1000 // hourly
 
 const QUEUE_SOLO = 'RANKED_SOLO_5x5'
 const QUEUE_FLEX = 'RANKED_FLEX_SR'
+const QUEUE_SOLO_ID = 420
+
+const MATCHLIST_SEASON_START_ISO = getSeasonStartIso()
+const MATCHLIST_SEASON_START_MS = new Date(MATCHLIST_SEASON_START_ISO).getTime()
+const MATCHLIST_SEASON_START_UNIX = Number.isFinite(MATCHLIST_SEASON_START_MS)
+  ? Math.floor(MATCHLIST_SEASON_START_MS / 1000)
+  : null
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
@@ -446,7 +454,7 @@ const MATCHLIST_FIRST_PAGE_SIZE = Math.min(
   Math.max(Number(process.env.MATCHLIST_FIRST_PAGE_SIZE ?? 20), 1),
   MATCHLIST_PAGE_SIZE
 )
-const MATCHLIST_MAX_PAGES = Math.max(Number(process.env.MATCHLIST_MAX_PAGES ?? 5), 1)
+const MATCHLIST_MAX_PAGES = Math.max(Number(process.env.MATCHLIST_MAX_PAGES ?? 30), 1)
 // Default to Ranked Solo queue so paging isn't diluted by normals/ARAM/etc.
 // This keeps leaderboard/champion stats aligned with ranked-only season sites.
 const MATCHLIST_QUEUE = (process.env.MATCHLIST_QUEUE ?? '420').trim()
@@ -456,6 +464,7 @@ const MATCHDETAIL_SLEEP_MS = Math.max(Number(process.env.MATCHDETAIL_SLEEP_MS ??
 async function fetchMatchIdsPage(puuid: string, start: number, count: number): Promise<string[]> {
   const params = new URLSearchParams({ start: String(start), count: String(count) })
   if (MATCHLIST_QUEUE) params.set('queue', MATCHLIST_QUEUE)
+  if (MATCHLIST_SEASON_START_UNIX != null) params.set('startTime', String(MATCHLIST_SEASON_START_UNIX))
   return riotFetch<string[]>(
     `${AMERICAS}/lol/match/v5/matches/by-puuid/${encodeURIComponent(puuid)}/ids?${params.toString()}`
   )
@@ -515,13 +524,68 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
 
   await processPage(firstPageIds)
 
+  let exhaustedPages = firstPageIds.length < MATCHLIST_FIRST_PAGE_SIZE
   let start = MATCHLIST_FIRST_PAGE_SIZE
   for (let page = 1; page < MATCHLIST_MAX_PAGES; page += 1) {
     const pageIds = await fetchMatchIdsPage(puuid, start, MATCHLIST_PAGE_SIZE)
-    if (!pageIds.length) break
+    if (!pageIds.length) {
+      exhaustedPages = true
+      break
+    }
     await processPage(pageIds)
+    if (pageIds.length < MATCHLIST_PAGE_SIZE) {
+      exhaustedPages = true
+      break
+    }
     if (consecutiveFullPages >= 2) break
     start += MATCHLIST_PAGE_SIZE
+  }
+
+  // Hard reconciliation: if we exhausted Riot pages for this season window,
+  // remove stale season rows no longer present in Riot authoritative IDs.
+  if (exhaustedPages && Number.isFinite(MATCHLIST_SEASON_START_MS)) {
+    const authoritativeIds = new Set(ids)
+    const existingSeasonRows: string[] = []
+    const chunkSize = 1000
+    let from = 0
+
+    while (true) {
+      const { data: chunk, error } = await supabase
+        .from('match_participants')
+        .select('match_id, matches!inner(game_end_ts, queue_id)')
+        .eq('puuid', puuid)
+        .eq('matches.queue_id', QUEUE_SOLO_ID)
+        .gte('matches.game_end_ts', MATCHLIST_SEASON_START_MS)
+        .range(from, from + chunkSize - 1)
+
+      if (error) throw error
+      if (!chunk || chunk.length === 0) break
+
+      for (const row of chunk as any[]) {
+        const id = String(row?.match_id ?? '')
+        if (id) existingSeasonRows.push(id)
+      }
+
+      if (chunk.length < chunkSize) break
+      from += chunkSize
+    }
+
+    const staleIds = Array.from(new Set(existingSeasonRows)).filter((id) => !authoritativeIds.has(id))
+
+    for (let i = 0; i < staleIds.length; i += 500) {
+      const batch = staleIds.slice(i, i + 500)
+      if (!batch.length) continue
+      const { error } = await supabase
+        .from('match_participants')
+        .delete()
+        .eq('puuid', puuid)
+        .in('match_id', batch)
+      if (error) throw error
+    }
+
+    if (staleIds.length > 0) {
+      console.log(`[sync] removed ${staleIds.length} stale season rows for ${puuid.slice(0, 12)}`)
+    }
   }
 
   if (!ids.length) {

@@ -815,18 +815,6 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     }
   }, [playerMatches])
 
-  const summaryRecord = useMemo(() => {
-    if (!summary?.rank) return null
-    const wins = summary.rank.wins ?? 0
-    const losses = summary.rank.losses ?? 0
-    return {
-      wins,
-      losses,
-      total: wins + losses,
-      winrate: Number(formatPercent(wins, wins + losses, 0)),
-    }
-  }, [summary?.rank])
-
   const championSnapshot = useMemo(() => {
     if (!playerMatches.length) return []
     const map = new Map<number, { championId: number; games: number; wins: number; kills: number; deaths: number; assists: number; cs: number }>()
@@ -900,11 +888,14 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [championSnapshot])
 
   const championTotalsMismatch = useMemo(() => {
-    if (!summaryRecord || championTotals.totalGames === 0) return false
-    return championTotals.totalGames !== summaryRecord.total
-      || championTotals.wins !== summaryRecord.wins
-      || championTotals.losses !== summaryRecord.losses
-  }, [championTotals, summaryRecord])
+    if (!playerMatches.length) return false
+    const expectedGames = playerMatches.length
+    const expectedWins = playerMatches.reduce((acc, match) => acc + (match.win ? 1 : 0), 0)
+    const expectedLosses = Math.max(0, expectedGames - expectedWins)
+    return championTotals.totalGames !== expectedGames
+      || championTotals.wins !== expectedWins
+      || championTotals.losses !== expectedLosses
+  }, [championTotals, playerMatches])
 
   const topChampions = useMemo(() => championSnapshot.slice(0, 5), [championSnapshot])
 
@@ -1555,7 +1546,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                     ) : (
                       <div className="space-y-3">
                         <div className={`rounded-2xl border px-4 py-3 ${championTotalsMismatch ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
-                          <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-5">
+                          <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
                             <div>
                               <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Games</div>
                               <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.totalGames}</div>
@@ -1573,15 +1564,15 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.avgCs.toFixed(1)}</div>
                             </div>
                             <div>
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Rank Record</div>
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Match Record</div>
                               <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                                {summaryRecord ? `${summaryRecord.wins}W ${summaryRecord.losses}L` : '—'}
+                                {championTotals.wins}W {championTotals.losses}L
                               </div>
                             </div>
                           </div>
                           {championTotalsMismatch && (
                             <div className="mt-2 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
-                              Champion totals do not match rank W-L. Data sync may be incomplete.
+                              Champion rollup mismatch detected in current match dataset.
                             </div>
                           )}
                         </div>

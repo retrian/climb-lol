@@ -75,10 +75,6 @@ type ChampionPlayerRow = {
   rankTier: string | null
   rankDivision: string | null
   rankLp: number | null
-  rankWins: number | null
-  rankLosses: number | null
-  rankTotalGames: number | null
-  recordMismatch: boolean
 }
 
 type ChampionRow = {
@@ -309,6 +305,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .in('puuid', puuids)
     .eq('matches.queue_id', 420)
     .gte('matches.game_end_ts', seasonStartMs)
+    .gte('matches.game_duration_s', 300)
 
 
   // Build match Map from joined matches to avoid separate batched queries
@@ -316,7 +313,12 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const participants: MatchParticipant[] = []
 
   const participantRows = (participantsRaw ?? []) as unknown as MatchParticipantRow[]
+  const seenPlayerMatch = new Set<string>()
   for (const row of participantRows) {
+    const dedupeKey = `${row.puuid}:${row.match_id}`
+    if (seenPlayerMatch.has(dedupeKey)) continue
+    seenPlayerMatch.add(dedupeKey)
+
     const match = Array.isArray(row.matches) ? row.matches[0] : row.matches
     if (!match || typeof match.game_end_ts !== 'number') continue
     matchById.set(row.match_id, {
@@ -443,12 +445,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       const playerAvgCs = values.games ? values.cs / values.games : 0
       const overall = playerTotalsByPuuid.get(puuid)
       const rank = rankByPuuid.get(puuid)
-      const rankWins = typeof rank?.wins === 'number' ? rank.wins : null
-      const rankLosses = typeof rank?.losses === 'number' ? rank.losses : null
-      const rankTotalGames = rankWins != null && rankLosses != null ? rankWins + rankLosses : null
-      const recordMismatch = rankTotalGames != null
-        ? (values.games !== rankTotalGames || values.wins !== rankWins || values.losses !== rankLosses)
-        : false
+      const overallGames = overall?.games ?? values.games
+      const overallWins = overall?.wins ?? values.wins
+      const overallLosses = overall?.losses ?? values.losses
       return {
         puuid,
         name: player ? displayRiotId(player) : puuid,
@@ -460,17 +459,13 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         winrate: formatWinrate(values.wins, values.games),
         kda: playerKda,
         avgCs: playerAvgCs,
-        overallGames: overall?.games ?? values.games,
-        overallWins: overall?.wins ?? values.wins,
-        overallLosses: overall?.losses ?? values.losses,
+        overallGames,
+        overallWins,
+        overallLosses,
         overallWinrate: overall?.winrate ?? formatWinrate(values.wins, values.games),
         rankTier: rank?.tier ?? null,
         rankDivision: rank?.rank ?? null,
         rankLp: rank?.league_points ?? null,
-        rankWins,
-        rankLosses,
-        rankTotalGames,
-        recordMismatch,
       }
     })
 
@@ -516,43 +511,31 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const championTotalsKda = (totals.kills + totals.assists) / Math.max(1, totals.deaths)
   const championTotalsAvgCs = totals.games > 0 ? totals.cs / totals.games : 0
-
-  const rankRecords = Array.from(rankByPuuid.values())
-    .filter((rank) => typeof rank?.wins === 'number' && typeof rank?.losses === 'number')
-    .map((rank) => ({
-      puuid: rank.puuid,
-      wins: Number(rank.wins ?? 0),
-      losses: Number(rank.losses ?? 0),
-      total: Number(rank.wins ?? 0) + Number(rank.losses ?? 0),
-    }))
-
-  const rankRecordByPuuid = new Map(rankRecords.map((row) => [row.puuid, row]))
-  const playerRecordChecks = Array.from(playersTotals.entries())
-    .map(([puuid, stats]) => {
-      const rank = rankRecordByPuuid.get(puuid)
-      if (!rank) return null
-      const mismatch = stats.games !== rank.total || stats.wins !== rank.wins || stats.losses !== rank.losses
-      return {
-        puuid,
-        player: playersByPuuid.get(puuid),
-        stats,
-        rank,
-        mismatch,
-        deltaGames: stats.games - rank.total,
-      }
-    })
-    .filter(Boolean) as Array<{
-      puuid: string
-      player: Player | undefined
-      stats: StatTotals
-      rank: { wins: number; losses: number; total: number }
-      mismatch: boolean
-      deltaGames: number
-    }>
-
-  const mismatchPlayers = playerRecordChecks
-    .filter((row) => row.mismatch)
-    .sort((a, b) => Math.abs(b.deltaGames) - Math.abs(a.deltaGames))
+  const championRollup = championTableRows.reduce(
+    (acc, row) => {
+      acc.games += row.games
+      acc.wins += row.wins
+      acc.losses += row.losses
+      return acc
+    },
+    { games: 0, wins: 0, losses: 0 }
+  )
+  const playerRollup = playerLeaderboard.reduce(
+    (acc, row) => {
+      acc.games += row.games
+      acc.wins += row.wins
+      acc.losses += row.losses
+      return acc
+    },
+    { games: 0, wins: 0, losses: 0 }
+  )
+  const integrityMismatch =
+    championRollup.games !== totals.games
+    || championRollup.wins !== totals.wins
+    || championRollup.losses !== totals.losses
+    || playerRollup.games !== totals.games
+    || playerRollup.wins !== totals.wins
+    || playerRollup.losses !== totals.losses
 
   const averagePerGame = (value: number, games: number) => (games > 0 ? value / games : 0)
   const topKills = uniqueByPuuid([...playerLeaderboard].sort((a, b) => averagePerGame(b.kills, b.games) - averagePerGame(a.kills, a.games)))
@@ -868,7 +851,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               </h2>
             </div>
 
-            <div className={`rounded-2xl border p-4 ${mismatchPlayers.length > 0 ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
+            <div className={`rounded-2xl border p-4 ${integrityMismatch ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
               <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-5">
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Games</div>
@@ -889,23 +872,16 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Integrity</div>
                   <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                    {playerRecordChecks.length ? `${mismatchPlayers.length}/${playerRecordChecks.length} mismatch` : 'No rank baseline'}
+                    {integrityMismatch ? 'Mismatch detected' : 'Consistent'}
                   </div>
                 </div>
               </div>
 
-              {mismatchPlayers.length > 0 && (
+              {integrityMismatch && (
                 <div className="mt-3 text-[11px] text-amber-700 dark:text-amber-300">
-                  <div className="font-semibold">Champion totals do not align with player ranked W-L for some players.</div>
-                  <div className="mt-1">
-                    {mismatchPlayers.slice(0, 5).map((row) => {
-                      const name = row.player ? displayRiotId(row.player) : row.puuid
-                      return (
-                        <div key={row.puuid} className="tabular-nums">
-                          {name}: champs {row.stats.wins}W {row.stats.losses}L ({row.stats.games}) vs rank {row.rank.wins}W {row.rank.losses}L ({row.rank.total})
-                        </div>
-                      )
-                    })}
+                  <div className="font-semibold">Internal rollups are not consistent.</div>
+                  <div className="mt-1 tabular-nums">
+                    Champion rollup: {championRollup.wins}W {championRollup.losses}L ({championRollup.games}) • Player rollup: {playerRollup.wins}W {playerRollup.losses}L ({playerRollup.games}) • Totals: {totals.wins}W {totals.losses}L ({totals.games})
                   </div>
                 </div>
               )}
