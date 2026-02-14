@@ -44,6 +44,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
           matches!inner(game_end_ts, game_duration_s, queue_id)
         `)
         .eq('puuid', puuid)
+        // Exclude remakes from player match history totals.
+        .or('end_type.is.null,end_type.neq.REMAKE')
         .eq('matches.queue_id', 420)
         .gte('matches.game_end_ts', seasonStartMs)
         .order('game_end_ts', { ascending: false, referencedTable: 'matches' })
@@ -56,11 +58,25 @@ export async function GET(request: Request, { params }: { params: Promise<{ puui
         return NextResponse.json({ error: error.message }, { status: 500 })
       }
 
-      if (!rows || rows.length === 0) {
+      // Robust remake exclusion:
+      // - explicit REMAKE end_type
+      // - fallback for legacy/misclassified rows: duration under ~3 minutes
+      //   (/remake unlock 0:55, closes 2:25, with ~30s grace => ~2:55)
+      const filteredRows = (rows ?? []).filter((row: any) => {
+        const endType = String(row?.end_type ?? '').toUpperCase()
+        if (endType === 'REMAKE') return false
+
+        const durationS = Number(row?.matches?.game_duration_s ?? 0)
+        if (Number.isFinite(durationS) && durationS > 0 && durationS <= 180) return false
+
+        return true
+      })
+
+      if (filteredRows.length === 0) {
         done = true
       } else {
-        matches.push(...rows)
-        if (!fetchAll || rows.length < pageSize) {
+        matches.push(...filteredRows)
+        if (!fetchAll || (rows?.length ?? 0) < pageSize) {
           done = true
         } else {
           from += pageSize

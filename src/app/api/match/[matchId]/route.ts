@@ -98,25 +98,11 @@ async function upsertMatchParticipants(matchId: string, match: any) {
     (existingLp ?? []).map((row: any) => [row.puuid, row])
   )
 
-  const participantPuuids = new Set(
-    (((info.participants as any[]) ?? []).map((part) => String(part?.puuid ?? '')).filter(Boolean))
-  )
-
-  const stalePuuids = (existingLp ?? [])
-    .map((row: any) => String(row?.puuid ?? ''))
-    .filter((puuid) => puuid && !participantPuuids.has(puuid))
-
-  if (stalePuuids.length > 0) {
-    const { error: deleteError } = await service
-      .from('match_participants')
-      .delete()
-      .eq('match_id', matchId)
-      .in('puuid', stalePuuids)
-
-    if (deleteError) {
-      console.warn('[Match Cache] participants stale-delete error', deleteError.message)
-    }
-  }
+  // IMPORTANT:
+  // Do NOT delete existing participant rows for "stale" PUUIDs here.
+  // In production we can temporarily have mixed/legacy PUUID representations,
+  // and destructive deletes during read-path match hydration cause seasonal
+  // game counts to drop whenever match detail endpoints are hit.
 
   const endType = getEndType(info)
   const participants = (info.participants as any[]) ?? []

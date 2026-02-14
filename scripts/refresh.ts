@@ -9,6 +9,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABAS
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const rawRiotApiKey = process.env.RIOT_API_KEY
 const RANKED_SEASON_START = process.env.RANKED_SEASON_START
+const ENABLE_SEASON_RESET = String(process.env.ENABLE_SEASON_RESET ?? '').toLowerCase() === 'true'
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !rawRiotApiKey) {
   throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / RIOT_API_KEY')
@@ -46,6 +47,10 @@ function sleep(ms: number) {
 
 async function resetSeasonDataIfNeeded() {
   if (!RANKED_SEASON_START) return
+  if (!ENABLE_SEASON_RESET) {
+    console.warn('[season] RANKED_SEASON_START is set, but ENABLE_SEASON_RESET!=true, skipping destructive season reset')
+    return
+  }
 
   const seasonStartMs = new Date(RANKED_SEASON_START).getTime()
   if (Number.isNaN(seasonStartMs)) {
@@ -473,6 +478,15 @@ async function fetchMatchIdsPage(puuid: string, start: number, count: number): P
 async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: string[] }> {
   const now = new Date().toISOString()
 
+  const { data: playerIdentity } = await supabase
+    .from('players')
+    .select('game_name, tag_line')
+    .eq('puuid', puuid)
+    .maybeSingle()
+
+  const identityGameName = String(playerIdentity?.game_name ?? '').trim().toLowerCase()
+  const identityTagLine = String(playerIdentity?.tag_line ?? '').trim().toLowerCase()
+
   const ids: string[] = []
   const idsSet = new Set<string>()
   const matchIdsToFetch = new Set<string>()
@@ -536,51 +550,10 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
     start += MATCHLIST_PAGE_SIZE
   }
 
-  // Hard reconciliation: if we exhausted Riot pages for this season window,
-  // remove stale season rows no longer present in Riot authoritative IDs.
   if (exhaustedPages && Number.isFinite(MATCHLIST_SEASON_START_MS)) {
-    const authoritativeIds = new Set(ids)
-    const existingSeasonRows: string[] = []
-    const chunkSize = 1000
-    let from = 0
-
-    while (true) {
-      const { data: chunk, error } = await supabase
-        .from('match_participants')
-        .select('match_id, matches!inner(game_end_ts, queue_id)')
-        .eq('puuid', puuid)
-        .eq('matches.queue_id', QUEUE_SOLO_ID)
-        .gte('matches.game_end_ts', MATCHLIST_SEASON_START_MS)
-        .range(from, from + chunkSize - 1)
-
-      if (error) throw error
-      if (!chunk || chunk.length === 0) break
-
-      for (const row of chunk as any[]) {
-        const id = String(row?.match_id ?? '')
-        if (id) existingSeasonRows.push(id)
-      }
-
-      if (chunk.length < chunkSize) break
-      from += chunkSize
-    }
-
-    const staleIds = Array.from(new Set(existingSeasonRows)).filter((id) => !authoritativeIds.has(id))
-
-    for (let i = 0; i < staleIds.length; i += 500) {
-      const batch = staleIds.slice(i, i + 500)
-      if (!batch.length) continue
-      const { error } = await supabase
-        .from('match_participants')
-        .delete()
-        .eq('puuid', puuid)
-        .in('match_id', batch)
-      if (error) throw error
-    }
-
-    if (staleIds.length > 0) {
-      console.log(`[sync] removed ${staleIds.length} stale season rows for ${puuid.slice(0, 12)}`)
-    }
+    // NOTE: destructive stale-row reconciliation is intentionally disabled.
+    // We only backfill missing rows to avoid accidental data loss from transient
+    // Riot matchlist gaps or paging inconsistencies.
   }
 
   if (!ids.length) {
@@ -607,7 +580,18 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
       game_duration_s: Number(info.gameDuration ?? 0),
     })
 
-    const part = (info.participants as any[]).find((x) => x.puuid === puuid)
+    const participants = (info.participants as any[]) ?? []
+    let part = participants.find((x) => x.puuid === puuid)
+
+    // Fallback for mixed/legacy PUUID representations: map by Riot ID when present.
+    if (!part && identityGameName && identityTagLine) {
+      part = participants.find((x) => {
+        const gn = String(x?.riotIdGameName ?? '').trim().toLowerCase()
+        const tl = String(x?.riotIdTagline ?? '').trim().toLowerCase()
+        return gn === identityGameName && tl === identityTagLine
+      })
+    }
+
     if (part) {
       // Determine end type
       let endType: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' = 'NORMAL'

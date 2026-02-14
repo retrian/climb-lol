@@ -303,9 +303,9 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     .from('match_participants')
     .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, end_type, matches!inner(game_duration_s, game_end_ts, queue_id)')
     .in('puuid', puuids)
+    .or('end_type.is.null,end_type.neq.REMAKE')
     .eq('matches.queue_id', 420)
     .gte('matches.game_end_ts', seasonStartMs)
-    .gte('matches.game_duration_s', 300)
 
 
   // Build match Map from joined matches to avoid separate batched queries
@@ -315,6 +315,14 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const participantRows = (participantsRaw ?? []) as unknown as MatchParticipantRow[]
   const seenPlayerMatch = new Set<string>()
   for (const row of participantRows) {
+    const endType = String(row.end_type ?? '').toUpperCase()
+    if (endType === 'REMAKE') continue
+
+    const durationS = Number((Array.isArray(row.matches) ? row.matches[0]?.game_duration_s : row.matches?.game_duration_s) ?? 0)
+    // Fallback remake exclusion for legacy/misclassified rows:
+    // treat <= 3 minutes as remake-like.
+    if (Number.isFinite(durationS) && durationS > 0 && durationS <= 180) continue
+
     const dedupeKey = `${row.puuid}:${row.match_id}`
     if (seenPlayerMatch.has(dedupeKey)) continue
     seenPlayerMatch.add(dedupeKey)
