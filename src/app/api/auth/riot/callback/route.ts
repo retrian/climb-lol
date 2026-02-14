@@ -246,6 +246,26 @@ export async function GET(req: Request) {
       if (verified.error) {
         return NextResponse.json({ error: 'verifyOtp failed', details: verified.error.message }, { status: 400 })
       }
+
+      const verifiedUserId = verified.data.user?.id ?? userId
+      if (verifiedUserId) {
+        if (riotDisplay) {
+          await supabaseAdmin
+            .from('profiles')
+            .upsert({ user_id: verifiedUserId, username: riotDisplay.slice(0, 24), updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+        }
+
+        await supabaseAdmin.auth.admin.updateUserById(verifiedUserId, {
+          user_metadata: {
+            riot_sub: riotSub,
+            ...(accountMe?.gameName ? { riot_game_name: accountMe.gameName } : {}),
+            ...(accountMe?.tagLine ? { riot_tag_line: accountMe.tagLine } : {}),
+            ...(summonerMe?.puuid ? { riot_puuid: summonerMe.puuid } : {}),
+            ...(typeof summonerMe?.profileIconId === 'number' ? { riot_profile_icon_id: summonerMe.profileIconId } : {}),
+            ...(riotDisplay ? { full_name: riotDisplay } : {}),
+          },
+        })
+      }
     } else {
       return NextResponse.json(
         {
