@@ -68,6 +68,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
   const [hoveredId, setHoveredId] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<'winrate' | 'games'>('games')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [searchQuery, setSearchQuery] = useState('')
   const [selectedChampionId, setSelectedChampionId] = useState<number | null>(null)
   const [selectedPlayerPuuid, setSelectedPlayerPuuid] = useState<string | null>(null)
   const [hoveredPlayerPuuid, setHoveredPlayerPuuid] = useState<string | null>(null)
@@ -75,11 +76,16 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
   const chartRef = useRef<HTMLDivElement | null>(null)
   const championItemRefs = useRef<Record<number, HTMLButtonElement | null>>({})
   const championListRef = useRef<HTMLDivElement | null>(null)
+  const normalizedSearchQuery = useMemo(() => searchQuery.trim().toLowerCase(), [searchQuery])
+  const filteredRows = useMemo(() => {
+    if (!normalizedSearchQuery) return rows
+    return rows.filter((row) => row.name.toLowerCase().includes(normalizedSearchQuery))
+  }, [rows, normalizedSearchQuery])
   const maxGames = useMemo(() => {
-    const rawMax = Math.max(1, ...rows.map((row) => row.games))
+    const rawMax = Math.max(1, ...filteredRows.map((row) => row.games))
     return rawMax + 20
-  }, [rows])
-  const plotRows = useMemo(() => [...rows].sort((a, b) => b.games - a.games), [rows])
+  }, [filteredRows])
+  const plotRows = useMemo(() => [...filteredRows].sort((a, b) => b.games - a.games), [filteredRows])
 
   const xTicks = useMemo(() => {
     const steps = 4
@@ -92,7 +98,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
   const yTicks = useMemo(() => [1, 0.75, 0.5, 0.25, 0], [])
 
   const listRows = useMemo(() => {
-    const copy = [...rows]
+    const copy = [...filteredRows]
     copy.sort((a, b) => {
       const direction = sortDirection === 'asc' ? 1 : -1
       const result = sortKey === 'winrate' ? a.winrateValue - b.winrateValue : a.games - b.games
@@ -100,7 +106,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
       return direction * result
     })
     return copy
-  }, [rows, sortDirection, sortKey])
+  }, [filteredRows, sortDirection, sortKey])
 
   const toggleSort = (key: 'winrate' | 'games') => {
     if (key === sortKey) {
@@ -119,8 +125,8 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
   }, [hoveredId, plotRows])
 
   const selectedChampion = useMemo(
-    () => rows.find((row) => row.id === selectedChampionId) ?? null,
-    [rows, selectedChampionId]
+    () => filteredRows.find((row) => row.id === selectedChampionId) ?? null,
+    [filteredRows, selectedChampionId]
   )
 
   const playerRows = useMemo(() => {
@@ -148,6 +154,13 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
   }, [selectedChampionId])
   useEffect(() => {
     if (!selectedChampionId) return
+    if (filteredRows.some((row) => row.id === selectedChampionId)) return
+    setSelectedChampionId(null)
+    setSelectedPlayerPuuid(null)
+    setHoveredId(null)
+  }, [filteredRows, selectedChampionId])
+  useEffect(() => {
+    if (!selectedChampionId) return
     const node = championItemRefs.current[selectedChampionId]
     const container = championListRef.current
     if (!node || !container) return
@@ -166,7 +179,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     return { x: (rand - 0.5) * 26, y: (rand2 - 0.5) * 26 }
   }
 
-  if (plotRows.length === 0) {
+  if (rows.length === 0) {
     return (
       <div className="p-6 text-center text-sm text-slate-400">No champion data available.</div>
     )
@@ -202,12 +215,25 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     <div className="relative">
       <div className="absolute inset-y-0 right-0 left-[calc(300px+24px)] bg-slate-100/80 dark:bg-slate-950/70 pointer-events-none z-0" />
       <div className="absolute left-[calc(300px+24px)] top-0 bottom-0 w-px bg-slate-200/70 dark:bg-slate-800/70 z-0" />
-      <div className="p-6 relative z-10">
+      <div className="p-4 relative z-10">
         <div className="grid gap-0 lg:grid-cols-[300px_320px_minmax(0,1fr)] items-stretch">
-        <aside className="px-4 py-3 h-full">
-          <div className="sticky top-0 z-10 bg-transparent py-2">
-            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_72px_64px] gap-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              <div>Champions: {rows.length}</div>
+        <aside className="px-4 py-2 h-full">
+          <div className="sticky top-0 z-10 bg-transparent py-1">
+            <div>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search champion..."
+                aria-label="Search champion"
+                className="w-full rounded-lg border border-slate-200 bg-white/80 px-3 py-1.5 text-xs text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-400/30 dark:border-slate-700 dark:bg-slate-900/80 dark:text-slate-200 dark:placeholder:text-slate-500"
+              />
+            </div>
+            <div className="mt-2 grid grid-cols-[minmax(0,1fr)_72px_64px] gap-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+              <div>
+                Champions: {listRows.length}
+                {normalizedSearchQuery ? ` / ${rows.length}` : ''}
+              </div>
               <button type="button" onClick={() => toggleSort('winrate')} className="text-right hover:text-slate-900 dark:hover:text-slate-100" aria-label="Sort by winrate">
                 Winrate {sortKey === 'winrate' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
               </button>
@@ -216,8 +242,10 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
               </button>
             </div>
           </div>
-            <div ref={championListRef} className="leaderboard-scroll max-h-[520px] overflow-y-auto pb-3 [direction:rtl]">
-              {listRows.map((row, idx) => (
+            <div ref={championListRef} className="leaderboard-scroll max-h-[440px] overflow-y-auto pb-3 [direction:rtl]">
+              {listRows.length === 0 ? (
+                <div className="px-2 py-6 text-center text-sm text-slate-500 dark:text-slate-400 [direction:ltr]">No champions match your search.</div>
+              ) : listRows.map((row, idx) => (
                 <button
                   key={row.id}
                   type="button"
@@ -247,16 +275,16 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
             </div>
         </aside>
 
-        <aside className="px-4 py-3">
-          <div className="sticky top-0 z-10 bg-transparent py-2">
+        <aside className="px-4 py-2">
+          <div className="sticky top-0 z-10 bg-transparent py-1">
             <div className="flex items-center justify-end" />
-            <div className="mt-3 grid grid-cols-[minmax(0,1fr)_64px_64px] gap-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+            <div className="mt-2 grid grid-cols-[minmax(0,1fr)_64px_64px] gap-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
               <div>Player</div>
               <div className="text-right">Win%</div>
               <div className="text-right">Games</div>
             </div>
           </div>
-            <div className="leaderboard-scroll max-h-[520px] overflow-y-auto pb-4 [direction:rtl]">
+            <div className="leaderboard-scroll max-h-[440px] overflow-y-auto pb-4 [direction:rtl]">
               {!selectedChampion ? (
                 <div className="px-2 py-6 text-center text-sm text-slate-500 dark:text-slate-400 [direction:ltr]">Choose a champion to view player stats.</div>
               ) : playerRows.length === 0 ? (
@@ -296,7 +324,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
             </div>
           </aside>
 
-        <section className="pl-4 pr-0 py-3 -mr-6" ref={chartRef}>
+        <section className="pl-4 pr-0 py-2 -mr-6" ref={chartRef}>
           <div className="flex items-center justify-end gap-3" />
           <div className="mt-4 text-xs">
             {selectedPlayer ? (
@@ -344,19 +372,21 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
               ) : null
             )}
           </div>
-          <div className="relative mt-6">
-            <button
-              type="button"
-              onClick={() => {
-                setSelectedChampionId(null)
-                setSelectedPlayerPuuid(null)
-                setHoveredId(null)
-              }}
-              className="absolute bottom-3 right-3 z-10 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-white hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-300 dark:hover:text-slate-100"
-            >
-              Reset
-            </button>
-            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} width="100%" height={chartHeight} role="img" aria-label="Champion winrate by games played scatter plot">
+          <div className="relative mt-3">
+            {plotRows.length > 0 ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedChampionId(null)
+                    setSelectedPlayerPuuid(null)
+                    setHoveredId(null)
+                  }}
+                  className="absolute bottom-3 right-3 z-10 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-white hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-300 dark:hover:text-slate-100"
+                >
+                  Reset
+                </button>
+                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} width="100%" height={chartHeight} role="img" aria-label="Champion winrate by games played scatter plot">
               <defs>
                 {plotRows.map((row) => (
                   <clipPath key={`clip-${row.id}`} id={`clip-${row.id}`}>
@@ -572,7 +602,13 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                   </g>
                 ) : null}
               </g>
-            </svg>
+                </svg>
+              </>
+            ) : (
+              <div className="flex h-[460px] items-center justify-center rounded-xl border border-dashed border-slate-300/70 text-sm text-slate-500 dark:border-slate-700/70 dark:text-slate-400">
+                No champions match your search.
+              </div>
+            )}
             {tooltip ? (
               <div className="pointer-events-none absolute z-10 rounded-xl border border-slate-800/70 bg-slate-950/85 px-3 py-2 text-xs text-slate-200 shadow-lg backdrop-blur" style={{ left: tooltip.x, top: tooltip.y }}>
                 {(() => {

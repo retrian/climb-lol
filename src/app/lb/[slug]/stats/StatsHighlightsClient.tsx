@@ -57,12 +57,7 @@ export default function StatsHighlightsClient({
     <>
       <section className="grid gap-6 lg:grid-cols-2">
         <div className="lg:col-span-2">
-          <div className="flex items-center gap-2">
-            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-rose-400 to-rose-600" />
-            <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Single Game High Scores
-            </h3>
-          </div>
+          <SectionDividerTitle title="Single Game High Scores" accent="from-rose-400 to-rose-600" />
 
           <div className="mt-4 space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -178,12 +173,7 @@ export default function StatsHighlightsClient({
         </div>
 
         <div className="lg:col-span-2">
-          <div className="flex items-center gap-2">
-            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-amber-400 to-amber-600" />
-            <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Player Accumulative Rankings
-            </h3>
-          </div>
+          <SectionDividerTitle title="Player Accumulative Rankings" accent="from-amber-400 to-amber-600" />
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {playerBlocks.map((block) => {
@@ -260,20 +250,17 @@ export default function StatsHighlightsClient({
         </div>
 
         <div className="lg:col-span-2">
-          <div className="flex items-center gap-2">
-            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-violet-400 to-violet-600" />
-            <h3 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-              Time &amp; Length Highlights
-            </h3>
-          </div>
+          <SectionDividerTitle title="Time &amp; Length Highlights" accent="from-violet-400 to-violet-600" />
 
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {timeBlocks.map((block) => (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+            {timeBlocks.map((block, idx) => (
               <button
                 key={block.id}
                 type="button"
                 onClick={() => setActiveBlockId(block.id)}
-                className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60"
+                className={`group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60 lg:col-span-2 ${
+                  idx % 2 === 0 ? 'lg:col-start-2' : 'lg:col-start-4'
+                }`}
               >
                 <div className="p-4">
                   <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
@@ -390,5 +377,18 @@ function Modal({ children, onClose }: { children: React.ReactNode; onClose: () =
       </div>
     </div>,
     document.body,
+  )
+}
+
+function SectionDividerTitle({ title, accent }: { title: string; accent: string }) {
+  return (
+    <div className="relative">
+      <div className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-slate-200/80 dark:bg-slate-800/90" />
+      <h3 className="relative mx-auto w-fit bg-slate-50 px-4 text-xs font-black uppercase tracking-widest text-slate-500 dark:bg-slate-950 dark:text-slate-400">
+        <span className={`inline-block h-1 w-7 rounded-full bg-gradient-to-r ${accent} align-middle`} />
+        <span className="mx-2 align-middle">{title}</span>
+        <span className={`inline-block h-1 w-7 rounded-full bg-gradient-to-r ${accent} align-middle`} />
+      </h3>
+    </div>
   )
 }

@@ -564,11 +564,11 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   )
 
   const singleGameBlocks = [
-    { id: 'single-kills', title: 'Most Kills in One Game', data: topKillsSingle, key: 'kills', accent: 'from-rose-400 to-rose-600' },
-    { id: 'single-deaths', title: 'Most Deaths in One Game', data: topDeathsSingle, key: 'deaths', accent: 'from-slate-400 to-slate-600' },
-    { id: 'single-assists', title: 'Most Assists in One Game', data: topAssistsSingle, key: 'assists', accent: 'from-emerald-400 to-emerald-600' },
-    { id: 'single-cs', title: 'Most CS in One Game', data: topCsSingle, key: 'cs', accent: 'from-sky-400 to-sky-600' },
-    { id: 'single-vision', title: 'Most Vision Score in One Game', data: topVisionSingle, key: 'vision_score', accent: 'from-violet-400 to-violet-600' },
+    { id: 'single-kills', title: 'Most Kills / Match', data: topKillsSingle, key: 'kills', accent: 'from-rose-400 to-rose-600' },
+    { id: 'single-deaths', title: 'Most Deaths / Match', data: topDeathsSingle, key: 'deaths', accent: 'from-slate-400 to-slate-600' },
+    { id: 'single-assists', title: 'Most Assists / Match', data: topAssistsSingle, key: 'assists', accent: 'from-emerald-400 to-emerald-600' },
+    { id: 'single-cs', title: 'Most CS / Match', data: topCsSingle, key: 'cs', accent: 'from-sky-400 to-sky-600' },
+    { id: 'single-vision', title: 'Most Vision / Match', data: topVisionSingle, key: 'vision_score', accent: 'from-violet-400 to-violet-600' },
   ]
   const singleGameTopRow = singleGameBlocks.slice(0, 3)
   const singleGameBottomRow = singleGameBlocks.slice(3)
@@ -700,7 +700,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const playerBlocks: ListBlock[] = [
     {
       id: 'avg-kills',
-      title: 'Most Avg Kills / Game',
+      title: 'Avg Kills / Game',
       accent: 'from-rose-400 to-rose-600',
       entries: topKills.map((row) => ({
         puuid: row.puuid,
@@ -711,7 +711,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     },
     {
       id: 'avg-deaths',
-      title: 'Most Avg Deaths / Game',
+      title: 'Avg Deaths / Game',
       accent: 'from-slate-400 to-slate-600',
       entries: topDeaths.map((row) => ({
         puuid: row.puuid,
@@ -722,7 +722,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     },
     {
       id: 'avg-assists',
-      title: 'Most Avg Assists / Game',
+      title: 'Avg Assists / Game',
       accent: 'from-emerald-400 to-emerald-600',
       entries: topAssists.map((row) => ({
         puuid: row.puuid,
@@ -749,7 +749,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const timeBlocks: PodiumBlock[] = [
     {
       id: 'longest-game',
-      title: 'Longest Game Length',
+      title: 'Longest Game',
       accent: 'from-violet-400 to-violet-600',
       entries: longestMatches.map((row) => ({
         puuid: row.puuid,
@@ -761,7 +761,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     },
     {
       id: 'fastest-win',
-      title: 'Fastest Average Win Times',
+      title: 'Average Win Time',
       accent: 'from-violet-400 to-violet-600',
       entries: fastestWinTimesAll.map((row) => ({
         puuid: row.puuid,
@@ -773,7 +773,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     },
     {
       id: 'fastest-loss',
-      title: 'Fastest Average Loss Times',
+      title: 'Average Loss Time',
       accent: 'from-violet-400 to-violet-600',
       entries: fastestLossTimesAll.map((row) => ({
         puuid: row.puuid,
@@ -785,7 +785,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     },
     {
       id: 'total-time',
-      title: 'Longest Individual Total Time Played',
+      title: 'Time Played',
       accent: 'from-violet-400 to-violet-600',
       entries: topTotalTime.map((row) => ({
         puuid: row.puuid,
@@ -820,35 +820,35 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
             </div>
           ) : null}
 
-          <section className="grid gap-4 md:grid-cols-3">
+          <section className="rounded-xl border border-slate-200/70 bg-white/40 px-4 py-3 dark:border-slate-800/80 dark:bg-slate-900/30">
+            <div className="grid gap-3 md:grid-cols-3">
             {[
               {
                 label: 'Total Games',
                 value: totals.games.toLocaleString(),
-                sub: 'Combined player games',
               },
               {
                 label: 'Total Record',
                 value: `${totals.wins}W - ${totals.losses}L`,
-                sub: `${formatWinrate(totals.wins, totals.games)} • ${totals.games.toLocaleString()} games`,
+                sub: `${((totals.games ? totals.wins / totals.games : 0) * 100).toFixed(2)}%`,
               },
               {
                 label: 'Total Time Played',
                 value: formatDaysHoursCaps(totals.durationS),
-                sub: `Across all matches • ${Math.floor((Number.isFinite(totals.durationS) ? totals.durationS : 0) / 3600).toLocaleString()}h`,
+                sub: `${Math.floor((Number.isFinite(totals.durationS) ? totals.durationS : 0) / 3600).toLocaleString()}h`,
               },
             ].map((card) => (
-              <div
-                key={card.label}
-                className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-              >
-                <div className="text-xs font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
+              <div key={card.label} className="rounded-lg px-3 py-2 text-center md:px-4 md:py-3 md:not-last:border-r md:border-slate-200/80 dark:md:border-slate-800/80">
+                <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-500 dark:text-slate-400">
                   {card.label}
                 </div>
-                <div className="mt-3 text-3xl font-black text-slate-900 dark:text-slate-100">{card.value}</div>
-                <div className="mt-2 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
+                <div className="mt-1 text-4xl font-black leading-tight text-slate-900 dark:text-slate-100">{card.value}</div>
+                {'sub' in card ? (
+                  <div className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">{card.sub}</div>
+                ) : null}
               </div>
             ))}
+            </div>
           </section>
 
           <section className="space-y-4">
@@ -857,42 +857,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
               <h2 className="text-sm font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
                 Champion Analytics
               </h2>
-            </div>
-
-            <div className={`rounded-2xl border p-4 ${integrityMismatch ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
-              <div className="grid grid-cols-2 gap-3 text-xs md:grid-cols-5">
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Games</div>
-                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{totals.games.toLocaleString()}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">W-L</div>
-                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{totals.wins}W {totals.losses}L</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Overall KDA</div>
-                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotalsKda.toFixed(2)}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg CS</div>
-                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotalsAvgCs.toFixed(1)}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Integrity</div>
-                  <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                    {integrityMismatch ? 'Mismatch detected' : 'Consistent'}
-                  </div>
-                </div>
-              </div>
-
-              {integrityMismatch && (
-                <div className="mt-3 text-[11px] text-amber-700 dark:text-amber-300">
-                  <div className="font-semibold">Internal rollups are not consistent.</div>
-                  <div className="mt-1 tabular-nums">
-                    Champion rollup: {championRollup.wins}W {championRollup.losses}L ({championRollup.games}) • Player rollup: {playerRollup.wins}W {playerRollup.losses}L ({playerRollup.games}) • Totals: {totals.wins}W {totals.losses}L ({totals.games})
-                  </div>
-                </div>
-              )}
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
