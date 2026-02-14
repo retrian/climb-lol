@@ -24,17 +24,26 @@ async function fetchRiotAccountMe(accessToken: string) {
 }
 
 async function fetchRiotSummonerMe(accessToken: string) {
-  const endpoint = process.env.RIOT_SUMMONER_ME_URL?.trim() || 'https://na1.api.riotgames.com/lol/summoner/v4/summoners/me'
-  const res = await fetch(endpoint, {
-    headers: { authorization: `Bearer ${accessToken}` },
-    cache: 'no-store',
-  })
+  const configured = process.env.RIOT_SUMMONER_ME_URL?.trim()
+  const fallbackHosts = ['na1', 'euw1', 'eun1', 'kr', 'br1', 'jp1', 'la1', 'la2', 'oc1', 'tr1', 'ru']
+  const endpoints = configured
+    ? [configured]
+    : fallbackHosts.map((host) => `https://${host}.api.riotgames.com/lol/summoner/v4/summoners/me`)
 
-  if (!res.ok) return null
-  const data = await res.json()
-  const profileIconId = typeof data?.profileIconId === 'number' ? data.profileIconId : null
-  const puuid = typeof data?.puuid === 'string' ? data.puuid : null
-  return { profileIconId, puuid }
+  for (const endpoint of endpoints) {
+    const res = await fetch(endpoint, {
+      headers: { authorization: `Bearer ${accessToken}` },
+      cache: 'no-store',
+    })
+    if (!res.ok) continue
+
+    const data = await res.json()
+    const profileIconId = typeof data?.profileIconId === 'number' ? data.profileIconId : null
+    const puuid = typeof data?.puuid === 'string' ? data.puuid : null
+    return { profileIconId, puuid }
+  }
+
+  return null
 }
 
 export async function GET(req: Request) {
