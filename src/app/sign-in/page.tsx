@@ -1,6 +1,6 @@
 'use client'
 
-import { buildAuthCallbackUrl, getSupabaseOAuthProvider, type AuthProvider } from '@/lib/auth/providers'
+import { buildAuthCallbackUrl, getSupabaseOAuthProvider, isSafeNextPath, type AuthProvider } from '@/lib/auth/providers'
 import { createClient } from '@/lib/supabase/client'
 import { isRiotAuthEnabled } from '@/lib/supabase/config'
 import type { Provider } from '@supabase/supabase-js'
@@ -16,6 +16,8 @@ export default function SignInPage() {
   
   const queryError = searchParams.get('error')
   const queryErrorDescription = searchParams.get('error_description')
+  const authCode = searchParams.get('code')
+  const next = searchParams.get('next')
   
   const error = useMemo(() => {
     const raw = queryError ?? hashError
@@ -27,7 +29,38 @@ export default function SignInPage() {
     return raw ? decodeURIComponent(raw) : null
   }, [queryErrorDescription, hashErrorDescription])
 
-  const next = searchParams.get('next')
+  useEffect(() => {
+    if (!authCode) return
+    let cancelled = false
+
+    const run = async () => {
+      setLoadingProvider('google')
+      try {
+        const supabase = createClient()
+        const { error } = await supabase.auth.exchangeCodeForSession(authCode)
+        if (cancelled) return
+
+        if (error) {
+          setHashError(error.message)
+          setLoadingProvider(null)
+          return
+        }
+
+        const target = isSafeNextPath(next) ? next : '/dashboard'
+        window.location.href = target
+      } catch (err) {
+        if (!cancelled) {
+          setHashError(err instanceof Error ? err.message : 'OAuth callback failed')
+          setLoadingProvider(null)
+        }
+      }
+    }
+
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [authCode, next])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
