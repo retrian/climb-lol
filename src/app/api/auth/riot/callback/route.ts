@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
 import { createServiceClient } from '@/lib/supabase/service'
+import { getSupabaseConfig, getSupabaseCookieDomain, getSupabaseCookieNameBase } from '@/lib/supabase/config'
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim()
@@ -71,6 +73,10 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'No riot sub in userinfo' }, { status: 400 })
     }
 
+    const riotDisplay =
+      (riotUser.preferred_username as string | undefined) ??
+      (riotUser.game_name && riotUser.tag_line ? `${riotUser.game_name}#${riotUser.tag_line}` : undefined) ??
+      null
     const email = (riotUser.email as string | undefined) ?? `${riotSub}@riot.local`
 
     const supabaseAdmin = createServiceClient()
@@ -80,14 +86,28 @@ export async function GET(req: Request) {
       email_confirm: true,
       user_metadata: {
         riot_sub: riotSub,
+        ...(riotDisplay ? { full_name: riotDisplay } : {}),
       },
     })
 
+    let userId = created.data.user?.id ?? null
     if (created.error) {
       const alreadyExists = /already been registered|already exists|already registered/i.test(created.error.message || '')
       if (!alreadyExists) {
         return NextResponse.json({ error: 'Create user failed', details: created.error.message }, { status: 400 })
       }
+
+      const listed = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 })
+      if (listed.error) {
+        return NextResponse.json({ error: 'List users failed', details: listed.error.message }, { status: 400 })
+      }
+      userId = listed.data.users.find((u) => u.email === email)?.id ?? null
+    }
+
+    if (userId && riotDisplay) {
+      await supabaseAdmin
+        .from('profiles')
+        .upsert({ user_id: userId, username: riotDisplay.slice(0, 24), updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
     }
 
     const postLogin = process.env.APP_POST_LOGIN_REDIRECT?.trim() || 'https://cwf.lol/dashboard'
@@ -114,11 +134,70 @@ export async function GET(req: Request) {
       )
     }
 
-    const response = NextResponse.redirect(actionLink)
-    response.headers.set('cache-control', 'no-store')
-    response.cookies.set('riot_oauth_state', '', { path: '/', maxAge: 0 })
-    response.cookies.set('riot_oauth_next', '', { path: '/', maxAge: 0 })
-    return response
+    const parsedAction = new URL(actionLink)
+    const tokenHash = parsedAction.searchParams.get('token_hash')
+    const tokenType = parsedAction.searchParams.get('type')
+    if (!tokenHash || tokenType !== 'magiclink') {
+      return NextResponse.json({ error: 'Magic link missing token_hash/type' }, { status: 400 })
+    }
+
+    const requestUrl = new URL(req.url)
+    const isProduction = process.env.NODE_ENV === 'production'
+    const host = req.headers.get('host')
+    const resolvedHost = host?.split(':')[0] ?? null
+    const fallbackDomain = resolvedHost?.endsWith('cwf.lol') ? '.cwf.lol' : null
+    const cookieDomain = getSupabaseCookieDomain() ?? fallbackDomain
+    const cookieNameBase = getSupabaseCookieNameBase()
+
+    const sessionResponse = NextResponse.redirect(redirectTo)
+    const { url: supabaseUrl, key } = getSupabaseConfig()
+    const supabase = createServerClient(supabaseUrl, key, {
+      cookies: {
+        getAll() {
+          const cookieHeader = req.headers.get('cookie') || ''
+          return cookieHeader
+            .split(';')
+            .map((part) => part.trim())
+            .filter(Boolean)
+            .map((entry) => {
+              const idx = entry.indexOf('=')
+              if (idx < 0) return { name: entry, value: '' }
+              return { name: entry.slice(0, idx), value: entry.slice(idx + 1) }
+            })
+        },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            const finalName = cookieNameBase ? name.replace(/^sb-[^-]+/, cookieNameBase) : name
+            sessionResponse.cookies.set(finalName, value, {
+              ...options,
+              domain: cookieDomain ?? options?.domain,
+              sameSite: 'lax',
+              secure: isProduction,
+            })
+          })
+        },
+      },
+    })
+
+    const verified = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash })
+    if (verified.error) {
+      return NextResponse.json({ error: 'verifyOtp failed', details: verified.error.message }, { status: 400 })
+    }
+
+    sessionResponse.headers.set('cache-control', 'no-store')
+    sessionResponse.cookies.set('dashboard_flash', JSON.stringify({
+      kind: 'auth',
+      tone: 'success',
+      message: 'Signed in with Riot. Finish profile setup in Dashboard.'
+    }), {
+      path: '/',
+      maxAge: 120,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+    })
+    sessionResponse.cookies.set('riot_oauth_state', '', { path: '/', maxAge: 0 })
+    sessionResponse.cookies.set('riot_oauth_next', '', { path: '/', maxAge: 0 })
+    return sessionResponse
   } catch (error) {
     const message = encodeURIComponent(error instanceof Error ? error.message : 'unknown_error')
     return NextResponse.redirect(`/sign-in?error=${message}`)
