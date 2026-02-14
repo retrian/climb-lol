@@ -137,9 +137,6 @@ export async function GET(req: Request) {
     const parsedAction = new URL(actionLink)
     const tokenHash = parsedAction.searchParams.get('token_hash')
     const tokenType = parsedAction.searchParams.get('type')
-    if (!tokenHash || tokenType !== 'magiclink') {
-      return NextResponse.json({ error: 'Magic link missing token_hash/type' }, { status: 400 })
-    }
 
     const requestUrl = new URL(req.url)
     const isProduction = process.env.NODE_ENV === 'production'
@@ -179,9 +176,15 @@ export async function GET(req: Request) {
       },
     })
 
-    const verified = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash })
-    if (verified.error) {
-      return NextResponse.json({ error: 'verifyOtp failed', details: verified.error.message }, { status: 400 })
+    if (tokenHash && tokenType === 'magiclink') {
+      const verified = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash })
+      if (verified.error) {
+        return NextResponse.json({ error: 'verifyOtp failed', details: verified.error.message }, { status: 400 })
+      }
+    } else {
+      // Fallback for environments where generateLink returns a direct action link without token_hash.
+      // In that case, let Supabase verify endpoint handle the session issuance.
+      return NextResponse.redirect(actionLink)
     }
 
     sessionResponse.headers.set('cache-control', 'no-store')
