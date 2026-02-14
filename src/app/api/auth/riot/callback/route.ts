@@ -9,6 +9,20 @@ function requiredEnv(name: string): string {
   return value
 }
 
+async function fetchRiotAccountMe(accessToken: string) {
+  const endpoint = process.env.RIOT_ACCOUNT_ME_URL?.trim() || 'https://americas.api.riotgames.com/riot/account/v1/accounts/me'
+  const res = await fetch(endpoint, {
+    headers: { authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  })
+
+  if (!res.ok) return null
+  const data = await res.json()
+  const gameName = typeof data?.gameName === 'string' ? data.gameName.trim() : null
+  const tagLine = typeof data?.tagLine === 'string' ? data.tagLine.trim() : null
+  return { gameName, tagLine }
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url)
@@ -73,7 +87,9 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'No riot sub in userinfo' }, { status: 400 })
     }
 
+    const accountMe = await fetchRiotAccountMe(accessToken)
     const riotDisplay =
+      (accountMe?.gameName && accountMe?.tagLine ? `${accountMe.gameName}#${accountMe.tagLine}` : undefined) ??
       (riotUser.preferred_username as string | undefined) ??
       (riotUser.game_name && riotUser.tag_line ? `${riotUser.game_name}#${riotUser.tag_line}` : undefined) ??
       null
