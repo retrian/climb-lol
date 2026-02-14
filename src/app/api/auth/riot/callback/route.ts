@@ -135,8 +135,16 @@ export async function GET(req: Request) {
     }
 
     const parsedAction = new URL(actionLink)
-    const tokenHash = parsedAction.searchParams.get('token_hash')
-    const tokenType = parsedAction.searchParams.get('type')
+    const linkProps = link.data?.properties as {
+      hashed_token?: string
+      verification_type?: string
+    } | undefined
+
+    let tokenHash = linkProps?.hashed_token ?? parsedAction.searchParams.get('token_hash')
+    let tokenType = linkProps?.verification_type ?? parsedAction.searchParams.get('type')
+    const hashParams = new URLSearchParams(parsedAction.hash.startsWith('#') ? parsedAction.hash.slice(1) : '')
+    if (!tokenHash) tokenHash = hashParams.get('token_hash')
+    if (!tokenType) tokenType = hashParams.get('type')
 
     const requestUrl = new URL(req.url)
     const isProduction = process.env.NODE_ENV === 'production'
@@ -176,15 +184,26 @@ export async function GET(req: Request) {
       },
     })
 
-    if (tokenHash && tokenType === 'magiclink') {
-      const verified = await supabase.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash })
+    const normalizedType = tokenType === 'magiclink' || tokenType === 'email' ? tokenType : null
+
+    if (tokenHash && normalizedType) {
+      const verified = await supabase.auth.verifyOtp({ type: normalizedType, token_hash: tokenHash })
       if (verified.error) {
         return NextResponse.json({ error: 'verifyOtp failed', details: verified.error.message }, { status: 400 })
       }
     } else {
-      // Fallback for environments where generateLink returns a direct action link without token_hash.
-      // In that case, let Supabase verify endpoint handle the session issuance.
-      return NextResponse.redirect(actionLink)
+      return NextResponse.json(
+        {
+          error: 'Missing token_hash/type in generated action link',
+          details: {
+            has_hashed_token: !!linkProps?.hashed_token,
+            verification_type: linkProps?.verification_type ?? null,
+            action_link_has_query_token_hash: parsedAction.searchParams.has('token_hash'),
+            action_link_has_hash_token_hash: hashParams.has('token_hash'),
+          },
+        },
+        { status: 400 }
+      )
     }
 
     sessionResponse.headers.set('cache-control', 'no-store')
