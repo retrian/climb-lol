@@ -121,7 +121,7 @@ const GameItem = memo(({
   
   const kdaColor = useMemo(() => {
     if (isRemake) return 'text-slate-400'
-    if (game.d === 0) return 'text-amber-600 font-black'
+    if (game.d === 0) return 'text-yellow-600 font-black dark:text-yellow-400'
     return getKdaColor(kdaValue)
   }, [isRemake, game.d, kdaValue])
   
@@ -137,13 +137,13 @@ const GameItem = memo(({
   
   const lpTitle = useMemo(() => {
     return lpChange !== null 
-      ? `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP` 
+      ? (lpChange === 0 ? 'LP change: — 0 LP' : `LP change: ${lpChange >= 0 ? '+' : ''}${lpChange} LP`)
       : `Rank at match time unavailable. Displaying current rank: ${rankLabel}`
   }, [lpChange, rankLabel])
   
   const lpHoverLabel = useMemo(() => {
     return lpChange !== null 
-      ? `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP` 
+      ? (lpChange === 0 ? '— 0 LP' : `${lpChange >= 0 ? '▲ ' : '▼ '}${Math.abs(lpChange)} LP`)
       : null
   }, [lpChange])
   
@@ -224,18 +224,26 @@ const GameItem = memo(({
                     )}
                   </span>
                 ) : (
-                  <span
-                    title={lpTitle}
-                    className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
-                      lpChange >= 0
+                    <span
+                      title={lpTitle}
+                      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+                      lpChange === 0
+                        ? 'text-slate-500 bg-slate-100 dark:text-slate-300 dark:bg-slate-700/50'
+                        : lpChange > 0
                         ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
                         : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
                     }`}
                   >
-                    <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                      {lpChange >= 0 ? <path d="M10 4l6 8H4l6-8z" /> : <path d="M10 16l-6-8h12l-6 8z" />}
-                    </svg>
-                    {Math.abs(lpChange)} LP
+                    {lpChange === 0 ? (
+                      '— 0 LP'
+                    ) : (
+                      <>
+                        <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                          {lpChange > 0 ? <path d="M10 4l6 8H4l6-8z" /> : <path d="M10 16l-6-8h12l-6 8z" />}
+                        </svg>
+                        {Math.abs(lpChange)} LP
+                      </>
+                    )}
                   </span>
                 )
               ) : (

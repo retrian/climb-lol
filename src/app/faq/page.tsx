@@ -1,3 +1,9 @@
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'FAQ | CWF.LOL',
+}
+
 const faqs = [
   {
     question: 'What is CWF.LOL?',
@@ -30,31 +36,20 @@ const faqs = [
 
 export default function FaqPage() {
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-4xl px-4 py-10 lg:py-16">
-        <div className="mb-10">
-          <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 dark:from-white dark:via-slate-200 dark:to-slate-400">
-            FAQ
-          </h1>
-          <p className="mt-3 text-base text-slate-600 font-medium dark:text-slate-300">
-            Answers to common questions about CWF.LOL.
-          </p>
-        </div>
+    <main className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 py-12 text-sm leading-6 text-slate-200">
+      <header className="flex flex-col gap-2">
+        <h1 className="text-3xl font-semibold text-white">CWF.LOL — FAQ</h1>
+        <p className="text-slate-300">Answers to common questions about CWF.LOL</p>
+      </header>
 
-        <div className="space-y-3">
-          {faqs.map((item) => (
-            <div
-              key={item.question}
-              className="rounded-2xl border-2 border-slate-200 bg-white p-5 lg:p-6 shadow-sm transition-all duration-200 hover:border-slate-300 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
-            >
-              <h2 className="text-base lg:text-lg font-bold text-slate-900 dark:text-slate-100">
-                {item.question}
-              </h2>
-              <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{item.answer}</p>
-            </div>
-          ))}
-        </div>
-      </div>
+      {faqs.map((item, idx) => (
+        <section key={item.question} className="flex flex-col gap-3">
+          <h2 className="text-xl font-semibold text-white">
+            {idx + 1}) {item.question}
+          </h2>
+          <p>{item.answer}</p>
+        </section>
+      ))}
     </main>
   )
 }

@@ -312,7 +312,7 @@ export default function StatsHighlightsClient({
 
       {activeBlock ? (
         <Modal onClose={() => setActiveBlockId(null)}>
-          <div className="flex items-center justify-between gap-4">
+          <div className="-mx-6 -mt-6 mb-4 flex items-center justify-between gap-4 rounded-t-2xl border-b border-slate-200/80 bg-slate-100/80 px-6 py-4 dark:border-slate-800/80 dark:bg-slate-950/70">
             <div>
               <div className={`h-1 w-12 rounded-full bg-gradient-to-r ${activeBlock.accent}`} />
               <h4 className="mt-3 text-lg font-black text-slate-900 dark:text-slate-100">{activeBlock.title}</h4>
@@ -320,38 +320,43 @@ export default function StatsHighlightsClient({
             </div>
             <button
               type="button"
+              aria-label="Close"
               onClick={() => setActiveBlockId(null)}
-              className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:border-slate-300 dark:border-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+              className="rounded-full border border-slate-200 bg-white p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:border-slate-800 dark:bg-slate-950 dark:hover:bg-slate-900 dark:hover:text-slate-100"
             >
-              Close
+              <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 10-1.06-1.06L10 8.94 6.28 5.22z" />
+              </svg>
             </button>
           </div>
 
-          {'entries' in activeBlock && activeBlock.entries.length === 0 ? (
-            <div className="mt-6 text-sm text-slate-500 dark:text-slate-400">No data available.</div>
-          ) : (
-            <ol className="mt-6 space-y-3">
-              {activeBlock.entries.map((entry, idx) => (
-                <li key={`${activeBlock.id}-${entry.puuid}`} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white/70 px-4 py-3 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                  <span className="flex items-center gap-3 min-w-0">
-                    <span className="text-xs font-bold text-slate-400 w-6 text-right">{idx + 1}</span>
-                    <span className="h-9 w-9 rounded-full overflow-hidden border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
-                      {entry.iconUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={entry.iconUrl} alt="" className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
-                      )}
+          <div className="leaderboard-scroll max-h-[52vh] overflow-y-auto pr-2">
+            {'entries' in activeBlock && activeBlock.entries.length === 0 ? (
+              <div className="text-sm text-slate-500 dark:text-slate-400">No data available.</div>
+            ) : (
+              <ol className="space-y-3">
+                {activeBlock.entries.map((entry, idx) => (
+                  <li key={`${activeBlock.id}-${entry.puuid}`} className="flex items-center justify-between rounded-xl border border-slate-200 bg-white/70 px-4 py-3 text-sm shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <span className="flex items-center gap-3 min-w-0">
+                      <span className="text-xs font-bold text-slate-400 w-6 text-right">{idx + 1}</span>
+                      <span className="h-9 w-9 rounded-full overflow-hidden border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+                        {entry.iconUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={entry.iconUrl} alt="" className="h-full w-full object-cover" />
+                        ) : (
+                          <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                        )}
+                      </span>
+                      <span className="truncate font-semibold text-slate-700 dark:text-slate-100">{entry.name}</span>
                     </span>
-                    <span className="truncate font-semibold text-slate-700 dark:text-slate-100">{entry.name}</span>
-                  </span>
-                  <span className="text-sm font-black tabular-nums text-slate-900 dark:text-slate-100">
-                    {entry.valueLabel ?? entry.value}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          )}
+                    <span className="text-sm font-black tabular-nums text-slate-900 dark:text-slate-100">
+                      {entry.valueLabel ?? entry.value}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
         </Modal>
       ) : null}
     </>
@@ -365,15 +370,22 @@ function Modal({ children, onClose }: { children: React.ReactNode; onClose: () =
     setMounted(true)
   }, [])
 
+  useEffect(() => {
+    if (!mounted) return
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = originalOverflow
+    }
+  }, [mounted])
+
   if (!mounted) return null
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8">
       <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={onClose} />
       <div className="relative w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
-        <div className="max-h-[70vh] overflow-y-auto pr-2">
-          {children}
-        </div>
+        {children}
       </div>
     </div>,
     document.body,

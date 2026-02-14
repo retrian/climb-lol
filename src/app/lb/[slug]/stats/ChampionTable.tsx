@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatRank } from '@/lib/rankFormat'
+import { getWinrateColor } from '@/lib/formatters'
 
 type ChampionRow = {
   id: number
@@ -205,6 +206,18 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     : selectedChampion
       ? selectedChampion.winrate
       : null
+  const selectedWinratePercent = selectedPlayer
+    ? selectedPlayerWinrateValue * 100
+    : selectedChampion
+      ? selectedChampion.winrateValue * 100
+      : null
+  const selectedWinrateSvgColorClass = selectedWinratePercent === null
+    ? 'fill-slate-500 dark:fill-slate-400'
+    : selectedWinratePercent > 60
+      ? 'fill-rose-500 dark:fill-rose-400'
+      : selectedWinratePercent > 50
+        ? 'fill-emerald-500 dark:fill-emerald-400'
+        : 'fill-slate-500 dark:fill-slate-400'
   const selectedGamesLabel = selectedPlayer
     ? selectedPlayer.games
     : selectedChampion
@@ -212,7 +225,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
       : null
 
   return (
-    <div className="relative">
+    <div className="relative overflow-hidden rounded-2xl">
       <div className="absolute inset-y-0 right-0 left-[calc(300px+24px)] bg-slate-100/80 dark:bg-slate-950/70 pointer-events-none z-0" />
       <div className="absolute left-[calc(300px+24px)] top-0 bottom-0 w-px bg-slate-200/70 dark:bg-slate-800/70 z-0" />
       <div className="p-4 relative z-10">
@@ -268,7 +281,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                   ) : (
                     <div className="h-6 w-6 rounded-lg border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
                   )}
-                  <div className="text-right tabular-nums font-semibold text-slate-900 dark:text-slate-100">{row.winrate}</div>
+                  <div className={`text-right tabular-nums font-semibold ${getWinrateColor(row.winrateValue * 100)}`}>{row.winrate}</div>
                   <div className="text-right tabular-nums text-slate-500 dark:text-slate-400">{row.games}</div>
                 </button>
               ))}
@@ -312,7 +325,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                         <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{player.name}</div>
                       </div>
                     </div>
-                    <div className="text-right tabular-nums font-semibold text-slate-900 dark:text-slate-100">
+                    <div className={`text-right tabular-nums font-semibold ${getWinrateColor(player.games ? (player.wins / player.games) * 100 : 0)}`}>
                       {player.winrate}
                     </div>
                     <div className="text-right tabular-nums text-slate-500 dark:text-slate-400">
@@ -324,7 +337,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
             </div>
           </aside>
 
-        <section className="pl-4 pr-0 py-2 -mr-6" ref={chartRef}>
+        <section className="-mr-4 pl-4 pr-0 py-2" ref={chartRef}>
           <div className="flex items-center justify-end gap-3" />
           <div className="mt-4 text-xs">
             {selectedPlayer ? (
@@ -469,7 +482,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                     x={-10}
                     y={selectedHighlightY + 4}
                     textAnchor="end"
-                    className="fill-emerald-400 text-[11px] font-semibold"
+                    className={`${selectedWinrateSvgColorClass} text-[11px] font-semibold`}
                   >
                     {selectedWinrateLabel}
                   </text>

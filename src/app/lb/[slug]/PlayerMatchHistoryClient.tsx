@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import FitText from './FitText'
 import MatchDetailsModal, { preloadStaticData } from './MatchDetailsModal'
 import { championIconUrl } from '@/lib/champions'
-import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
+import { formatMatchDuration, getKdaColor, getWinrateColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
 
 // --- Types ---
@@ -388,7 +388,7 @@ const PodiumCard = memo(({ card, rank, ddVersion, onOpen, champMap }: { card: Pl
              </div>
           </div>
           <div className="flex items-center gap-2 text-sm">
-            <div className={`font-black tabular-nums ${winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>{winrate.pct}%</div>
+            <div className={`font-black tabular-nums ${getWinrateColor(winrate.pct)}`}>{winrate.pct}%</div>
             <div className="text-slate-400 font-medium dark:text-slate-500">{winrate.label}</div>
           </div>
         </div>
@@ -472,7 +472,7 @@ const RunnerupRow = memo(({ card, ddVersion, onOpen, champMap }: { card: PlayerC
       </div>
       <div className="hidden md:flex items-center gap-4 lg:gap-6 shrink-0">
         <div className="flex flex-col items-center w-14">
-          <span className={`text-sm font-black whitespace-nowrap ${winrate.pct >= 50 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400'}`}>{winrate.pct}%</span>
+          <span className={`text-sm font-black whitespace-nowrap ${getWinrateColor(winrate.pct)}`}>{winrate.pct}%</span>
           <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wide dark:text-slate-500">Win</span>
         </div>
         <div className="flex flex-col items-center w-14">
@@ -499,7 +499,7 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
     const durationLabel = formatMatchDuration(match.durationS ?? 0)
     const kdaValue = match.d > 0 ? (match.k + match.a) / match.d : 99
     const kdaLabel = match.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
-    const kdaColor = match.d === 0 ? 'text-amber-600 font-bold' : getKdaColor(kdaValue)
+    const kdaColor = match.d === 0 ? 'text-yellow-600 font-bold dark:text-yellow-400' : getKdaColor(kdaValue)
     
     // Handle Remake logic
     const isRemake = match.endType === 'REMAKE'
@@ -1624,12 +1624,12 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                                           </>
                                         )}
                                       </div>
-                                      <span className="text-[12px] font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                                      <span className={`text-[12px] font-semibold tabular-nums ${getWinrateColor(champ.winrate)}`}>
                                         {champ.winrate}%
                                       </span>
                                     </div>
                                   </div>
-                                  <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.kda.toFixed(2)}</div>
+                                  <div className={`text-right tabular-nums ${getKdaColor(champ.kda)}`}>{champ.kda.toFixed(2)}</div>
                                   <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.avgCs.toFixed(1)}</div>
                                   <div className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">{champ.games}</div>
                                 </div>
