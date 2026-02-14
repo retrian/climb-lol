@@ -9,6 +9,12 @@ export async function GET(request: NextRequest) {
   const provider = parseAuthProvider(requestUrl.searchParams.get('provider'))
   const isProduction = process.env.NODE_ENV === 'production'
 
+  if (provider === 'riot') {
+    const riotCallback = new URL('/api/auth/riot/callback', requestUrl.origin)
+    requestUrl.searchParams.forEach((value, key) => riotCallback.searchParams.set(key, value))
+    return NextResponse.redirect(riotCallback)
+  }
+
   console.info('[auth/callback] Full URL:', request.url)
   console.info('[auth/callback] Code present:', !!code)
 
