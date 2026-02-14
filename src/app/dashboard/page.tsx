@@ -327,6 +327,14 @@ export default async function DashboardPage({
 
   const club = (clubRaw ?? null) as ClubRow | null
   const profile = (profileRaw ?? null) as { user_id: string; username: string; updated_at: string | null } | null
+  const riotProfileIconId =
+    typeof (user.user_metadata?.riot_profile_icon_id as unknown) === 'number'
+      ? (user.user_metadata?.riot_profile_icon_id as number)
+      : null
+  const riotProfileIconUrl =
+    riotProfileIconId != null
+      ? `https://ddragon.leagueoflegends.com/cdn/${process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'}/img/profileicon/${riotProfileIconId}.png`
+      : null
   const memberClubs = (clubMembershipsRaw ?? [])
     .flatMap((row) => row.club ?? [])
     .filter(Boolean) as ClubRow[]
@@ -1532,6 +1540,21 @@ export default async function DashboardPage({
                   </div>
                   <div className="p-6">
                     <form action={updateProfile} className="space-y-4">
+                      {riotProfileIconUrl ? (
+                        <div className="flex items-center gap-3 rounded-none border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={riotProfileIconUrl}
+                            alt="Riot profile icon"
+                            className="h-12 w-12 rounded-md border border-slate-200 object-cover dark:border-slate-700"
+                          />
+                          <div>
+                            <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">Riot profile icon</div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400">Synced from Riot login</div>
+                          </div>
+                        </div>
+                      ) : null}
+
                       <div>
                         <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Username</label>
                           <input

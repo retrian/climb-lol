@@ -23,6 +23,20 @@ async function fetchRiotAccountMe(accessToken: string) {
   return { gameName, tagLine }
 }
 
+async function fetchRiotSummonerMe(accessToken: string) {
+  const endpoint = process.env.RIOT_SUMMONER_ME_URL?.trim() || 'https://na1.api.riotgames.com/lol/summoner/v4/summoners/me'
+  const res = await fetch(endpoint, {
+    headers: { authorization: `Bearer ${accessToken}` },
+    cache: 'no-store',
+  })
+
+  if (!res.ok) return null
+  const data = await res.json()
+  const profileIconId = typeof data?.profileIconId === 'number' ? data.profileIconId : null
+  const puuid = typeof data?.puuid === 'string' ? data.puuid : null
+  return { profileIconId, puuid }
+}
+
 export async function GET(req: Request) {
   try {
     const url = new URL(req.url)
@@ -88,6 +102,7 @@ export async function GET(req: Request) {
     }
 
     const accountMe = await fetchRiotAccountMe(accessToken)
+    const summonerMe = await fetchRiotSummonerMe(accessToken)
     const riotDisplay =
       (accountMe?.gameName && accountMe?.tagLine ? `${accountMe.gameName}#${accountMe.tagLine}` : undefined) ??
       (riotUser.preferred_username as string | undefined) ??
@@ -102,6 +117,10 @@ export async function GET(req: Request) {
       email_confirm: true,
       user_metadata: {
         riot_sub: riotSub,
+        ...(accountMe?.gameName ? { riot_game_name: accountMe.gameName } : {}),
+        ...(accountMe?.tagLine ? { riot_tag_line: accountMe.tagLine } : {}),
+        ...(summonerMe?.puuid ? { riot_puuid: summonerMe.puuid } : {}),
+        ...(typeof summonerMe?.profileIconId === 'number' ? { riot_profile_icon_id: summonerMe.profileIconId } : {}),
         ...(riotDisplay ? { full_name: riotDisplay } : {}),
       },
     })
@@ -124,6 +143,17 @@ export async function GET(req: Request) {
       await supabaseAdmin
         .from('profiles')
         .upsert({ user_id: userId, username: riotDisplay.slice(0, 24), updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+
+      await supabaseAdmin.auth.admin.updateUserById(userId, {
+        user_metadata: {
+          riot_sub: riotSub,
+          ...(accountMe?.gameName ? { riot_game_name: accountMe.gameName } : {}),
+          ...(accountMe?.tagLine ? { riot_tag_line: accountMe.tagLine } : {}),
+          ...(summonerMe?.puuid ? { riot_puuid: summonerMe.puuid } : {}),
+          ...(typeof summonerMe?.profileIconId === 'number' ? { riot_profile_icon_id: summonerMe.profileIconId } : {}),
+          ...(riotDisplay ? { full_name: riotDisplay } : {}),
+        },
+      })
     }
 
     const postLogin = process.env.APP_POST_LOGIN_REDIRECT?.trim() || 'https://cwf.lol/dashboard'
