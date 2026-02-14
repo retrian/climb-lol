@@ -75,23 +75,17 @@ export async function GET(req: Request) {
 
     const supabaseAdmin = createServiceClient()
 
-    const listed = await supabaseAdmin.auth.admin.listUsers({ page: 1, perPage: 1000 })
-    if (listed.error) {
-      return NextResponse.json({ error: 'List users failed', details: listed.error.message }, { status: 400 })
-    }
+    const created = await supabaseAdmin.auth.admin.createUser({
+      email,
+      email_confirm: true,
+      user_metadata: {
+        riot_sub: riotSub,
+      },
+    })
 
-    const found = listed.data.users.find((u) => u.email === email)
-
-    if (!found) {
-      const created = await supabaseAdmin.auth.admin.createUser({
-        email,
-        email_confirm: true,
-        user_metadata: {
-          riot_sub: riotSub,
-        },
-      })
-
-      if (created.error) {
+    if (created.error) {
+      const alreadyExists = /already been registered|already exists|already registered/i.test(created.error.message || '')
+      if (!alreadyExists) {
         return NextResponse.json({ error: 'Create user failed', details: created.error.message }, { status: 400 })
       }
     }
