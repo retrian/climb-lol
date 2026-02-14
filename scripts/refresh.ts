@@ -476,7 +476,6 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
   const ids: string[] = []
   const idsSet = new Set<string>()
   const matchIdsToFetch = new Set<string>()
-  let consecutiveFullPages = 0
 
   const { data: latestRow, error: latestErr } = await supabase
     .from('match_participants')
@@ -516,9 +515,6 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
     const existingParticipantsSet = new Set((existingParticipants ?? []).map((r) => r.match_id))
     const missing = pageIds.filter((id) => !existingParticipantsSet.has(id))
 
-    if (missing.length === 0) consecutiveFullPages += 1
-    else consecutiveFullPages = 0
-
     for (const id of missing) matchIdsToFetch.add(id)
   }
 
@@ -537,7 +533,6 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
       exhaustedPages = true
       break
     }
-    if (consecutiveFullPages >= 2) break
     start += MATCHLIST_PAGE_SIZE
   }
 
