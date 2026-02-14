@@ -115,13 +115,12 @@ export async function GET(req: Request) {
     }
 
     const response = NextResponse.redirect(actionLink)
+    response.headers.set('cache-control', 'no-store')
     response.cookies.set('riot_oauth_state', '', { path: '/', maxAge: 0 })
     response.cookies.set('riot_oauth_next', '', { path: '/', maxAge: 0 })
     return response
   } catch (error) {
-    return NextResponse.json(
-      { error: 'Riot callback failed', details: error instanceof Error ? error.message : 'unknown_error' },
-      { status: 500 }
-    )
+    const message = encodeURIComponent(error instanceof Error ? error.message : 'unknown_error')
+    return NextResponse.redirect(`/sign-in?error=${message}`)
   }
 }
