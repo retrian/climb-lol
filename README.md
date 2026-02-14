@@ -1,5 +1,58 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Authentication (Supabase + OAuth)
+
+This app uses Supabase Auth with an OAuth callback handled by [`GET()`](src/app/auth/callback/route.ts:6).
+
+### Enabled providers
+
+- Google (default)
+- Riot (feature-flagged)
+
+Riot button visibility is controlled by [`isRiotAuthEnabled()`](src/lib/supabase/config.ts:30) via `NEXT_PUBLIC_ENABLE_RIOT_AUTH`.
+
+### Required OAuth callback URI
+
+Your OAuth providers must redirect back to:
+
+- `https://cwf.lol/auth/callback`
+
+Do **not** use `/dashboard` as the OAuth callback. Post-auth navigation to dashboard is handled after code exchange in [`GET()`](src/app/auth/callback/route.ts:20).
+
+If Riot does not allow localhost callbacks, use a public HTTPS staging domain (for example `https://dev.cwf.lol/auth/callback`).
+
+### Riot provider mapping
+
+Provider mapping is centralized in [`getSupabaseOAuthProvider()`](src/lib/auth/providers.ts:44).
+
+- Default Riot provider key: `riot`
+- Optional override env: `NEXT_PUBLIC_RIOT_SUPABASE_PROVIDER`
+
+### Environment variables
+
+Existing:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (or `NEXT_PUBLIC_SUPABASE_ANON_KEY`)
+- `SUPABASE_COOKIE_DOMAIN` (optional)
+
+Riot rollout:
+
+- `NEXT_PUBLIC_ENABLE_RIOT_AUTH=true`
+- `NEXT_PUBLIC_RIOT_SUPABASE_PROVIDER=riot` (optional override)
+
+## Riot SSO verification checklist
+
+1. In Supabase Auth providers, Riot is configured and enabled.
+2. Riot app redirect URI includes `https://cwf.lol/auth/callback`.
+3. Sign-in page shows both provider buttons at [`SignInPage()`](src/app/sign-in/page.tsx:9).
+4. Riot sign-in redirects to provider and returns to callback route.
+5. Callback successfully exchanges code via [`exchangeCodeForSession()`](src/app/auth/callback/route.ts:62).
+6. Session cookies are present and user resolves through [`supabase.auth.getUser()`](src/app/layout.tsx:41).
+7. Post-login redirect lands on `/dashboard` (or safe `next` path).
+8. Sign-out still works from [`AuthButtons()`](src/app/_components/AuthButtons.tsx:36).
+9. Google sign-in still works as fallback.
+
 ## Getting Started
 
 First, run the development server:

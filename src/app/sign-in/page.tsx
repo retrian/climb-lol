@@ -1,15 +1,18 @@
 'use client'
 
+import { buildAuthCallbackUrl, getSupabaseOAuthProvider, type AuthProvider } from '@/lib/auth/providers'
 import { createClient } from '@/lib/supabase/client'
+import { isRiotAuthEnabled } from '@/lib/supabase/config'
+import type { Provider } from '@supabase/supabase-js'
 import { useSearchParams } from 'next/navigation'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 export default function SignInPage() {
   const searchParams = useSearchParams()
   const [hashError, setHashError] = useState<string | null>(null)
   const [hashErrorDescription, setHashErrorDescription] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const autoStartedRef = useRef(false)
+  const [loadingProvider, setLoadingProvider] = useState<AuthProvider | null>(null)
+  const riotEnabled = isRiotAuthEnabled()
   
   const queryError = searchParams.get('error')
   const queryErrorDescription = searchParams.get('error_description')
@@ -24,6 +27,8 @@ export default function SignInPage() {
     return raw ? decodeURIComponent(raw) : null
   }, [queryErrorDescription, hashErrorDescription])
 
+  const next = searchParams.get('next')
+
   useEffect(() => {
     if (typeof window === 'undefined') return
     const hash = window.location.hash
@@ -35,42 +40,39 @@ export default function SignInPage() {
     setHashErrorDescription(params.get('error_description'))
   }, [])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (autoStartedRef.current) return
-    if (error || errorDescription) return
-    autoStartedRef.current = true
-    void signIn()
-  }, [error, errorDescription])
-
-  const signIn = async () => {
+  const signIn = async (provider: AuthProvider) => {
     try {
-      setIsLoading(true)
+      setLoadingProvider(provider)
       const supabase = createClient()
       
       // Get the current origin
       const origin = window.location.origin
-      const redirectTo = `${origin}/auth/callback`
+      const redirectTo = buildAuthCallbackUrl(origin, { next, provider })
+      const providerName = getSupabaseOAuthProvider(provider)
       
       console.info('[sign-in] Starting OAuth flow')
+      console.info('[sign-in] Provider:', provider)
       console.info('[sign-in] Origin:', origin)
       console.info('[sign-in] Redirect URL:', redirectTo)
 
       const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
+        provider: providerName as Provider,
         options: {
-          redirectTo: redirectTo,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
+          redirectTo,
+          queryParams:
+            provider === 'google'
+              ? {
+                  access_type: 'offline',
+                  prompt: 'consent',
+                }
+              : undefined,
         },
       })
 
       if (error) {
         console.error('[sign-in] OAuth error:', error)
         setHashError(error.message)
-        setIsLoading(false)
+        setLoadingProvider(null)
         return
       }
 
@@ -83,9 +85,13 @@ export default function SignInPage() {
     } catch (err) {
       console.error('[sign-in] Unexpected error:', err)
       setHashError('An unexpected error occurred')
-      setIsLoading(false)
+      setLoadingProvider(null)
     }
   }
+
+  const isLoadingGoogle = loadingProvider === 'google'
+  const isLoadingRiot = loadingProvider === 'riot'
+  const isAnyLoading = loadingProvider !== null
 
   return (
     <main className="flex min-h-screen items-center justify-center px-4 bg-gray-50 dark:bg-slate-950">
@@ -105,11 +111,11 @@ export default function SignInPage() {
           ) : null}
 
           <button
-            onClick={signIn}
-            disabled={isLoading}
+            onClick={() => void signIn('google')}
+            disabled={isAnyLoading}
             className="mt-8 flex w-full items-center justify-center gap-3 rounded-lg border border-gray-300 bg-white px-4 py-3 font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
           >
-            {isLoading ? (
+            {isLoadingGoogle ? (
               <>
                 <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24">
                   <circle
@@ -153,6 +159,26 @@ export default function SignInPage() {
               </>
             )}
           </button>
+
+          {riotEnabled ? (
+            <button
+              onClick={() => void signIn('riot')}
+              disabled={isAnyLoading}
+              className="mt-3 flex w-full items-center justify-center gap-3 rounded-lg border border-slate-700 bg-slate-900 px-4 py-3 font-medium text-slate-100 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isLoadingRiot ? (
+                'Connecting to Riot...'
+              ) : (
+                <>
+                  <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="2" y="2" width="20" height="20" rx="6" fill="currentColor" opacity="0.2" />
+                    <path d="M7 17V7h5.6c2.2 0 3.8 1.3 3.8 3.3 0 1.4-.8 2.5-2 3l2.3 3.7h-2.5l-2-3.3H9.3V17H7zm2.3-5.1h3.1c1.1 0 1.8-.6 1.8-1.6s-.7-1.6-1.8-1.6H9.3v3.2z" fill="currentColor" />
+                  </svg>
+                  Continue with Riot
+                </>
+              )}
+            </button>
+          ) : null}
         </div>
 
         <p className="mt-4 text-center text-xs text-gray-500 dark:text-slate-400">

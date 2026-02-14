@@ -26,3 +26,9 @@ export function getSupabaseCookieNameBase() {
   // Custom names can cause issues with cookie handling
   return undefined
 }
+
+export function isRiotAuthEnabled() {
+  const raw = process.env.NEXT_PUBLIC_ENABLE_RIOT_AUTH
+  if (!raw) return false
+  return raw === '1' || raw.toLowerCase() === 'true'
+}

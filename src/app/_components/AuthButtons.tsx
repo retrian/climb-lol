@@ -6,7 +6,6 @@ import { useEffect, useRef, useState } from 'react'
 
 export function AuthButtons({ signedIn, username }: { signedIn: boolean; username?: string | null }) {
   const router = useRouter()
-  const [isSigningIn, setIsSigningIn] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
@@ -35,48 +34,13 @@ export function AuthButtons({ signedIn, username }: { signedIn: boolean; usernam
     router.push('/')
   }
 
-  const signIn = async () => {
-    if (isSigningIn) return
-    try {
-      setIsSigningIn(true)
-      const supabase = createClient()
-      const origin = window.location.origin
-      const redirectTo = `${origin}/auth/callback`
-
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
-        },
-      })
-
-      if (error) {
-        console.error('[auth] OAuth error:', error)
-        setIsSigningIn(false)
-        return
-      }
-
-      if (data?.url) {
-        window.location.href = data.url
-      }
-    } catch (err) {
-      console.error('[auth] OAuth error:', err)
-      setIsSigningIn(false)
-    }
-  }
-
   if (!signedIn) {
     return (
       <button
-        className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
-        onClick={signIn}
-        disabled={isSigningIn}
+        className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+        onClick={() => router.push('/sign-in')}
       >
-        {isSigningIn ? 'Signing in...' : 'Sign in'}
+        Sign in
       </button>
     )
   }

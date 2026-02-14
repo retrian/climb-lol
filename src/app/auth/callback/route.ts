@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { getSupabaseConfig, getSupabaseCookieDomain, getSupabaseCookieNameBase } from '@/lib/supabase/config'
+import { parseAuthProvider, resolveSafeRedirectTarget } from '@/lib/auth/providers'
 
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get('code')
+  const provider = parseAuthProvider(requestUrl.searchParams.get('provider'))
   const isProduction = process.env.NODE_ENV === 'production'
 
   console.info('[auth/callback] Full URL:', request.url)
@@ -12,10 +14,10 @@ export async function GET(request: NextRequest) {
 
   if (!code) {
     console.error('[auth/callback] No code in URL')
-    return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=missing_code`)
+    return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=missing_code&provider=${provider}`)
   }
 
-  const next = requestUrl.searchParams.get('next') || '/dashboard'
+  const next = resolveSafeRedirectTarget(requestUrl.searchParams.get('next'), '/dashboard')
   const redirectUrl = new URL(next, requestUrl.origin)
   
   const host = request.headers.get('host')
@@ -25,6 +27,7 @@ export async function GET(request: NextRequest) {
   const cookieNameBase = getSupabaseCookieNameBase()
   
   console.info('[auth/callback] host:', host)
+  console.info('[auth/callback] provider:', provider)
   console.info('[auth/callback] cookieDomain:', cookieDomain ?? '(unset)')
   console.info('[auth/callback] cookieNameBase:', cookieNameBase ?? '(unset)')
   console.info('[auth/callback] incoming cookies:', request.cookies.getAll().map(c => c.name))
@@ -65,7 +68,7 @@ export async function GET(request: NextRequest) {
       name: error.name
     })
     const message = encodeURIComponent(error.message || 'oauth_failed')
-    return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=${message}`)
+    return NextResponse.redirect(`${requestUrl.origin}/sign-in?error=${message}&provider=${provider}`)
   }
 
   console.info('[auth/callback] exchangeCodeForSession SUCCESS')
