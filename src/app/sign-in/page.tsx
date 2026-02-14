@@ -41,6 +41,15 @@ export default function SignInPage() {
   }, [])
 
   const signIn = async (provider: AuthProvider) => {
+    if (provider === 'riot') {
+      setLoadingProvider('riot')
+      const params = new URLSearchParams()
+      if (next) params.set('next', next)
+      const startPath = params.toString() ? `/api/auth/riot/start?${params.toString()}` : '/api/auth/riot/start'
+      window.location.href = startPath
+      return
+    }
+
     try {
       setLoadingProvider(provider)
       const supabase = createClient()
