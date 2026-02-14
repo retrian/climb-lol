@@ -6,10 +6,14 @@ import { parseAuthProvider, resolveSafeRedirectTarget } from '@/lib/auth/provide
 export async function GET(request: NextRequest) {
   const requestUrl = new URL(request.url)
   const code = requestUrl.searchParams.get('code')
-  const provider = parseAuthProvider(requestUrl.searchParams.get('provider'))
+  const providerParam = requestUrl.searchParams.get('provider')
+  const provider = parseAuthProvider(providerParam)
   const isProduction = process.env.NODE_ENV === 'production'
 
-  if (provider === 'riot') {
+  const hasRiotStateCookie = !!request.cookies.get('riot_oauth_state')?.value
+  const looksLikeRiotCallback = providerParam === 'riot' || (hasRiotStateCookie && !!requestUrl.searchParams.get('state'))
+
+  if (looksLikeRiotCallback) {
     const riotCallback = new URL('/api/auth/riot/callback', requestUrl.origin)
     requestUrl.searchParams.forEach((value, key) => riotCallback.searchParams.set(key, value))
     return NextResponse.redirect(riotCallback)
