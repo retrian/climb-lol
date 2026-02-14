@@ -335,6 +335,15 @@ export default async function DashboardPage({
     riotProfileIconId != null
       ? `https://ddragon.leagueoflegends.com/cdn/${process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'}/img/profileicon/${riotProfileIconId}.png`
       : null
+  const riotGameName = typeof user.user_metadata?.riot_game_name === 'string' ? user.user_metadata.riot_game_name : null
+  const riotTagLine = typeof user.user_metadata?.riot_tag_line === 'string' ? user.user_metadata.riot_tag_line : null
+  const riotPuuid = typeof user.user_metadata?.riot_puuid === 'string' ? user.user_metadata.riot_puuid : null
+  const riotDebugSummary = [
+    riotProfileIconId != null ? `icon:${riotProfileIconId}` : 'icon:missing',
+    riotGameName ? `name:${riotGameName}` : 'name:missing',
+    riotTagLine ? `tag:${riotTagLine}` : 'tag:missing',
+    riotPuuid ? 'puuid:ok' : 'puuid:missing',
+  ].join(' · ')
   const memberClubs = (clubMembershipsRaw ?? [])
     .flatMap((row) => row.club ?? [])
     .filter(Boolean) as ClubRow[]
@@ -1540,20 +1549,29 @@ export default async function DashboardPage({
                   </div>
                   <div className="p-6">
                     <form action={updateProfile} className="space-y-4">
-                      {riotProfileIconUrl ? (
-                        <div className="flex items-center gap-3 rounded-none border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <div className="flex items-center gap-3 rounded-none border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+                        {riotProfileIconUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
                           <img
                             src={riotProfileIconUrl}
                             alt="Riot profile icon"
-                            className="h-12 w-12 rounded-md border border-slate-200 object-cover dark:border-slate-700"
+                            className="h-12 w-12 rounded-full border border-slate-200 object-cover dark:border-slate-700"
                           />
-                          <div>
-                            <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">Riot profile icon</div>
-                            <div className="text-xs text-slate-500 dark:text-slate-400">Synced from Riot login</div>
+                        ) : (
+                          <div className="flex h-12 w-12 items-center justify-center rounded-full border border-amber-300 bg-amber-100 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+                            !
                           </div>
+                        )}
+                        <div>
+                          <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            {riotProfileIconUrl ? 'Riot profile icon' : 'Riot icon not available yet'}
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            {riotProfileIconUrl ? 'Synced from Riot login' : 'Re-login with Riot to sync icon from Summoner /me endpoint'}
+                          </div>
+                          <div className="mt-1 text-[11px] text-slate-400 dark:text-slate-500">{riotDebugSummary}</div>
                         </div>
-                      ) : null}
+                      </div>
 
                       <div>
                         <label className="mb-2 block text-sm font-semibold text-slate-700 dark:text-slate-200">Username</label>
