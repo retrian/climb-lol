@@ -129,6 +129,15 @@ interface RecentParticipantRaw {
   } | null
 }
 
+interface RecentParticipantWithWinRaw {
+  puuid: string
+  win: boolean | null
+  matches: {
+    game_end_ts: number | null
+    queue_id: number | null
+  } | null
+}
+
 // --- Helpers ---
 
 async function safeDb<T>(query: Promise<{ data: T | null; error: any }> | any, fallback: T): Promise<T> {
@@ -256,6 +265,31 @@ function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) 
     if (active.has(puuid)) filtered.set(puuid, delta)
   }
   return filtered
+}
+
+function renderLpChangePill(lpChange: number) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
+        lpChange === 0
+          ? 'text-slate-500 bg-slate-100 dark:text-slate-300 dark:bg-slate-700/50'
+          : lpChange > 0
+          ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
+          : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
+      }`}
+    >
+      {lpChange === 0 ? (
+        '— 0 LP'
+      ) : (
+        <>
+          <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            {lpChange > 0 ? <path d="M10 4l6 8H4l6-8z" /> : <path d="M10 16l-6-8h12l-6 8z" />}
+          </svg>
+          {Math.abs(lpChange)} LP
+        </>
+      )}
+    </span>
+  )
 }
 
 // --- Components ---
@@ -442,6 +476,7 @@ export default async function LeaderboardDetail({
     lpEventsRaw,
     matchParticipantsRaw,
     recentParticipantsRaw,
+    recentTodayParticipantsWithWinRaw,
     lpHistoryRows
   ] = await Promise.all([
     allRelevantPuuids.length > 0
@@ -478,6 +513,17 @@ export default async function LeaderboardDetail({
           [] as RecentParticipantRaw[]
         )
       : ([] as RecentParticipantRaw[]),
+    allRelevantPuuids.length > 0
+      ? safeDb(
+          supabase
+            .from('match_participants')
+            .select('puuid, win, matches!inner(game_end_ts, queue_id)')
+            .in('puuid', allRelevantPuuids)
+            .eq('matches.queue_id', 420)
+            .gte('matches.game_end_ts', todayStartTs),
+          [] as RecentParticipantWithWinRaw[]
+        )
+      : ([] as RecentParticipantWithWinRaw[]),
     allRelevantPuuids.length > 0
       ? safeDb(
           supabase
@@ -669,6 +715,16 @@ export default async function LeaderboardDetail({
     if (endTs >= weekStartTs) weeklyActivePuuids.add(row.puuid)
     if (endTs >= todayStartTs) dailyActivePuuids.add(row.puuid)
   }
+
+  const dailyStatsByPuuid = new Map<string, { games: number; wins: number; losses: number }>()
+  for (const row of recentTodayParticipantsWithWinRaw) {
+    if (!row.puuid || !row.matches?.game_end_ts) continue
+    const current = dailyStatsByPuuid.get(row.puuid) ?? { games: 0, wins: 0, losses: 0 }
+    current.games += 1
+    if (row.win) current.wins += 1
+    else current.losses += 1
+    dailyStatsByPuuid.set(row.puuid, current)
+  }
   
   const preloadedMatchDataRecord: Record<string, any> = {}
 
@@ -763,25 +819,44 @@ export default async function LeaderboardDetail({
           <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
             <div className="flex items-center gap-2 mb-6">
               <div className="h-1 w-8 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 rounded-full shadow-sm" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Daily LP Movers</h3>
+              <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">LP Movers</h3>
             </div>
             <div className="space-y-4">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Daily Movers</div>
+              </div>
               {dailyTopGain ? (() => {
                 const player = playersByPuuidRecord[dailyTopGain[0]]
                 const iconId = playerIconsByPuuidRecord[dailyTopGain[0]]
                 const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
+                const stats = dailyStatsByPuuid.get(dailyTopGain[0]) ?? { games: 0, wins: 0, losses: 0 }
+                const lpDelta = Math.round(dailyTopGain[1])
                 return (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-4 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/10">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">Top Gainer</div>
-                    <div className="mt-2 flex items-center gap-2">
-                      {iconSrc ? (
-                        <img src={iconSrc} alt="" className="h-5 w-5 rounded-full border border-emerald-200 dark:border-emerald-400/40" />
-                      ) : null}
-                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
+                  <a href="#" data-open-pmh={dailyTopGain[0]} className="block rounded-xl border-l-4 border-y border-r border-l-emerald-400 border-emerald-100 bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:border-emerald-500/40 dark:bg-slate-900">
+                    <div className="group w-full text-left">
+                      <div className="flex items-center gap-3">
+                        {iconSrc ? (
+                          <div className="relative h-11 w-11 shrink-0">
+                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
+                          </div>
+                        ) : null}
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                              <span className="truncate">{displayId}</span>
+                            </span>
+                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">24 hours</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
+                            {renderLpChangePill(lpDelta)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-1 text-sm font-black text-emerald-600 dark:text-emerald-300">+{Math.round(dailyTopGain[1])} LP</div>
-                  </div>
+                  </a>
                 )
               })() : (
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
@@ -793,27 +868,39 @@ export default async function LeaderboardDetail({
                 const player = playersByPuuidRecord[resolvedTopLoss[0]]
                 const iconId = playerIconsByPuuidRecord[resolvedTopLoss[0]]
                 const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
                 const isLoss = resolvedTopLoss[1] < 0
+                const stats = dailyStatsByPuuid.get(resolvedTopLoss[0]) ?? { games: 0, wins: 0, losses: 0 }
+                const lpDelta = Math.round(resolvedTopLoss[1])
                 return (
-                  <div className={`rounded-2xl border px-4 py-4 shadow-sm ${
+                  <a href="#" data-open-pmh={resolvedTopLoss[0]} className={`block rounded-xl border-l-4 border-y border-r bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${
                     isLoss
-                      ? 'border-rose-200 bg-rose-50/60 dark:border-rose-500/30 dark:bg-rose-500/10'
-                      : 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10'
+                      ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
+                      : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
                   }`}>
-                    <div className={`text-[10px] font-black uppercase tracking-widest ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
-                      {isLoss ? 'Top Loser' : 'Least Gain'}
+                    <div className="group w-full text-left">
+                      <div className="flex items-center gap-3">
+                        {iconSrc ? (
+                          <div className="relative h-11 w-11 shrink-0">
+                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
+                          </div>
+                        ) : null}
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                              <span className="truncate">{displayId}</span>
+                            </span>
+                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">24 hours</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
+                            {renderLpChangePill(lpDelta)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      {iconSrc ? (
-                        <img src={iconSrc} alt="" className={`h-5 w-5 rounded-full border ${isLoss ? 'border-rose-200 dark:border-rose-400/40' : 'border-amber-200 dark:border-amber-400/40'}`} />
-                      ) : null}
-                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
-                    </div>
-                    <div className={`mt-1 text-sm font-black ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
-                      {resolvedTopLoss[1] >= 0 ? '+' : ''}{Math.round(resolvedTopLoss[1])} LP
-                    </div>
-                  </div>
+                  </a>
                 )
               })() : null}
 
@@ -825,18 +912,33 @@ export default async function LeaderboardDetail({
                 const player = playersByPuuidRecord[weeklyTopGain[0]]
                 const iconId = playerIconsByPuuidRecord[weeklyTopGain[0]]
                 const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
+                const lpDelta = Math.round(weeklyTopGain[1])
                 return (
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-4 shadow-sm dark:border-emerald-500/30 dark:bg-emerald-500/10">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600 dark:text-emerald-300">Top Gainer</div>
-                    <div className="mt-2 flex items-center gap-2">
-                      {iconSrc ? (
-                        <img src={iconSrc} alt="" className="h-5 w-5 rounded-full border border-emerald-200 dark:border-emerald-400/40" />
-                      ) : null}
-                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
+                  <a href="#" data-open-pmh={weeklyTopGain[0]} className="block rounded-xl border-l-4 border-y border-r border-l-emerald-400 border-emerald-100 bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:border-emerald-500/40 dark:bg-slate-900">
+                    <div className="group w-full text-left">
+                      <div className="flex items-center gap-3">
+                        {iconSrc ? (
+                          <div className="relative h-11 w-11 shrink-0">
+                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
+                          </div>
+                        ) : null}
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                              <span className="truncate">{displayId}</span>
+                            </span>
+                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">7 days</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
+                            {renderLpChangePill(lpDelta)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-1 text-sm font-black text-emerald-600 dark:text-emerald-300">+{Math.round(weeklyTopGain[1])} LP</div>
-                  </div>
+                  </a>
                 )
               })() : (
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
@@ -848,27 +950,38 @@ export default async function LeaderboardDetail({
                 const player = playersByPuuidRecord[resolvedWeeklyTopLoss[0]]
                 const iconId = playerIconsByPuuidRecord[resolvedWeeklyTopLoss[0]]
                 const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? `${(player.game_name ?? 'Unknown').trim()}${player.tag_line ? ` #${player.tag_line}` : ''}` : 'Unknown Player'
+                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
                 const isLoss = resolvedWeeklyTopLoss[1] < 0
+                const lpDelta = Math.round(resolvedWeeklyTopLoss[1])
                 return (
-                  <div className={`rounded-2xl border px-4 py-4 shadow-sm ${
+                  <a href="#" data-open-pmh={resolvedWeeklyTopLoss[0]} className={`block rounded-xl border-l-4 border-y border-r bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${
                     isLoss
-                      ? 'border-rose-200 bg-rose-50/60 dark:border-rose-500/30 dark:bg-rose-500/10'
-                      : 'border-amber-200 bg-amber-50/60 dark:border-amber-500/30 dark:bg-amber-500/10'
+                      ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
+                      : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
                   }`}>
-                    <div className={`text-[10px] font-black uppercase tracking-widest ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
-                      {isLoss ? 'Top Loser' : 'Least Gain'}
+                    <div className="group w-full text-left">
+                      <div className="flex items-center gap-3">
+                        {iconSrc ? (
+                          <div className="relative h-11 w-11 shrink-0">
+                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
+                          </div>
+                        ) : null}
+
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                              <span className="truncate">{displayId}</span>
+                            </span>
+                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">7 days</span>
+                          </div>
+                          <div className="mt-1 flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
+                            {renderLpChangePill(lpDelta)}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      {iconSrc ? (
-                        <img src={iconSrc} alt="" className={`h-5 w-5 rounded-full border ${isLoss ? 'border-rose-200 dark:border-rose-400/40' : 'border-amber-200 dark:border-amber-400/40'}`} />
-                      ) : null}
-                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayId}</div>
-                    </div>
-                    <div className={`mt-1 text-sm font-black ${isLoss ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`}>
-                      {resolvedWeeklyTopLoss[1] >= 0 ? '+' : ''}{Math.round(resolvedWeeklyTopLoss[1])} LP
-                    </div>
-                  </div>
+                  </a>
                 )
               })() : null}
             </div>

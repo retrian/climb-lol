@@ -168,7 +168,7 @@ const GameItem = memo(({
         disabled={!hasMatchDetails}
       >
         <div className="flex items-center gap-3">
-          <div className="h-11 w-11 shrink-0">
+          <div className="relative h-11 w-11 shrink-0">
             {champSrc && (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -178,6 +178,15 @@ const GameItem = memo(({
                 className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800"
               />
             )}
+            {profileIconSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={profileIconSrc}
+                alt=""
+                className="absolute -bottom-1 -right-1 h-5.5 w-5.5 rounded-full border-2 border-white bg-slate-100 object-cover shadow-sm dark:border-slate-900 dark:bg-slate-800"
+                loading="lazy"
+              />
+            ) : null}
           </div>
 
           <div className="flex-1 min-w-0">
@@ -190,12 +199,7 @@ const GameItem = memo(({
               </span>
             </div>
             <div className="mt-1 flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300">
-                {profileIconSrc ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={profileIconSrc} alt="" className="h-5 w-5 rounded-full border border-slate-200 dark:border-slate-700" loading="lazy" />
-                ) : null}
-              </span>
+              <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
               {lpChange !== null ? (
                 lpNote ? (
                   <span

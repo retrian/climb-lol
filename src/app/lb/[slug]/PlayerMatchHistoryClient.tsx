@@ -707,7 +707,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const [imagesReady, setImagesReady] = useState(true)
   const initialImagesReady = useRef(false)
   const preloadIdRef = useRef(0)
-  const imagesTimeoutRef = useRef<number | null>(null)
+  const loadFailsafeRef = useRef<number | null>(null)
   const [isCompact, setIsCompact] = useState(false)
   
   const modalRef = useRef<HTMLDivElement>(null)
@@ -913,37 +913,34 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [open])
 
   useEffect(() => {
-    if (!open || activeTab !== 'matches') return
-    initialImagesReady.current = false
-    setImagesReady(false)
-  }, [open, activeTab, selectedPlayer])
-
-  useEffect(() => {
     if (!open || activeTab !== 'matches') {
-      if (imagesTimeoutRef.current !== null) {
-        window.clearTimeout(imagesTimeoutRef.current)
-        imagesTimeoutRef.current = null
+      if (loadFailsafeRef.current !== null) {
+        window.clearTimeout(loadFailsafeRef.current)
+        loadFailsafeRef.current = null
       }
       return
     }
 
-    if (imagesTimeoutRef.current !== null) {
-      window.clearTimeout(imagesTimeoutRef.current)
+    initialImagesReady.current = false
+    setImagesReady(false)
+
+    if (loadFailsafeRef.current !== null) {
+      window.clearTimeout(loadFailsafeRef.current)
     }
 
-    imagesTimeoutRef.current = window.setTimeout(() => {
+    loadFailsafeRef.current = window.setTimeout(() => {
       setImagesReady(true)
       initialImagesReady.current = true
-      imagesTimeoutRef.current = null
-    }, 3000)
+      loadFailsafeRef.current = null
+    }, 2000)
 
     return () => {
-      if (imagesTimeoutRef.current !== null) {
-        window.clearTimeout(imagesTimeoutRef.current)
-        imagesTimeoutRef.current = null
+      if (loadFailsafeRef.current !== null) {
+        window.clearTimeout(loadFailsafeRef.current)
+        loadFailsafeRef.current = null
       }
     }
-  }, [open, activeTab, selectedPlayer, loadingMatches])
+  }, [open, activeTab, selectedPlayer])
 
   useEffect(() => {
     if (!open || activeTab !== 'matches') {
@@ -957,59 +954,22 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       return
     }
 
-    if (initialImagesReady.current) return
+    const detailsReady = prefetchMatchIds.every((id) => {
+      const cached = getCacheValue(matchDetailCache, id)
+      return Boolean(cached || matchDetails[id])
+    })
 
-    const run = async () => {
-      const localId = ++preloadIdRef.current
+    if (!detailsReady) {
       setImagesReady(false)
-
-      await new Promise(requestAnimationFrame)
-
-      const container = modalRef.current
-      if (!container) {
-        if (preloadIdRef.current === localId) setImagesReady(true)
-        return
-      }
-
-      const srcs = Array.from(container.querySelectorAll('img'))
-        .map((img) => img.currentSrc || img.src)
-        .filter((src) => !!src)
-
-      const uniqueSrcs = Array.from(new Set(srcs))
-      if (uniqueSrcs.length === 0) {
-        if (preloadIdRef.current === localId) {
-          setImagesReady(true)
-          initialImagesReady.current = true
-        }
-        return
-      }
-
-      const preloadPromise = Promise.allSettled(
-        uniqueSrcs.map(
-          (src) =>
-            new Promise<void>((resolve) => {
-              const img = new Image()
-              img.onload = () => resolve()
-              img.onerror = () => resolve()
-              img.src = src
-            })
-        )
-      )
-
-      const timeoutPromise = new Promise<void>((resolve) => {
-        window.setTimeout(resolve, 3000)
-      })
-
-      await Promise.race([preloadPromise, timeoutPromise])
-
-      if (preloadIdRef.current === localId) {
-        setImagesReady(true)
-        initialImagesReady.current = true
-      }
+      return
     }
 
-    run()
-  }, [open, activeTab, matches, loadingMatches])
+    // Match-request completion is the only gate: hide loader immediately once details are ready.
+    if (!initialImagesReady.current) {
+      initialImagesReady.current = true
+      setImagesReady(true)
+    }
+  }, [open, activeTab, loadingMatches, prefetchMatchIds, matchDetails])
 
   useEffect(() => {
     if (!open || !selectedPlayer) return
@@ -1114,7 +1074,8 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [])
 
   useEffect(() => {
-    if (!open || prefetchMatchIds.length === 0) return
+    if (!open) return
+    if (prefetchMatchIds.length === 0) return
 
     let cancelled = false
     const cachedDetails: Record<string, MatchDetailResponse> = {}
@@ -1134,42 +1095,55 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
 
     if (!queue.length) return
 
-    const processBatch = async () => {
-      while (queue.length && !cancelled) {
-        const batch = queue.splice(0, 3)
-        await Promise.allSettled(batch.map(async id => {
-          if (getCacheValue(matchDetailCache, id) || fetchingMatches.current.has(id)) return
-            fetchingMatches.current.add(id)
-            try {
-              const res = await fetch(`/api/match/${id}`)
-              if (res.ok) {
-                const data = await res.json()
-                if (data?.match) {
-                  setCacheValue(matchDetailCache, id, data.match, CACHE_TTL_MS.matchDetail)
-                  if (!cancelled) setMatchDetails(prev => ({ ...prev, [id]: data.match }))
-                }
-              }
-          } finally {
-            fetchingMatches.current.delete(id)
+    void Promise.allSettled(
+      queue.map(async (id) => {
+        if (cancelled) return
+        if (getCacheValue(matchDetailCache, id) || fetchingMatches.current.has(id)) return
+        fetchingMatches.current.add(id)
+        try {
+          const res = await fetch(`/api/match/${id}`)
+          if (!res.ok) return
+          const data = await res.json()
+          if (data?.match) {
+            setCacheValue(matchDetailCache, id, data.match, CACHE_TTL_MS.matchDetail)
+            if (!cancelled) setMatchDetails((prev) => ({ ...prev, [id]: data.match }))
           }
-        }))
-        await new Promise(r => setTimeout(r, 500))
-      }
-    }
+        } finally {
+          fetchingMatches.current.delete(id)
+        }
+      })
+    )
 
-    const timer = setTimeout(processBatch, 1000)
     // 1. Critical Race Condition Fix: Clear fetchingMatches set on unmount/re-run
-    return () => { 
-        cancelled = true; 
-        clearTimeout(timer);
-        fetchingMatches.current.clear();
+    return () => {
+      cancelled = true
+      fetchingMatches.current.clear()
     }
   }, [open, prefetchMatchIds])
 
   const handleOpen = useCallback((card: PlayerCard) => {
+    initialImagesReady.current = false
+    setImagesReady(false)
     setSelectedPlayer(card)
     setOpen(true)
   }, [])
+
+  useEffect(() => {
+    const handleMoverClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      if (!target) return
+      const trigger = target.closest<HTMLElement>('[data-open-pmh]')
+      if (!trigger) return
+      event.preventDefault()
+      const puuid = trigger.getAttribute('data-open-pmh')
+      if (!puuid) return
+      const card = playerCards.find((c) => c.player.puuid === puuid)
+      if (card) handleOpen(card)
+    }
+
+    document.addEventListener('click', handleMoverClick)
+    return () => document.removeEventListener('click', handleMoverClick)
+  }, [playerCards, handleOpen])
 
   const handleClose = useCallback(() => {
     setOpen(false)
@@ -1272,21 +1246,6 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={handleClose}>
             {/* 4. Backdrop Click Fix: Stop propagation on content click */}
             <div ref={modalRef} role="dialog" aria-modal="true" className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
-              {!imagesReady && activeTab === 'matches' && (
-                <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/80 backdrop-blur dark:bg-slate-950/80">
-                  <div className="flex items-center gap-3 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                      />
-                    </svg>
-                    Loading match images…
-                  </div>
-                </div>
-              )}
               <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-5 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4">
@@ -1421,10 +1380,20 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
               <div className="flex-1 min-h-0 overflow-hidden">
                 {activeTab === 'matches' && (
                   <div
+                    data-match-list
                     className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-5 space-y-3 overscroll-contain"
                     style={{ contentVisibility: 'auto', containIntrinsicSize: '1200px' }}
                   >
-                    {loadingMatches ? <MatchDetailSkeleton /> : !matches.length ? (
+                    {(loadingMatches || !imagesReady) ? (
+                      <div className="pt-1">
+                        <div className="flex h-10 w-full items-center justify-center rounded border border-slate-300 bg-slate-100 dark:border-slate-700 dark:bg-slate-800/40">
+                          <svg className="h-5 w-5 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <circle className="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" />
+                            <path className="opacity-90" fill="currentColor" d="M12 3a9 9 0 017.8 4.5l-2.6 1.5A6 6 0 0012 6V3z" />
+                          </svg>
+                        </div>
+                      </div>
+                    ) : !matches.length ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">No matches available.</div>
                     ) : (
                       <>
