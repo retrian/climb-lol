@@ -398,6 +398,13 @@ function computeLpDelta(opts: {
   return (nextStep - lastStep) * 100 + (nextLp - lastLp)
 }
 
+function logLpDeltaHelper(puuid: string, matchId: string | null, lpDelta: number) {
+  if (!Number.isFinite(lpDelta) || lpDelta === 0) return
+  const shortPuuid = puuid.slice(0, 12)
+  const shortMatch = (matchId ?? 'no_match').slice(0, 16)
+  console.log('[lp_delta_helper]', shortPuuid, 'match', shortMatch, 'lp_delta', lpDelta)
+}
+
 function pickSolo(entries: RankEntry[]): RankEntry | null {
   return entries.find((e) => e.queueType === QUEUE_SOLO) ?? null
 }
@@ -839,6 +846,8 @@ async function maybeInsertPerGameLpEvent(opts: {
       nextRank: snap.rank,
       nextLp: snap.lp,
     })
+
+    logLpDeltaHelper(puuid, matchId, lpDelta)
 
     const { error } = await supabase.from('player_lp_events').insert({
       puuid,
