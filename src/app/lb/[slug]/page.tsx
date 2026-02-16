@@ -1,9 +1,12 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
+import { cache } from 'react'
+import { unstable_cache } from 'next/cache'
 import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { getSeasonStartIso } from '@/lib/riot/season'
 import { compareRanks } from '@/lib/rankSort'
+import { createServiceClient } from '@/lib/supabase/service'
 import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
@@ -107,29 +110,18 @@ interface PlayerBasicRaw {
   tag_line: string | null
 }
 
-interface SeasonChampionRaw {
+interface TopChampionRaw {
   puuid: string
   champion_id: number | null
+  games: number | null
 }
 
-interface LpHistoryRaw {
+interface MoverDeltaRaw {
   puuid: string
-  tier: string | null
-  rank: string | null
-  lp: number | null
-  fetched_at: string | null
-  queue_type?: string | null
+  lp_delta: number | null
 }
 
 interface RecentParticipantRaw {
-  puuid: string
-  matches: {
-    game_end_ts: number | null
-    queue_id: number | null
-  } | null
-}
-
-interface RecentParticipantWithWinRaw {
   puuid: string
   win: boolean | null
   matches: {
@@ -138,21 +130,94 @@ interface RecentParticipantWithWinRaw {
   } | null
 }
 
+interface LeaderboardRaw {
+  id: string
+  user_id: string
+  name: string
+  description: string | null
+  visibility: Visibility
+  banner_url: string | null
+  updated_at: string | null
+}
+
+interface LeaderboardPageData {
+  champMap: Record<number, { id: string; name: string }>
+  playersByPuuidRecord: Record<string, Player>
+  rankByPuuidRecord: Record<string, PlayerRankSnapshot | null>
+  participantsByMatchRecord: Record<string, MatchParticipant[]>
+  playerIconsByPuuidRecord: Record<string, number | null>
+  preloadedMatchDataRecord: Record<string, any>
+  playerCards: Array<{
+    player: Player
+    index: number
+    rankData: PlayerRankSnapshot | null
+    stateData: PlayerRiotState | null
+    topChamps: Array<{ champion_id: number; games: number }>
+  }>
+  latestGames: Game[]
+  cutoffs: Array<{ label: string; lp: number; icon: string }>
+  dailyTopGain: [string, number] | null
+  resolvedTopLoss: [string, number] | null
+  weeklyTopGain: [string, number] | null
+  resolvedWeeklyTopLoss: [string, number] | null
+  dailyStatsByPuuidRecord: Record<string, { games: number; wins: number; losses: number }>
+  lastUpdatedIso: string | null
+}
+
 // --- Helpers ---
 
-async function safeDb<T>(query: Promise<{ data: T | null; error: any }> | any, fallback: T): Promise<T> {
-  const { data, error } = await query
-  if (error) {
-    console.error('Database Error:', {
-      message: error?.message,
-      details: error?.details,
-      hint: error?.hint,
-      code: error?.code,
-      raw: error,
-    })
+async function safeDb<T>(
+  query: Promise<{ data: T | null; error: unknown }> | any,
+  fallback: T,
+  label?: string
+): Promise<T> {
+  const describeError = (error: unknown) => {
+    const asAny = error as any
+    let ownProps: Record<string, unknown> = {}
+    try {
+      for (const key of Object.getOwnPropertyNames(asAny ?? {})) {
+        ownProps[key] = asAny?.[key]
+      }
+    } catch {}
+
+    return {
+      label,
+      type: typeof error,
+      constructorName: asAny?.constructor?.name ?? null,
+      message: asAny?.message ?? null,
+      details: asAny?.details ?? null,
+      hint: asAny?.hint ?? null,
+      code: asAny?.code ?? null,
+      name: asAny?.name ?? null,
+      toString: (() => {
+        try {
+          return String(error)
+        } catch {
+          return null
+        }
+      })(),
+      serialized: (() => {
+        try {
+          return JSON.stringify(error)
+        } catch {
+          return null
+        }
+      })(),
+      ownProps,
+    }
+  }
+
+  try {
+    const { data, error } = await query
+    if (error) {
+      console.error('Database Error:', describeError(error), error)
+      return fallback
+    }
+    return (data as T) ?? fallback
+  } catch (error) {
+    console.error('Database Exception:', describeError(error), error)
     return fallback
   }
-  return (data as T) ?? fallback
 }
 
 function computeEndType({
@@ -190,74 +255,6 @@ function makeLpKey(matchId: string, puuid: string): string {
   return `${matchId}-${puuid}`
 }
 
-const TIER_ORDER = [
-  'IRON',
-  'BRONZE',
-  'SILVER',
-  'GOLD',
-  'PLATINUM',
-  'EMERALD',
-  'DIAMOND',
-  'MASTER',
-  'GRANDMASTER',
-  'CHALLENGER',
-] as const
-
-const DIV_ORDER = ['IV', 'III', 'II', 'I'] as const
-
-function baseMasterLadder() {
-  const diamondIndex = TIER_ORDER.indexOf('DIAMOND')
-  return diamondIndex * 400 + 3 * 100 + 100
-}
-
-function ladderLpValue(point: Pick<LpHistoryRaw, 'tier' | 'rank' | 'lp'>) {
-  const tier = (point.tier ?? '').toUpperCase()
-  const div = (point.rank ?? '').toUpperCase()
-  const lp = Math.max(0, point.lp ?? 0)
-  const tierIndex = TIER_ORDER.indexOf(tier as any)
-  if (tierIndex === -1) return null
-
-  const divIndex = DIV_ORDER.indexOf(div as any)
-
-  if (tierIndex <= TIER_ORDER.indexOf('DIAMOND')) {
-    const base = tierIndex * 400
-    const divOffset = divIndex === -1 ? 0 : divIndex * 100
-    return base + divOffset + lp
-  }
-
-  return baseMasterLadder() + lp
-}
-
-function computeMoverDeltas(rows: LpHistoryRaw[], startTs: number) {
-  const firstBy = new Map<string, { ts: number; row: LpHistoryRaw }>()
-  const lastBy = new Map<string, { ts: number; row: LpHistoryRaw }>()
-
-  for (const row of rows) {
-    if (!row.puuid || !row.fetched_at) continue
-    const ts = new Date(row.fetched_at).getTime()
-    if (!Number.isFinite(ts) || ts < startTs) continue
-
-    const first = firstBy.get(row.puuid)
-    if (!first || ts < first.ts) firstBy.set(row.puuid, { ts, row })
-
-    const last = lastBy.get(row.puuid)
-    if (!last || ts > last.ts) lastBy.set(row.puuid, { ts, row })
-  }
-
-  const deltas = new Map<string, number>()
-  for (const [puuid, first] of firstBy.entries()) {
-    const last = lastBy.get(puuid)
-    if (!last) continue
-    const startValue = ladderLpValue(first.row)
-    const endValue = ladderLpValue(last.row)
-    if (startValue === null || endValue === null) continue
-    const delta = first.ts === last.ts ? 0 : endValue - startValue
-    deltas.set(puuid, delta)
-  }
-
-  return deltas
-}
-
 function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) {
   if (active.size === 0) return new Map<string, number>()
   const filtered = new Map<string, number>()
@@ -291,6 +288,380 @@ function renderLpChangePill(lpChange: number) {
     </span>
   )
 }
+
+const getLeaderboardBySlug = cache(async (slug: string): Promise<LeaderboardRaw | null> => {
+  const supabase = await createClient()
+  const { data } = await supabase
+    .from('leaderboards')
+    .select('id, user_id, name, description, visibility, banner_url, updated_at')
+    .eq('slug', slug)
+    .maybeSingle()
+
+  return (data as LeaderboardRaw | null) ?? null
+})
+
+const getLeaderboardPageDataCached = unstable_cache(
+  async (lbId: string, ddVersion: string): Promise<LeaderboardPageData> => {
+    const supabase = createServiceClient()
+
+    const [
+      champMap,
+      playersRaw,
+      cutsRaw,
+      latestRaw
+    ] = await Promise.all([
+      getChampionMap(ddVersion).catch(() => ({})),
+      safeDb(supabase
+        .from('leaderboard_players')
+        .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
+        .eq('leaderboard_id', lbId)
+        .order('sort_order', { ascending: true })
+        .limit(50), [] as Player[], 'leaderboard_players'
+      ),
+      safeDb(supabase
+        .from('rank_cutoffs')
+        .select('queue_type, tier, cutoff_lp')
+        .in('tier', ['GRANDMASTER', 'CHALLENGER']), [] as RankCutoffRaw[], 'rank_cutoffs'
+      ),
+      safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lbId, lim: 10 }), [] as any[], 'get_leaderboard_latest_games')
+    ])
+
+    const players: Player[] = playersRaw
+    const top50Puuids = players.map((p) => p.puuid).filter(Boolean)
+    const top50Set = new Set(top50Puuids)
+
+    const latestMatchIds: string[] = []
+    const seenMatchIds = new Set<string>()
+    const gamePuuids = new Set<string>()
+
+    if (latestRaw) {
+      for (const row of latestRaw) {
+        if (row.match_id && !seenMatchIds.has(row.match_id)) {
+          seenMatchIds.add(row.match_id)
+          latestMatchIds.push(row.match_id)
+        }
+        if (row.puuid) gamePuuids.add(row.puuid)
+      }
+    }
+
+    const missingPuuids = Array.from(gamePuuids).filter(p => !top50Set.has(p))
+    const allRelevantPuuids = Array.from(new Set([...top50Puuids, ...Array.from(gamePuuids)]))
+
+    const seasonStartIso = getSeasonStartIso({ ddVersion })
+    const seasonStartMsLatest = new Date(seasonStartIso).getTime()
+
+    const moversTimeZone = process.env.MOVERS_TIMEZONE ?? 'America/Chicago'
+    const now = new Date()
+    const zonedNow = new Date(now.toLocaleString('en-US', { timeZone: moversTimeZone }))
+    const todayStart = new Date(zonedNow)
+    todayStart.setHours(0, 0, 0, 0)
+    const todayStartTs = todayStart.getTime()
+
+    const weekStart = new Date(zonedNow)
+    weekStart.setDate(weekStart.getDate() - 7)
+    const weekStartTs = weekStart.getTime()
+
+    const [
+      statesRaw,
+      ranksRaw,
+      topChampsRaw,
+      missingPlayersRaw,
+      latestMatchesRaw,
+      lpEventsRaw,
+      matchParticipantsRaw,
+      recentParticipantsRaw,
+      dailyMoverRows,
+      weeklyMoverRows,
+    ] = await Promise.all([
+      allRelevantPuuids.length > 0
+        ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[], 'player_riot_state')
+        : ([] as PlayerRiotState[]),
+      allRelevantPuuids.length > 0
+        ? safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[], 'player_rank_snapshot')
+        : ([] as PlayerRankSnapshot[]),
+      top50Puuids.length > 0 ? safeDb(
+        supabase
+          .from('player_top_champions')
+          .select('puuid, champion_id, games')
+          .in('puuid', top50Puuids)
+          .order('games', { ascending: false }),
+        [] as TopChampionRaw[],
+        'player_top_champions'
+      ) : [],
+      missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[], 'missing_players') : [],
+      latestMatchIds.length > 0 ? safeDb(supabase.from('matches').select('match_id, fetched_at, game_end_ts').in('match_id', latestMatchIds).gte('fetched_at', seasonStartIso).gte('game_end_ts', seasonStartMsLatest), [] as LatestMatchRaw[], 'latest_matches') : [],
+      latestMatchIds.length > 0 && allRelevantPuuids.length > 0
+        ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[], 'player_lp_events')
+        : ([] as LpEventRaw[]),
+      latestMatchIds.length > 0
+        ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[], 'match_participants_latest')
+        : ([] as MatchParticipantRaw[]),
+      allRelevantPuuids.length > 0
+        ? safeDb(
+            supabase
+              .from('match_participants')
+              .select('puuid, win, matches!inner(game_end_ts, queue_id)')
+              .in('puuid', allRelevantPuuids)
+              .eq('matches.queue_id', 420)
+              .gte('matches.game_end_ts', weekStartTs),
+            [] as RecentParticipantRaw[],
+            'recent_participants_week'
+          )
+        : ([] as RecentParticipantRaw[]),
+      allRelevantPuuids.length > 0
+        ? safeDb(
+            supabase.rpc('get_leaderboard_mover_deltas', {
+              lb_id: lbId,
+              start_at: new Date(todayStartTs).toISOString(),
+            }),
+            [] as MoverDeltaRaw[],
+            'movers_daily'
+          )
+        : ([] as MoverDeltaRaw[]),
+      allRelevantPuuids.length > 0
+        ? safeDb(
+            supabase.rpc('get_leaderboard_mover_deltas', {
+              lb_id: lbId,
+              start_at: new Date(weekStartTs).toISOString(),
+            }),
+            [] as MoverDeltaRaw[],
+            'movers_weekly'
+          )
+        : ([] as MoverDeltaRaw[]),
+    ])
+
+    const allPlayersMap = new Map<string, Player | Partial<Player>>()
+    players.forEach(p => allPlayersMap.set(p.puuid, p))
+
+    missingPlayersRaw.forEach((p) => {
+      if (!allPlayersMap.has(p.puuid)) {
+        allPlayersMap.set(p.puuid, {
+          ...p,
+          id: p.puuid,
+          role: null,
+          twitch_url: null,
+          twitter_url: null,
+          sort_order: 999
+        })
+      }
+    })
+
+    const stateBy = new Map<string, PlayerRiotState>()
+    let lastUpdatedIso: string | null = null
+    let maxLastUpdatedTs = 0
+
+    for (const s of statesRaw) {
+      stateBy.set(s.puuid, s)
+      if (s.last_rank_sync_at) {
+        const ts = new Date(s.last_rank_sync_at).getTime()
+        if (ts > maxLastUpdatedTs) {
+          maxLastUpdatedTs = ts
+          lastUpdatedIso = s.last_rank_sync_at
+        }
+      }
+    }
+
+    const rankBy = new Map<string, PlayerRankSnapshot | null>()
+    const queuesByPuuid = new Map<string, { solo: any; flex: any }>()
+
+    for (const r of ranksRaw) {
+      if (r.fetched_at && (!seasonStartMsLatest || new Date(r.fetched_at).getTime() >= seasonStartMsLatest)) {
+        let entry = queuesByPuuid.get(r.puuid)
+        if (!entry) {
+          entry = { solo: null, flex: null }
+          queuesByPuuid.set(r.puuid, entry)
+        }
+        if (r.queue_type === 'RANKED_SOLO_5x5') entry.solo = r
+        else if (r.queue_type === 'RANKED_FLEX_SR') entry.flex = r
+      }
+    }
+
+    for (const pid of allRelevantPuuids) {
+      const entry = queuesByPuuid.get(pid)
+      rankBy.set(pid, entry ? (entry.solo ?? entry.flex ?? null) : null)
+    }
+
+    const playersSorted = [...players].sort((a, b) => {
+      const rankA = rankBy.get(a.puuid)
+      const rankB = rankBy.get(b.puuid)
+      return compareRanks(rankA ?? undefined, rankB ?? undefined)
+    })
+
+    const champsBy = new Map<string, Array<{ champion_id: number; games: number }>>()
+    for (const row of topChampsRaw) {
+      if (!row.puuid || !row.champion_id) continue
+      const current = champsBy.get(row.puuid) ?? []
+      current.push({ champion_id: row.champion_id, games: row.games ?? 0 })
+      champsBy.set(row.puuid, current)
+    }
+    for (const [puuid, champs] of champsBy.entries()) {
+      champsBy.set(puuid, champs.sort((a, b) => b.games - a.games).slice(0, 5))
+    }
+
+    const cutoffsMap = new Map<string, number>()
+    for (const c of cutsRaw) cutoffsMap.set(`${c.queue_type}::${c.tier}`, c.cutoff_lp)
+    const cutoffs = [
+      { key: 'RANKED_SOLO_5x5::CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
+      { key: 'RANKED_SOLO_5x5::GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
+    ].map((i) => ({ label: i.label, lp: cutoffsMap.get(i.key) as number, icon: i.icon })).filter((x) => x.lp !== undefined)
+
+    const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
+    const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => {
+      if (!allowedMatchIds.has(row.match_id)) return false
+      return row.queue_id === 420
+    })
+
+    const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
+    for (const row of lpEventsRaw) {
+      if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
+        lpByMatchAndPlayer.set(makeLpKey(row.match_id, row.puuid), { delta: row.lp_delta, note: row.note ?? null })
+      }
+    }
+
+    const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
+    const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
+      const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
+      const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
+      const durationS = row.game_duration_s ?? row.gameDuration
+      const fallbackEndTs = latestMatchEndById.get(row.match_id) ?? null
+
+      return {
+        matchId: row.match_id,
+        puuid: row.puuid,
+        championId: row.champion_id,
+        win: row.win,
+        k: row.kills ?? 0,
+        d: row.deaths ?? 0,
+        a: row.assists ?? 0,
+        cs: row.cs ?? 0,
+        endTs: row.game_end_ts ?? fallbackEndTs ?? null,
+        durationS,
+        queueId: row.queue_id,
+        lpChange,
+        lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
+        endType: computeEndType({
+          gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
+          gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
+          gameDurationS: durationS,
+          lpChange,
+        }),
+      }
+    })
+
+    const participantsByMatch = new Map<string, MatchParticipant[]>()
+    for (const row of matchParticipantsRaw) {
+      if (!row.match_id || !row.puuid) continue
+      const entry: MatchParticipant = {
+        matchId: row.match_id,
+        puuid: row.puuid,
+        championId: row.champion_id ?? 0,
+        kills: row.kills ?? 0,
+        deaths: row.deaths ?? 0,
+        assists: row.assists ?? 0,
+        cs: row.cs ?? 0,
+        win: row.win ?? false,
+      }
+      const list = participantsByMatch.get(entry.matchId)
+      if (list) list.push(entry)
+      else participantsByMatch.set(entry.matchId, [entry])
+    }
+
+    const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
+    const rankByPuuidRecord = Object.fromEntries(rankBy.entries()) as Record<string, PlayerRankSnapshot | null>
+    const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
+    const playerIconsByPuuidRecord = Object.fromEntries(
+      Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
+    ) as Record<string, number | null>
+
+    const dailyStatsByPuuidRecord: Record<string, { games: number; wins: number; losses: number }> = {}
+    const dailyActivePuuids = new Set<string>()
+    const weeklyActivePuuids = new Set<string>()
+    for (const row of recentParticipantsRaw) {
+      if (!row.puuid || !row.matches?.game_end_ts) continue
+      const endTs = row.matches.game_end_ts
+      if (endTs >= weekStartTs) weeklyActivePuuids.add(row.puuid)
+      if (endTs >= todayStartTs) dailyActivePuuids.add(row.puuid)
+      if (endTs < todayStartTs) continue
+
+      const current = dailyStatsByPuuidRecord[row.puuid] ?? { games: 0, wins: 0, losses: 0 }
+      current.games += 1
+      if (row.win) current.wins += 1
+      else current.losses += 1
+      dailyStatsByPuuidRecord[row.puuid] = current
+    }
+
+    const preloadedMatchDataRecord: Record<string, any> = {}
+
+    const playerCards = playersSorted.map((player, idx) => ({
+      player,
+      index: idx + 1,
+      rankData: rankBy.get(player.puuid) ?? null,
+      stateData: stateBy.get(player.puuid) ?? null,
+      topChamps: champsBy.get(player.puuid) ?? [],
+    }))
+
+    const dailyDeltaMap = new Map<string, number>()
+    for (const row of dailyMoverRows) {
+      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
+      dailyDeltaMap.set(row.puuid, row.lp_delta)
+    }
+    const dailyLpByPuuid = filterDeltasByActive(dailyDeltaMap, dailyActivePuuids)
+    const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
+    const dailyTopGainCandidate = dailyLpEntries.length
+      ? dailyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
+      : null
+    const dailyTopGain = dailyTopGainCandidate && dailyTopGainCandidate[1] > 0
+      ? dailyTopGainCandidate
+      : null
+    const dailyTopLoss = dailyLpEntries.length
+      ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
+      : null
+    const resolvedTopLoss = dailyLpEntries.length > 1
+      ? (dailyTopLoss && dailyTopLoss[1] < 0
+          ? dailyTopLoss
+          : dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
+      : null
+
+    const weeklyDeltaMap = new Map<string, number>()
+    for (const row of weeklyMoverRows) {
+      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
+      weeklyDeltaMap.set(row.puuid, row.lp_delta)
+    }
+    const weeklyLpByPuuid = filterDeltasByActive(weeklyDeltaMap, weeklyActivePuuids)
+    const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
+    const weeklyTopGain = weeklyLpEntries.length
+      ? weeklyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
+      : null
+    const weeklyTopLoss = weeklyLpEntries.length
+      ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
+      : null
+    const resolvedWeeklyTopLoss = weeklyLpEntries.length > 1
+      ? (weeklyTopLoss && weeklyTopLoss[1] < 0
+          ? weeklyTopLoss
+          : weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
+      : null
+
+    return {
+      champMap,
+      playersByPuuidRecord,
+      rankByPuuidRecord,
+      participantsByMatchRecord,
+      playerIconsByPuuidRecord,
+      preloadedMatchDataRecord,
+      playerCards,
+      latestGames,
+      cutoffs,
+      dailyTopGain,
+      resolvedTopLoss,
+      weeklyTopGain,
+      resolvedWeeklyTopLoss,
+      dailyStatsByPuuidRecord,
+      lastUpdatedIso,
+    }
+  },
+  ['lb-page-data-v3'],
+  { revalidate: 30 }
+)
 
 // --- Components ---
 
@@ -333,12 +704,7 @@ function renderLpChangePill(lpChange: number) {
 
 export async function generateMetadata({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
-  const supabase = await createClient()
-  const { data: lb } = await supabase
-    .from('leaderboards')
-    .select('name, description, banner_url')
-    .eq('slug', slug)
-    .maybeSingle()
+  const lb = await getLeaderboardBySlug(slug)
 
   const title = lb?.name ? `${lb.name} | CWF.LOL` : 'Leaderboard | CWF.LOL'
   const description =
@@ -380,17 +746,11 @@ export default async function LeaderboardDetail({
 }) {
   const { slug } = await params
   const supabase = await createClient()
-
-  const latestPatch = await getLatestDdragonVersion()
+  const [lb, latestPatch] = await Promise.all([
+    getLeaderboardBySlug(slug),
+    getLatestDdragonVersion(),
+  ])
   const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-
-  // Fetch Leaderboard Metadata
-  const { data: lb } = await supabase
-    .from('leaderboards')
-    .select('id, user_id, name, description, visibility, banner_url, updated_at')
-    .eq('slug', slug)
-    .maybeSingle()
-
 
   if (!lb) notFound()
 
@@ -400,380 +760,39 @@ export default async function LeaderboardDetail({
     if (!user || user.id !== lb.user_id) notFound()
   }
 
-  const { error: viewError } = await supabase.rpc('increment_leaderboard_view', { slug_input: slug })
-  if (viewError) {
-    console.error('Failed to increment leaderboard view:', viewError)
-  }
-
-  // Phase 1: Discovery (Parallel Fetch)
-  const [
+  void (async () => {
+    try {
+      const viewClient = await createClient()
+      const { error: viewError } = await viewClient.rpc('increment_leaderboard_view', { slug_input: slug })
+      if (viewError) {
+        console.error('Failed to increment leaderboard view:', viewError)
+      }
+    } catch (error: unknown) {
+      console.error('Failed to increment leaderboard view:', error)
+    }
+  })()
+  const data = await getLeaderboardPageDataCached(lb.id, ddVersion)
+  const {
     champMap,
-    playersRaw,
-    cutsRaw,
-    latestRaw
-  ] = await Promise.all([
-    getChampionMap(ddVersion).catch(() => ({})), 
-    safeDb(supabase
-      .from('leaderboard_players')
-      .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
-      .eq('leaderboard_id', lb.id)
-      .order('sort_order', { ascending: true })
-      .limit(50), [] as Player[]
-    ),
-    safeDb(supabase
-      .from('rank_cutoffs')
-      .select('queue_type, tier, cutoff_lp')
-      .in('tier', ['GRANDMASTER', 'CHALLENGER']), [] as RankCutoffRaw[]
-    ),
-    safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lb.id, lim: 10 }), [] as any[])
-  ])
+    playersByPuuidRecord,
+    rankByPuuidRecord,
+    participantsByMatchRecord,
+    playerIconsByPuuidRecord,
+    preloadedMatchDataRecord,
+    playerCards,
+    latestGames,
+    cutoffs,
+    dailyTopGain,
+    resolvedTopLoss,
+    weeklyTopGain,
+    resolvedWeeklyTopLoss,
+    dailyStatsByPuuidRecord,
+    lastUpdatedIso,
+  } = data
 
-
-  const players: Player[] = playersRaw
-  const top50Puuids = players.map((p) => p.puuid).filter(Boolean)
-  const top50Set = new Set(top50Puuids)
-
-  // Process Latest Games to find ALL PUUIDs involved
-  const latestMatchIds: string[] = []
-  const seenMatchIds = new Set<string>()
-  const gamePuuids = new Set<string>()
-
-  if (latestRaw) {
-    for (const row of latestRaw) {
-      if (row.match_id && !seenMatchIds.has(row.match_id)) {
-        seenMatchIds.add(row.match_id)
-        latestMatchIds.push(row.match_id)
-      }
-      if (row.puuid) gamePuuids.add(row.puuid)
-    }
-  }
-
-  const missingPuuids = Array.from(gamePuuids).filter(p => !top50Set.has(p))
-  const allRelevantPuuids = Array.from(new Set([...top50Puuids, ...Array.from(gamePuuids)]))
-
-  const seasonStartIso = getSeasonStartIso({ ddVersion })
-  const seasonStartMsLatest = new Date(seasonStartIso).getTime()
-
-  const moversTimeZone = process.env.MOVERS_TIMEZONE ?? 'America/Chicago'
-  const now = new Date()
-  const zonedNow = new Date(now.toLocaleString('en-US', { timeZone: moversTimeZone }))
-  const todayStart = new Date(zonedNow)
-  todayStart.setHours(0, 0, 0, 0)
-  const todayStartTs = todayStart.getTime()
-
-  const weekStart = new Date(zonedNow)
-  weekStart.setDate(weekStart.getDate() - 7)
-  const weekStartIso = weekStart.toISOString()
-  const weekStartTs = weekStart.getTime()
-
-  // Phase 2: Enrichment (Parallel Fetch)
-  const [
-    statesRaw,
-    ranksRaw,
-    seasonChampsRaw,
-    missingPlayersRaw,
-    latestMatchesRaw,
-    lpEventsRaw,
-    matchParticipantsRaw,
-    recentParticipantsRaw,
-    recentTodayParticipantsWithWinRaw,
-    lpHistoryRows
-  ] = await Promise.all([
-    allRelevantPuuids.length > 0
-      ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[])
-      : ([] as PlayerRiotState[]),
-    allRelevantPuuids.length > 0
-      ? safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[])
-      : ([] as PlayerRankSnapshot[]),
-    top50Puuids.length > 0 ? safeDb(
-      supabase
-        .from('match_participants')
-        .select('puuid, champion_id, matches!inner(game_end_ts, queue_id)')
-        .in('puuid', top50Puuids)
-        .gte('matches.game_end_ts', seasonStartMsLatest)
-        .eq('matches.queue_id', 420),
-      [] as SeasonChampionRaw[]
-    ) : [],
-    missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[]) : [],
-    latestMatchIds.length > 0 ? safeDb(supabase.from('matches').select('match_id, fetched_at, game_end_ts').in('match_id', latestMatchIds).gte('fetched_at', seasonStartIso).gte('game_end_ts', seasonStartMsLatest), [] as LatestMatchRaw[]) : [],
-    latestMatchIds.length > 0 && allRelevantPuuids.length > 0
-      ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[])
-      : ([] as LpEventRaw[]),
-    latestMatchIds.length > 0
-      ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[])
-      : ([] as MatchParticipantRaw[]),
-    allRelevantPuuids.length > 0
-      ? safeDb(
-          supabase
-            .from('match_participants')
-            .select('puuid, matches!inner(game_end_ts, queue_id)')
-            .in('puuid', allRelevantPuuids)
-            .eq('matches.queue_id', 420)
-            .gte('matches.game_end_ts', weekStartTs),
-          [] as RecentParticipantRaw[]
-        )
-      : ([] as RecentParticipantRaw[]),
-    allRelevantPuuids.length > 0
-      ? safeDb(
-          supabase
-            .from('match_participants')
-            .select('puuid, win, matches!inner(game_end_ts, queue_id)')
-            .in('puuid', allRelevantPuuids)
-            .eq('matches.queue_id', 420)
-            .gte('matches.game_end_ts', todayStartTs),
-          [] as RecentParticipantWithWinRaw[]
-        )
-      : ([] as RecentParticipantWithWinRaw[]),
-    allRelevantPuuids.length > 0
-      ? safeDb(
-          supabase
-            .from('player_lp_history')
-            .select('puuid, tier, rank, lp, fetched_at, queue_type')
-            .in('puuid', allRelevantPuuids)
-            .eq('queue_type', 'RANKED_SOLO_5x5')
-            .gte('fetched_at', weekStartIso),
-          [] as LpHistoryRaw[]
-        )
-      : ([] as LpHistoryRaw[]),
-  ])
-
-
-  // --- Processing Data ---
-
-  // 1. Merge Players
-  const allPlayersMap = new Map<string, Player | Partial<Player>>()
-  players.forEach(p => allPlayersMap.set(p.puuid, p))
-  
-  missingPlayersRaw.forEach((p) => {
-    if (!allPlayersMap.has(p.puuid)) {
-      allPlayersMap.set(p.puuid, { 
-        ...p, 
-        id: p.puuid, 
-        role: null, 
-        twitch_url: null, 
-        twitter_url: null, 
-        sort_order: 999 
-      })
-    }
-  })
-
-  // 2. Process States
-  const stateBy = new Map<string, PlayerRiotState>()
-  let lastUpdatedIso: string | null = null
-  let maxLastUpdatedTs = 0
-
-  for (const s of statesRaw) {
-    stateBy.set(s.puuid, s)
-    if (s.last_rank_sync_at) {
-      const ts = new Date(s.last_rank_sync_at).getTime()
-      if (ts > maxLastUpdatedTs) {
-        maxLastUpdatedTs = ts
-        lastUpdatedIso = s.last_rank_sync_at
-      }
-    }
-  }
-
-  // 3. Process Ranks
-  const rankBy = new Map<string, PlayerRankSnapshot | null>()
-  const seasonStartMs = seasonStartMsLatest
-  const queuesByPuuid = new Map<string, { solo: any; flex: any }>()
-
-  for (const r of ranksRaw) {
-    if (r.fetched_at && (!seasonStartMs || new Date(r.fetched_at).getTime() >= seasonStartMs)) {
-      let entry = queuesByPuuid.get(r.puuid)
-      if (!entry) {
-        entry = { solo: null, flex: null }
-        queuesByPuuid.set(r.puuid, entry)
-      }
-      if (r.queue_type === 'RANKED_SOLO_5x5') entry.solo = r
-      else if (r.queue_type === 'RANKED_FLEX_SR') entry.flex = r
-    }
-  }
-
-  for (const pid of allRelevantPuuids) {
-    const entry = queuesByPuuid.get(pid)
-    if (entry) {
-      rankBy.set(pid, entry.solo ?? entry.flex ?? null)
-    } else {
-      rankBy.set(pid, null)
-    }
-  }
-
-  // 4. Sort Top 50 Players
-  const playersSorted = [...players].sort((a, b) => {
-    const rankA = rankBy.get(a.puuid)
-    const rankB = rankBy.get(b.puuid)
-    return compareRanks(rankA ?? undefined, rankB ?? undefined)
-  })
-
-  // 5. Process Champs
-  const champCountsByPuuid = new Map<string, Map<number, number>>()
-  for (const row of seasonChampsRaw) {
-    if (!row.puuid || !row.champion_id) continue
-    let champMap = champCountsByPuuid.get(row.puuid)
-    if (!champMap) {
-      champMap = new Map<number, number>()
-      champCountsByPuuid.set(row.puuid, champMap)
-    }
-    champMap.set(row.champion_id, (champMap.get(row.champion_id) ?? 0) + 1)
-  }
-  const champsBy = new Map<string, Array<{ champion_id: number; games: number }>>()
-  for (const [puuid, champMap] of champCountsByPuuid.entries()) {
-    const champs = Array.from(champMap.entries())
-      .map(([champion_id, games]) => ({ champion_id, games }))
-      .sort((a, b) => b.games - a.games)
-    champsBy.set(puuid, champs)
-  }
-
-  // 6. Process Cutoffs
-  const cutoffsMap = new Map<string, number>()
-  for (const c of cutsRaw) cutoffsMap.set(`${c.queue_type}::${c.tier}`, c.cutoff_lp)
-
-  const cutoffs = [
-    { key: 'RANKED_SOLO_5x5::CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
-    { key: 'RANKED_SOLO_5x5::GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
-  ].map((i) => ({ label: i.label, lp: cutoffsMap.get(i.key) as number, icon: i.icon })).filter((x) => x.lp !== undefined)
-
-  // 7. Assemble Latest Games
-  const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
-  const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => {
-    if (!allowedMatchIds.has(row.match_id)) return false
-    return row.queue_id === 420
-  })
-
-  const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
-  for (const row of lpEventsRaw) {
-    if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
-      lpByMatchAndPlayer.set(makeLpKey(row.match_id, row.puuid), { delta: row.lp_delta, note: row.note ?? null })
-    }
-  }
-
-  const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
-
-  const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
-    const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
-    const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
-    const durationS = row.game_duration_s ?? row.gameDuration
-    const fallbackEndTs = latestMatchEndById.get(row.match_id) ?? null
-    
-    return {
-      matchId: row.match_id,
-      puuid: row.puuid,
-      championId: row.champion_id,
-      win: row.win,
-      k: row.kills ?? 0,
-      d: row.deaths ?? 0,
-      a: row.assists ?? 0,
-      cs: row.cs ?? 0,
-      endTs: row.game_end_ts ?? fallbackEndTs ?? null,
-      durationS,
-      queueId: row.queue_id,
-      lpChange,
-      lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
-      endType: computeEndType({
-        gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
-        gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
-        gameDurationS: durationS,
-        lpChange,
-      }),
-    }
-  })
-
-  // 8. Match Participants Map
-  const participantsByMatch = new Map<string, MatchParticipant[]>()
-  for (const row of matchParticipantsRaw) {
-    if (!row.match_id || !row.puuid) continue
-    const entry: MatchParticipant = {
-      matchId: row.match_id,
-      puuid: row.puuid,
-      championId: row.champion_id ?? 0,
-      kills: row.kills ?? 0,
-      deaths: row.deaths ?? 0,
-      assists: row.assists ?? 0,
-      cs: row.cs ?? 0,
-      win: row.win ?? false,
-    }
-    const list = participantsByMatch.get(entry.matchId)
-    if (list) list.push(entry)
-    else participantsByMatch.set(entry.matchId, [entry])
-  }
-
-  // 9. Prepare Client Props
-  // ✅ FIX: Force cast strict record for component compatibility
-  const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
-  const rankByPuuidRecord = Object.fromEntries(rankBy.entries())
-  const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
-  const playerIconsByPuuidRecord = Object.fromEntries(
-    Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
-  ) as Record<string, number | null>
-
-  const dailyActivePuuids = new Set<string>()
-  const weeklyActivePuuids = new Set<string>()
-  for (const row of recentParticipantsRaw) {
-    if (!row.puuid || !row.matches?.game_end_ts) continue
-    const endTs = row.matches.game_end_ts
-    if (endTs >= weekStartTs) weeklyActivePuuids.add(row.puuid)
-    if (endTs >= todayStartTs) dailyActivePuuids.add(row.puuid)
-  }
-
-  const dailyStatsByPuuid = new Map<string, { games: number; wins: number; losses: number }>()
-  for (const row of recentTodayParticipantsWithWinRaw) {
-    if (!row.puuid || !row.matches?.game_end_ts) continue
-    const current = dailyStatsByPuuid.get(row.puuid) ?? { games: 0, wins: 0, losses: 0 }
-    current.games += 1
-    if (row.win) current.wins += 1
-    else current.losses += 1
-    dailyStatsByPuuid.set(row.puuid, current)
-  }
-  
-  const preloadedMatchDataRecord: Record<string, any> = {}
-
-  const playerCards = playersSorted.map((player, idx) => ({
-    player,
-    index: idx + 1,
-    rankData: rankBy.get(player.puuid) ?? null,
-    stateData: stateBy.get(player.puuid) ?? null,
-    topChamps: champsBy.get(player.puuid) ?? [],
-  }))
-
-  const dailyLpByPuuid = filterDeltasByActive(
-    computeMoverDeltas(lpHistoryRows, todayStartTs),
-    dailyActivePuuids
+  const dailyStatsByPuuid = new Map<string, { games: number; wins: number; losses: number }>(
+    Object.entries(dailyStatsByPuuidRecord)
   )
-
-  const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
-  const dailyTopGainCandidate = dailyLpEntries.length
-    ? dailyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
-    : null
-  const dailyTopGain = dailyTopGainCandidate && dailyTopGainCandidate[1] > 0
-    ? dailyTopGainCandidate
-    : null
-  const dailyTopLoss = dailyLpEntries.length
-    ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
-    : null
-  const resolvedTopLoss = dailyLpEntries.length > 1
-    ? (dailyTopLoss && dailyTopLoss[1] < 0
-        ? dailyTopLoss
-        : dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
-    : null
-
-  const weeklyLpByPuuid = filterDeltasByActive(
-    computeMoverDeltas(lpHistoryRows, weekStartTs),
-    weeklyActivePuuids
-  )
-
-  const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
-  const weeklyTopGain = weeklyLpEntries.length
-    ? weeklyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
-    : null
-  const weeklyTopLoss = weeklyLpEntries.length
-    ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
-    : null
-  const resolvedWeeklyTopLoss = weeklyLpEntries.length > 1
-    ? (weeklyTopLoss && weeklyTopLoss[1] < 0
-        ? weeklyTopLoss
-        : weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
-    : null
 
 
   return (

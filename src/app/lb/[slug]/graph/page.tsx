@@ -1,5 +1,7 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
+import { unstable_cache } from 'next/cache'
 import { getSeasonStartIso } from '@/lib/riot/season'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
@@ -11,6 +13,9 @@ export const revalidate = 600
 // --- Constants ---
 const DEFAULT_GRANDMASTER_CUTOFF = 200
 const DEFAULT_CHALLENGER_CUTOFF = 500
+const MAX_GRAPH_POINTS_PER_PLAYER = 240
+const MAX_SEASON_HISTORY_ROWS = 120000
+const MAX_FALLBACK_HISTORY_ROWS = 40000
 
 // --- Types ---
 type Player = {
@@ -30,6 +35,13 @@ type LpHistoryRow = {
   fetched_at: string
 }
 
+type GraphDataPayload = {
+  players: Player[]
+  cutoffsRaw: Array<{ queue_type: string; tier: string; cutoff_lp: number }>
+  stateRaw: Array<{ puuid: string; profile_icon_id: number | null }>
+  rankSnapshotRaw: Array<{ puuid: string; queue_type: string; tier: string | null; rank: string | null; league_points: number | null; wins: number | null; losses: number | null; fetched_at: string | null }>
+}
+
 
 // --- Helpers ---
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
@@ -42,6 +54,91 @@ function profileIconUrl(profileIconId: number | null | undefined, ddVersion: str
   if (!profileIconId && profileIconId !== 0) return null
   return `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${profileIconId}.png`
 }
+
+function downsampleHistoryByPlayer(rows: LpHistoryRow[], maxPointsPerPlayer: number): LpHistoryRow[] {
+  if (rows.length === 0 || maxPointsPerPlayer < 2) return rows
+
+  const byPlayer = new Map<string, LpHistoryRow[]>()
+  for (const row of rows) {
+    const list = byPlayer.get(row.puuid)
+    if (list) list.push(row)
+    else byPlayer.set(row.puuid, [row])
+  }
+
+  const sampled: LpHistoryRow[] = []
+
+  for (const playerRows of byPlayer.values()) {
+    const n = playerRows.length
+    if (n <= maxPointsPerPlayer) {
+      sampled.push(...playerRows)
+      continue
+    }
+
+    const picks = new Set<number>()
+    const lastIndex = n - 1
+    for (let i = 0; i < maxPointsPerPlayer; i += 1) {
+      const idx = Math.round((i * lastIndex) / (maxPointsPerPlayer - 1))
+      picks.add(idx)
+    }
+
+    for (const idx of picks) sampled.push(playerRows[idx])
+  }
+
+  sampled.sort((a, b) => a.fetched_at.localeCompare(b.fetched_at))
+  return sampled
+}
+
+const getGraphDataCached = unstable_cache(
+  async (lbId: string, seasonStartIso: string): Promise<GraphDataPayload> => {
+    const dataClient = createServiceClient()
+
+    const [{ data: playersRaw }, { data: cutoffsRaw }] = await Promise.all([
+      dataClient
+        .from('leaderboard_players')
+        .select('id, puuid, game_name, tag_line')
+        .eq('leaderboard_id', lbId)
+        .order('sort_order', { ascending: true })
+        .limit(2000),
+      dataClient
+        .from('rank_cutoffs')
+        .select('queue_type, tier, cutoff_lp')
+        .in('tier', ['GRANDMASTER', 'CHALLENGER']),
+    ])
+
+    const players = (playersRaw ?? []) as Player[]
+    const puuids = players.map((p) => p.puuid).filter(Boolean)
+
+    if (puuids.length === 0) {
+      return {
+        players,
+        cutoffsRaw: (cutoffsRaw ?? []) as Array<{ queue_type: string; tier: string; cutoff_lp: number }>,
+        stateRaw: [],
+        rankSnapshotRaw: [],
+      }
+    }
+
+    const [{ data: stateRaw }, { data: rankSnapshotRaw }] = await Promise.all([
+      dataClient
+        .from('player_riot_state')
+        .select('puuid, profile_icon_id')
+        .in('puuid', puuids),
+      dataClient
+        .from('player_rank_snapshot')
+        .select('puuid, queue_type, tier, rank, league_points, wins, losses, fetched_at')
+        .in('puuid', puuids)
+        .eq('queue_type', 'RANKED_SOLO_5x5'),
+    ])
+
+    return {
+      players,
+      cutoffsRaw: (cutoffsRaw ?? []) as Array<{ queue_type: string; tier: string; cutoff_lp: number }>,
+      stateRaw: (stateRaw ?? []) as Array<{ puuid: string; profile_icon_id: number | null }>,
+      rankSnapshotRaw: (rankSnapshotRaw ?? []) as Array<{ puuid: string; queue_type: string; tier: string | null; rank: string | null; league_points: number | null; wins: number | null; losses: number | null; fetched_at: string | null }>,
+    }
+  },
+  ['lb-graph-data-v1'],
+  { revalidate: 60 }
+)
 
 // --- Components ---
 function TeamHeaderCard({
@@ -125,14 +222,17 @@ function TeamHeaderCard({
 export default async function LeaderboardGraphPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const supabase = await createClient()
-  const latestPatch = await getLatestDdragonVersion()
-  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
 
-  const { data: lb } = await supabase
-    .from('leaderboards')
-    .select('id, user_id, name, visibility, banner_url, description')
-    .eq('slug', slug)
-    .maybeSingle()
+  const [{ data: lb }, latestPatch] = await Promise.all([
+    supabase
+      .from('leaderboards')
+      .select('id, user_id, name, visibility, banner_url, description')
+      .eq('slug', slug)
+      .maybeSingle(),
+    getLatestDdragonVersion(),
+  ])
+
+  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
 
 
   if (!lb) notFound()
@@ -143,22 +243,15 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
       notFound()
     }
   }
+  const seasonStartIso = getSeasonStartIso()
+  const {
+    players,
+    cutoffsRaw,
+    stateRaw,
+    rankSnapshotRaw,
+  } = await getGraphDataCached(lb.id, seasonStartIso)
 
-  const { data: playersRaw } = await supabase
-    .from('leaderboard_players')
-    .select('id, puuid, game_name, tag_line')
-    .eq('leaderboard_id', lb.id)
-    .order('sort_order', { ascending: true })
-    .limit(2000)
-
-
-  const players = (playersRaw ?? []) as Player[]
   const puuids = players.map((p) => p.puuid)
-
-  const { data: cutoffsRaw } = await supabase
-    .from('rank_cutoffs')
-    .select('queue_type, tier, cutoff_lp')
-    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
 
 
   const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
@@ -195,31 +288,35 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     )
   }
 
-  const { data: stateRaw } = await supabase
-    .from('player_riot_state')
-    .select('puuid, profile_icon_id')
-    .in('puuid', puuids)
-
-
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
-
-  const { data: rankSnapshotRaw } = await supabase
-    .from('player_rank_snapshot')
-    .select('puuid, queue_type, tier, rank, league_points, wins, losses, fetched_at')
-    .in('puuid', puuids)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
-
-
   const rankBy = new Map((rankSnapshotRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = getSeasonStartIso()
-  const { data: historyRaw } = await supabase
-    .from('player_lp_history')
+  const dataClient = createServiceClient()
+  const { data: seasonHistoryRaw } = await dataClient
+    .from('leaderboard_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')
+    .eq('leaderboard_id', lb.id)
     .in('puuid', puuids)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
     .gte('fetched_at', seasonStartIso)
-    .order('fetched_at', { ascending: true })
+    .order('fetched_at', { ascending: false })
+    .limit(MAX_SEASON_HISTORY_ROWS)
+
+  const hasSeasonHistory = (seasonHistoryRaw?.length ?? 0) > 0
+  const { data: fallbackHistoryRaw } = hasSeasonHistory
+    ? { data: null as LpHistoryRow[] | null }
+      : await dataClient
+        .from('leaderboard_lp_history')
+        .select('puuid, tier, rank, lp, wins, losses, fetched_at')
+        .eq('leaderboard_id', lb.id)
+        .in('puuid', puuids)
+        .order('fetched_at', { ascending: false })
+        .limit(MAX_FALLBACK_HISTORY_ROWS)
+
+  const pointsForGraphRaw =
+    ((((hasSeasonHistory ? seasonHistoryRaw : fallbackHistoryRaw) as LpHistoryRow[] | null) ?? [])
+      .slice()
+      .sort((a, b) => a.fetched_at.localeCompare(b.fetched_at)))
+  const pointsForGraph = downsampleHistoryByPlayer(pointsForGraphRaw, MAX_GRAPH_POINTS_PER_PLAYER)
 
 
 
@@ -264,7 +361,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
         </div>
 
         <div className="mx-auto w-full max-w-[1460px]">
-          <LeaderboardGraphClient players={playerSummaries} points={(historyRaw as LpHistoryRow[]) ?? []} cutoffs={cutoffs} />
+          <LeaderboardGraphClient players={playerSummaries} points={pointsForGraph} cutoffs={cutoffs} />
         </div>
       </div>
     </main>

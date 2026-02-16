@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useId, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { formatRank } from "@/lib/rankFormat"
 
 // --- Types ---
@@ -67,6 +67,19 @@ const TIER_ORDER = [
 ] as const
 
 const DIV_ORDER = ["IV", "III", "II", "I"] as const
+const TIER_SHORT_MAP: Record<string, string> = {
+  IRON: "I",
+  BRONZE: "B",
+  SILVER: "S",
+  GOLD: "G",
+  PLATINUM: "P",
+  EMERALD: "E",
+  DIAMOND: "D",
+  MASTER: "M",
+  GRANDMASTER: "GM",
+  CHALLENGER: "C",
+}
+const DIV_SHORT_MAP: Record<string, string> = { I: "1", II: "2", III: "3", IV: "4" }
 
 // --- Helpers ---
 function clamp(n: number, min: number, max: number) {
@@ -83,23 +96,10 @@ function formatDelta(delta: number) {
 function formatRankShort(tier?: string | null, division?: string | null) {
   if (!tier) return "UR"
   const normalizedTier = tier.toUpperCase()
-  const tierMap: Record<string, string> = {
-    IRON: "I",
-    BRONZE: "B",
-    SILVER: "S",
-    GOLD: "G",
-    PLATINUM: "P",
-    EMERALD: "E",
-    DIAMOND: "D",
-    MASTER: "M",
-    GRANDMASTER: "GM",
-    CHALLENGER: "C",
-  }
-  const tierShort = tierMap[normalizedTier] ?? normalizedTier[0] ?? "U"
+  const tierShort = TIER_SHORT_MAP[normalizedTier] ?? normalizedTier[0] ?? "U"
   if (["MASTER", "GRANDMASTER", "CHALLENGER"].includes(normalizedTier)) return tierShort
-  const divMap: Record<string, string> = { I: "1", II: "2", III: "3", IV: "4" }
   const div = division?.toUpperCase() ?? ""
-  const divShort = divMap[div] ?? div
+  const divShort = DIV_SHORT_MAP[div] ?? div
   return divShort ? `${tierShort}${divShort}` : tierShort
 }
 
@@ -311,7 +311,12 @@ function smartSampleByGames(points: NormalizedPoint[]) {
 
 function buildSharpPath(points: Array<{ x: number; y: number }>) {
   if (points.length === 0) return ""
-  return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
+  const parts: string[] = new Array(points.length)
+  parts[0] = `M ${points[0].x} ${points[0].y}`
+  for (let i = 1; i < points.length; i += 1) {
+    parts[i] = `L ${points[i].x} ${points[i].y}`
+  }
+  return parts.join(" ")
 }
 
 function buildColoredLineSegments(
@@ -373,49 +378,82 @@ export default function LeaderboardGraphClient({
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
+  const selectedInitializedRef = useRef(false)
+  const hoverRafRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (!selectedPuuid && players[0]?.puuid) setSelectedPuuid(players[0].puuid)
-  }, [players, selectedPuuid])
+    if (!selectedInitializedRef.current && players[0]?.puuid) {
+      setSelectedPuuid(players[0].puuid)
+      selectedInitializedRef.current = true
+    }
+  }, [players])
+
+  useEffect(() => {
+    return () => {
+      if (hoverRafRef.current !== null) {
+        cancelAnimationFrame(hoverRafRef.current)
+        hoverRafRef.current = null
+      }
+    }
+  }, [])
+
+  const playerDisplayData = useMemo(
+    () =>
+      players.map((player, idx) => {
+        const tier = (player.rankTier ?? "").toUpperCase()
+        const div = (player.rankDivision ?? "").toUpperCase()
+        const tierShort = TIER_SHORT_MAP[tier] ?? ""
+        const divShort = DIV_SHORT_MAP[div] ?? ""
+        return {
+          ...player,
+          order: player.order ?? idx + 1,
+          rankAbbr: `${tierShort}${divShort}`.trim(),
+          lpLabel: player.lp ?? 0,
+        }
+      }),
+    [players]
+  )
 
 
-  const playersByPuuid = useMemo(() => new Map(players.map((p) => [p.puuid, p])), [players])
+  const playersByPuuid = useMemo(() => new Map(playerDisplayData.map((p) => [p.puuid, p])), [playerDisplayData])
 
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
-    return points
-      .map((p) => {
-        const ts = new Date(p.fetched_at).getTime()
-        if (Number.isNaN(ts)) return null
-        return {
-          ...p,
-          lpValue: Math.max(0, p.lp ?? 0),
-          ladderValue: ladderLpWithCutoffs(p),
-          ts,
-          totalGames: (p.wins ?? 0) + (p.losses ?? 0),
-        }
+    if (points.length === 0) return []
+    const result: NormalizedPoint[] = []
+    for (const p of points) {
+      const ts = new Date(p.fetched_at).getTime()
+      if (Number.isNaN(ts)) continue
+      result.push({
+        ...p,
+        lpValue: Math.max(0, p.lp ?? 0),
+        ladderValue: ladderLpWithCutoffs(p),
+        ts,
+        totalGames: (p.wins ?? 0) + (p.losses ?? 0),
       })
-      .filter((p): p is NormalizedPoint => p !== null)
+    }
+    return result
   }, [points])
 
   const pointsByPlayer = useMemo(() => {
-    const rawGroups = new Map<string, NormalizedPoint[]>()
-    for (const pt of normalizedPoints) {
-      const list = rawGroups.get(pt.puuid)
-      if (list) list.push(pt)
-      else rawGroups.set(pt.puuid, [pt])
-    }
+    if (normalizedPoints.length === 0) return new Map<string, NormalizedPoint[]>()
 
     const byPlayer = new Map<string, NormalizedPoint[]>()
+    for (const pt of normalizedPoints) {
+      const list = byPlayer.get(pt.puuid)
+      if (list) list.push(pt)
+      else byPlayer.set(pt.puuid, [pt])
+    }
 
-    for (const [puuid, list] of rawGroups.entries()) {
+    for (const list of byPlayer.values()) {
       list.sort((a, b) => a.ts - b.ts)
 
-      const processed: NormalizedPoint[] = []
+      let writeIdx = 0
       let lastPoint: NormalizedPoint | null = null
 
-      for (const pt of list) {
+      for (let i = 0; i < list.length; i += 1) {
+        const pt = list[i]
         if (!lastPoint) {
-          processed.push(pt)
+          list[writeIdx++] = pt
           lastPoint = pt
           continue
         }
@@ -424,12 +462,12 @@ export default function LeaderboardGraphClient({
         const ladderChanged = pt.ladderValue !== lastPoint.ladderValue
 
         if (gamesChanged || ladderChanged) {
-          processed.push(pt)
+          list[writeIdx++] = pt
           lastPoint = pt
         }
       }
 
-      byPlayer.set(puuid, processed)
+      list.length = writeIdx
     }
 
     return byPlayer
@@ -616,45 +654,52 @@ export default function LeaderboardGraphClient({
       .filter((band): band is { y: number; height: number; color: string } => band !== null)
   }, [chart, cutoffs])
 
-  // Tooltip positioning (pixel-correct)
-  const setTooltipFromEvent = (p: NormalizedPoint, idx: number, e: React.MouseEvent) => {
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const rect = wrap.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-    const preferBelow = y < 120
-    setTooltip({ point: p, idx, x, y, preferBelow })
-  }
-
-  const handleChartHover = (e: React.MouseEvent<SVGSVGElement>) => {
+  const handleChartHover = useCallback((e: React.MouseEvent<SVGSVGElement>) => {
     if (plotPoints.length === 0) return
-    const wrap = wrapRef.current
-    if (!wrap) return
-    const wrapRect = wrap.getBoundingClientRect()
-    const svgRect = e.currentTarget.getBoundingClientRect()
-    const scaleX = WIDTH / Math.max(svgRect.width, 1)
-    const x = (e.clientX - svgRect.left) * scaleX
-    const chartX = clamp(x, PADDING.left, PADDING.left + INNER_WIDTH)
-    let nearest = plotPoints[0]
-    for (let i = 0; i < plotPoints.length; i += 1) {
-      const left = i === 0 ? PADDING.left : (plotPoints[i - 1].x + plotPoints[i].x) / 2
-      const right =
-        i === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plotPoints[i].x + plotPoints[i + 1].x) / 2
-      if (chartX >= left && chartX <= right) {
-        nearest = plotPoints[i]
-        break
-      }
-    }
-    const y = e.clientY - wrapRect.top
-    setHoveredIdx(nearest.idx)
-    setTooltip({ point: nearest.point, idx: nearest.idx, x: chartX, y, preferBelow: y < 120 })
-  }
 
-  const handleChartLeave = () => {
+    if (hoverRafRef.current !== null) {
+      cancelAnimationFrame(hoverRafRef.current)
+    }
+
+    const clientX = e.clientX
+    const clientY = e.clientY
+    const currentTarget = e.currentTarget
+
+    hoverRafRef.current = requestAnimationFrame(() => {
+      const wrap = wrapRef.current
+      if (!wrap) return
+      const wrapRect = wrap.getBoundingClientRect()
+      const svgRect = currentTarget.getBoundingClientRect()
+      const scaleX = WIDTH / Math.max(svgRect.width, 1)
+      const x = (clientX - svgRect.left) * scaleX
+      const chartX = clamp(x, PADDING.left, PADDING.left + INNER_WIDTH)
+
+      let nearest = plotPoints[0]
+      for (let i = 0; i < plotPoints.length; i += 1) {
+        const left = i === 0 ? PADDING.left : (plotPoints[i - 1].x + plotPoints[i].x) / 2
+        const right =
+          i === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plotPoints[i].x + plotPoints[i + 1].x) / 2
+        if (chartX >= left && chartX <= right) {
+          nearest = plotPoints[i]
+          break
+        }
+      }
+
+      const y = clientY - wrapRect.top
+      setHoveredIdx(nearest.idx)
+      setTooltip({ point: nearest.point, idx: nearest.idx, x: chartX, y, preferBelow: y < 120 })
+      hoverRafRef.current = null
+    })
+  }, [plotPoints])
+
+  const handleChartLeave = useCallback(() => {
+    if (hoverRafRef.current !== null) {
+      cancelAnimationFrame(hoverRafRef.current)
+      hoverRafRef.current = null
+    }
     setHoveredIdx(null)
     setTooltip(null)
-  }
+  }, [])
 
   const summary = useMemo(() => {
     if (rawFiltered.length === 0) return null
@@ -795,24 +840,8 @@ export default function LeaderboardGraphClient({
             <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Leaderboard</h2>
           </div>
           <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70">
-            {players.map((player, idx) => {
+            {playerDisplayData.map((player) => {
               const isActive = player.puuid === selectedPuuid
-              const lpLabel = player.lp ?? 0
-              const tier = (player.rankTier ?? "").toUpperCase()
-              const div = (player.rankDivision ?? "").toUpperCase()
-              const tierMap: Record<string, string> = {
-                IRON: "I",
-                BRONZE: "B",
-                SILVER: "S",
-                GOLD: "G",
-                PLATINUM: "P",
-                EMERALD: "E",
-                DIAMOND: "D",
-                MASTER: "M",
-                GRANDMASTER: "GM",
-                CHALLENGER: "C",
-              }
-              const rankAbbr = `${tierMap[tier] ?? ""}${div ? div.replace("IV", "4").replace("III", "3").replace("II", "2").replace("I", "1") : ""}`.trim()
               return (
                 <button
                   key={player.puuid}
@@ -828,14 +857,14 @@ export default function LeaderboardGraphClient({
                     <div className={`w-6 text-right text-[11px] font-semibold ${
                       isActive ? "text-blue-600 dark:text-blue-400" : "text-slate-500"
                     }`}>
-                      {player.order ?? idx + 1}
+                      {player.order}
                     </div>
                     <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-slate-100">
                       {player.name}
                     </div>
                     <div className="flex items-center gap-2 text-[12px] font-semibold tabular-nums text-slate-600 dark:text-slate-300">
-                      {rankAbbr ? <span className="text-[11px] text-slate-500 dark:text-slate-500">{rankAbbr}</span> : null}
-                      <span>{lpLabel}</span>
+                      {player.rankAbbr ? <span className="text-[11px] text-slate-500 dark:text-slate-500">{player.rankAbbr}</span> : null}
+                      <span>{player.lpLabel}</span>
                     </div>
                   </div>
                 </button>
@@ -1046,21 +1075,14 @@ export default function LeaderboardGraphClient({
                   </g>
                 ) : null}
 
-                {/* Tier-colored points (all tiers, including iron) */}
-                {plotPoints.map((plot, idx) => {
-                  const x0 = idx === 0 ? PADDING.left : (plotPoints[idx - 1].x + plot.x) / 2
-                  const x1 = idx === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plot.x + plotPoints[idx + 1].x) / 2
-                  return (
-                    <rect
-                      key={`hover-${plot.idx}`}
-                      x={x0}
-                      y={PADDING.top}
-                      width={Math.max(4, x1 - x0)}
-                      height={INNER_HEIGHT}
-                      fill="transparent"
-                    />
-                  )
-                })}
+                {/* Single hit area for hover; nearest point selection is handled in pointer logic. */}
+                <rect
+                  x={PADDING.left}
+                  y={PADDING.top}
+                  width={INNER_WIDTH}
+                  height={INNER_HEIGHT}
+                  fill="transparent"
+                />
 
                 {activePoint && activeSlice ? (
                   <g>
