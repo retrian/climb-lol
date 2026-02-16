@@ -479,6 +479,13 @@ const MATCHDETAIL_MAX_PER_RUN = Math.max(Number(process.env.MATCHDETAIL_MAX_PER_
 const MATCHDETAIL_SLEEP_MS = Math.max(Number(process.env.MATCHDETAIL_SLEEP_MS ?? 400), 0)
 const MATCH_SYNC_FALLBACK_MS = Math.max(Number(process.env.MATCH_SYNC_FALLBACK_MS ?? 10 * 60 * 1000), 10_000)
 
+// Player refresh scheduler controls.
+// NOTE: refreshOnePlayer() currently includes account/summoner/rank sync calls,
+// so keep the default conservative (10/sec) to stay inside lower minute-based limits.
+const PLAYER_CHECKS_PER_SECOND = Math.max(Number(process.env.PLAYER_CHECKS_PER_SECOND ?? 10), 1)
+const PLAYER_REFRESH_CYCLE_SECONDS = Math.max(Number(process.env.PLAYER_REFRESH_CYCLE_SECONDS ?? 10), 1)
+const PLAYER_REFRESH_CYCLE_MS = PLAYER_REFRESH_CYCLE_SECONDS * 1000
+
 function toFiniteNumber(value: unknown): number | null {
   const n = typeof value === 'number' ? value : Number(value)
   return Number.isFinite(n) ? n : null
@@ -1084,9 +1091,25 @@ async function main() {
     return ta - tb
   })
 
-  for (const puuid of ordered) {
-    await refreshOnePlayer(puuid, stateMap.get(puuid))
-    await sleep(1000)
+  const cycleStartedAt = Date.now()
+
+  for (let offset = 0; offset < ordered.length; offset += PLAYER_CHECKS_PER_SECOND) {
+    const secondStartedAt = Date.now()
+    const batch = ordered.slice(offset, offset + PLAYER_CHECKS_PER_SECOND)
+
+    await Promise.all(batch.map((puuid) => refreshOnePlayer(puuid, stateMap.get(puuid))))
+
+    const secondElapsed = Date.now() - secondStartedAt
+    if (secondElapsed < 1000) {
+      await sleep(1000 - secondElapsed)
+    }
+  }
+
+  const cycleElapsed = Date.now() - cycleStartedAt
+  if (cycleElapsed < PLAYER_REFRESH_CYCLE_MS) {
+    await sleep(PLAYER_REFRESH_CYCLE_MS - cycleElapsed)
+  } else {
+    await sleep(PLAYER_REFRESH_CYCLE_MS)
   }
 
   await finalizeLeaderboardGoalsIfNeeded()

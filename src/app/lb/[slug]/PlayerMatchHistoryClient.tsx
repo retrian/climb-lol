@@ -704,6 +704,8 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   const [selectedMatch, setSelectedMatch] = useState<MatchSummary | null>(null)
   const [matchDetails, setMatchDetails] = useState<Record<string, MatchDetailResponse>>({})
   const [visibleMatchesCount, setVisibleMatchesCount] = useState(10)
+  const [renderedMatchesCount, setRenderedMatchesCount] = useState(10)
+  const [loadingMoreMatches, setLoadingMoreMatches] = useState(false)
   const [imagesReady, setImagesReady] = useState(true)
   const initialImagesReady = useRef(false)
   const preloadIdRef = useRef(0)
@@ -960,7 +962,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     })
 
     if (!detailsReady) {
-      setImagesReady(false)
+      if (!initialImagesReady.current) setImagesReady(false)
       return
     }
 
@@ -972,12 +974,27 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
   }, [open, activeTab, loadingMatches, prefetchMatchIds, matchDetails])
 
   useEffect(() => {
+    if (!loadingMoreMatches) return
+    const ids = matches.slice(0, visibleMatchesCount).map((m) => m.matchId)
+    const allReady = ids.every((id) => {
+      const cached = getCacheValue(matchDetailCache, id)
+      return Boolean(cached || matchDetails[id])
+    })
+    if (allReady) {
+      setRenderedMatchesCount(visibleMatchesCount)
+      setLoadingMoreMatches(false)
+    }
+  }, [loadingMoreMatches, matches, visibleMatchesCount, matchDetails])
+
+  useEffect(() => {
     if (!open || !selectedPlayer) return
 
     const puuid = selectedPlayer.player.puuid
     setActiveTab('matches')
     setSelectedMatch(null)
     setVisibleMatchesCount(10)
+    setRenderedMatchesCount(10)
+    setLoadingMoreMatches(false)
 
     const cachedSummary = getCacheValue(summaryCache, puuid)
     if (cachedSummary) {
@@ -1152,6 +1169,8 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     setMatches([])
     setSelectedMatch(null)
     setVisibleMatchesCount(10)
+    setRenderedMatchesCount(10)
+    setLoadingMoreMatches(false)
     // 2. Memory Leak Fix: Clear heavy detail state
     setMatchDetails({})
   }, [])
@@ -1398,7 +1417,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                     ) : (
                       <>
                         {matches
-                          .slice(0, visibleMatchesCount)
+                          .slice(0, renderedMatchesCount)
                           .map(match => (
                             <MatchRow
                               key={match.matchId}
@@ -1414,14 +1433,31 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               focusedPuuid={selectedPlayer?.player.puuid ?? null}
                             />
                           ))}
-                        {visibleMatchesCount < matches.length && (
+                        {(renderedMatchesCount < matches.length || loadingMoreMatches) && (
                           <div className="pt-2">
                             <button
                               type="button"
-                              onClick={() => setVisibleMatchesCount(prev => Math.min(prev + 10, matches.length))}
-                              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700"
+                              onClick={() => {
+                                setLoadingMoreMatches(true)
+                                setVisibleMatchesCount(prev => Math.min(prev + 10, matches.length))
+                              }}
+                              disabled={loadingMoreMatches}
+                              className={`w-full rounded-xl border px-4 py-3 text-xs font-semibold uppercase tracking-wide shadow-sm transition disabled:cursor-not-allowed ${
+                                loadingMoreMatches
+                                  ? 'border-slate-300 bg-slate-200/70 text-transparent dark:border-slate-700 dark:bg-slate-800/60'
+                                  : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:border-slate-700'
+                              }`}
                             >
-                              Show more
+                              {loadingMoreMatches ? (
+                                <span className="inline-flex w-full items-center justify-center">
+                                  <svg className="h-4 w-4 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <circle className="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="3" />
+                                    <path className="opacity-90" fill="currentColor" d="M12 3a9 9 0 017.8 4.5l-2.6 1.5A6 6 0 0012 6V3z" />
+                                  </svg>
+                                </span>
+                              ) : (
+                                'Show more'
+                              )}
                             </button>
                           </div>
                         )}
