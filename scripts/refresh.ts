@@ -336,6 +336,18 @@ type SoloSnapshot = {
   fetched_at: string
 }
 
+type RefreshState = {
+  puuid?: string
+  last_poll_at?: string | null
+  last_matches_sync_at?: string | null
+  last_solo_lp?: number | null
+  last_solo_tier?: string | null
+  last_solo_rank?: string | null
+  last_solo_wins?: number | null
+  last_solo_losses?: number | null
+  last_solo_match_id?: string | null
+}
+
 const NON_APEX_TIERS = ['IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM', 'EMERALD', 'DIAMOND'] as const
 const APEX_TIERS = new Set(['MASTER', 'GRANDMASTER', 'CHALLENGER'])
 const DIVISION_ORDER = ['IV', 'III', 'II', 'I'] as const
@@ -465,6 +477,39 @@ const MATCHLIST_MAX_PAGES = Math.max(Number(process.env.MATCHLIST_MAX_PAGES ?? 3
 const MATCHLIST_QUEUE = (process.env.MATCHLIST_QUEUE ?? '420').trim()
 const MATCHDETAIL_MAX_PER_RUN = Math.max(Number(process.env.MATCHDETAIL_MAX_PER_RUN ?? 60), 1)
 const MATCHDETAIL_SLEEP_MS = Math.max(Number(process.env.MATCHDETAIL_SLEEP_MS ?? 400), 0)
+const MATCH_SYNC_FALLBACK_MS = Math.max(Number(process.env.MATCH_SYNC_FALLBACK_MS ?? 10 * 60 * 1000), 10_000)
+
+function toFiniteNumber(value: unknown): number | null {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function shouldSyncMatches(opts: {
+  state: RefreshState | undefined
+  soloSnap: SoloSnapshot | null
+  nowMs: number
+}): boolean {
+  const { state, soloSnap, nowMs } = opts
+
+  const lastMatchesSyncAt = typeof state?.last_matches_sync_at === 'string' ? state.last_matches_sync_at : null
+  if (!lastMatchesSyncAt) return true
+
+  const lastSyncMs = new Date(lastMatchesSyncAt).getTime()
+  const isLastSyncValid = Number.isFinite(lastSyncMs)
+  if (!isLastSyncValid) return true
+
+  if (nowMs - lastSyncMs >= MATCH_SYNC_FALLBACK_MS) return true
+
+  if (!soloSnap) return false
+
+  const prevWins = toFiniteNumber(state?.last_solo_wins)
+  const prevLosses = toFiniteNumber(state?.last_solo_losses)
+  if (prevWins === null || prevLosses === null) return true
+
+  const previousGames = prevWins + prevLosses
+  const currentGames = soloSnap.wins + soloSnap.losses
+  return currentGames !== previousGames
+}
 
 async function fetchMatchIdsPage(puuid: string, start: number, count: number): Promise<string[]> {
   const params = new URLSearchParams({ start: String(start), count: String(count) })
@@ -490,15 +535,6 @@ async function syncMatchesAll(puuid: string): Promise<{ ids: string[]; newIds: s
   const ids: string[] = []
   const idsSet = new Set<string>()
   const matchIdsToFetch = new Set<string>()
-
-  const { data: latestRow, error: latestErr } = await supabase
-    .from('match_participants')
-    .select('match_id, matches!inner(game_end_ts)')
-    .eq('puuid', puuid)
-    .order('game_end_ts', { ascending: false, referencedTable: 'matches' })
-    .limit(1)
-    .maybeSingle()
-  if (latestErr) throw latestErr
 
   const firstPageIds = await fetchMatchIdsPage(puuid, 0, MATCHLIST_FIRST_PAGE_SIZE)
   if (!firstPageIds.length) {
@@ -732,7 +768,7 @@ async function maybeInsertPerGameLpEvent(opts: {
   puuid: string
   snap: SoloSnapshot
   ids: string[]
-  state: any | undefined
+  state: RefreshState | undefined
 }) {
   const { puuid, snap, ids, state } = opts
 
@@ -936,22 +972,41 @@ async function hasTopChamps(puuid: string) {
   return (count ?? 0) > 0
 }
 
-async function refreshOnePlayer(puuid: string, state: any | undefined) {
+async function refreshOnePlayer(puuid: string, state: RefreshState | undefined) {
   console.log('[player] refresh', puuid.slice(0, 12))
 
   try {
     // syncAccountIdentity now returns the potentially migrated PUUID
     const actualPuuid = await syncAccountIdentity(puuid)
+
+    let effectiveState = state
+    if (actualPuuid !== puuid) {
+      const { data: migratedState, error: migratedStateErr } = await supabase
+        .from('player_riot_state')
+        .select('last_matches_sync_at, last_solo_wins, last_solo_losses, last_solo_lp, last_solo_tier, last_solo_rank, last_solo_match_id')
+        .eq('puuid', actualPuuid)
+        .maybeSingle()
+      if (migratedStateErr) throw migratedStateErr
+      effectiveState = migratedState ?? effectiveState
+    }
     
     await syncSummonerBasics(actualPuuid)
 
-    const { ids, newIds } = await syncMatchesAll(actualPuuid)
-
     const soloSnap = await syncRankByPuuid(actualPuuid)
+
+    const nowMs = Date.now()
+    const shouldSync = shouldSyncMatches({ state: effectiveState, soloSnap, nowMs })
+    const { ids, newIds } = shouldSync
+      ? await syncMatchesAll(actualPuuid)
+      : { ids: [] as string[], newIds: [] as string[] }
+
+    if (!shouldSync) {
+      console.log('[player] skip match sync (league game count unchanged and fallback not due)', actualPuuid.slice(0, 12))
+    }
 
     if (soloSnap) {
       await insertLpHistory(actualPuuid, soloSnap)
-      await maybeInsertPerGameLpEvent({ puuid: actualPuuid, snap: soloSnap, ids, state })
+      await maybeInsertPerGameLpEvent({ puuid: actualPuuid, snap: soloSnap, ids, state: effectiveState })
       
       // Update LP data for newly fetched matches
       if (newIds.length > 0) {
@@ -1010,16 +1065,22 @@ async function main() {
   const { data: states, error: stErr } = await supabase
     .from('player_riot_state')
     .select(
-      'puuid, last_poll_at, last_solo_lp, last_solo_tier, last_solo_rank, last_solo_wins, last_solo_losses, last_solo_match_id'
+      'puuid, last_poll_at, last_matches_sync_at, last_solo_lp, last_solo_tier, last_solo_rank, last_solo_wins, last_solo_losses, last_solo_match_id'
     )
     .in('puuid', puuids)
 
   if (stErr) throw stErr
-  const stateMap = new Map<string, any>((states ?? []).map((s: any) => [s.puuid, s]))
+  const stateMap = new Map<string, RefreshState>(
+    ((states ?? []) as RefreshState[])
+      .filter((s) => typeof s?.puuid === 'string' && s.puuid.length > 0)
+      .map((s) => [s.puuid as string, s])
+  )
 
   const ordered = [...puuids].sort((a, b) => {
-    const ta = stateMap.get(a)?.last_poll_at ? new Date(stateMap.get(a).last_poll_at).getTime() : 0
-    const tb = stateMap.get(b)?.last_poll_at ? new Date(stateMap.get(b).last_poll_at).getTime() : 0
+    const stateA = stateMap.get(a)
+    const stateB = stateMap.get(b)
+    const ta = typeof stateA?.last_poll_at === 'string' ? new Date(stateA.last_poll_at).getTime() : 0
+    const tb = typeof stateB?.last_poll_at === 'string' ? new Date(stateB.last_poll_at).getTime() : 0
     return ta - tb
   })
 
