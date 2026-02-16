@@ -485,6 +485,7 @@ const MATCH_SYNC_FALLBACK_MS = Math.max(Number(process.env.MATCH_SYNC_FALLBACK_M
 const PLAYER_CHECKS_PER_SECOND = Math.max(Number(process.env.PLAYER_CHECKS_PER_SECOND ?? 10), 1)
 const PLAYER_REFRESH_CYCLE_SECONDS = Math.max(Number(process.env.PLAYER_REFRESH_CYCLE_SECONDS ?? 10), 1)
 const PLAYER_REFRESH_CYCLE_MS = PLAYER_REFRESH_CYCLE_SECONDS * 1000
+const REFRESH_RUN_WINDOW_MS = Math.max(Number(process.env.REFRESH_RUN_WINDOW_MS ?? 55_000), 5_000)
 
 function toFiniteNumber(value: unknown): number | null {
   const n = typeof value === 'number' ? value : Number(value)
@@ -808,15 +809,25 @@ async function maybeInsertPerGameLpEvent(opts: {
   }
 
   const gamesDelta = (snap.wins + snap.losses) - (lastW + lastL)
+  const hasRankMovement = snap.lp !== lastLp || snap.tier !== lastTier || snap.rank !== lastRank
+  const hasGameProgress = gamesDelta > 0
 
-  if (gamesDelta === 1 && newSince.length === 1) {
-    const matchId = newSince[0]
-    const { count: matchCount, error: verifyError } = await supabase
-      .from('match_participants')
-      .select('match_id', { count: 'exact', head: true })
-      .eq('match_id', matchId)
-      .eq('puuid', puuid)
-    const matchVerified = !verifyError && (matchCount ?? 0) > 0
+  if (hasRankMovement && hasGameProgress) {
+    const matchId = newSince[0] ?? newest ?? null
+    let matchVerified = false
+    let verifyError: { message?: string } | null = null
+
+    if (matchId) {
+      const { count: matchCount, error } = await supabase
+        .from('match_participants')
+        .select('match_id', { count: 'exact', head: true })
+        .eq('match_id', matchId)
+        .eq('puuid', puuid)
+
+      verifyError = error
+      matchVerified = !error && (matchCount ?? 0) > 0
+    }
+
     const lastStep = rankStepIndex(lastTier, lastRank)
     const nextStep = rankStepIndex(snap.tier, snap.rank)
     const stepDelta = lastStep !== null && nextStep !== null ? nextStep - lastStep : 0
@@ -832,7 +843,7 @@ async function maybeInsertPerGameLpEvent(opts: {
     const { error } = await supabase.from('player_lp_events').insert({
       puuid,
       queue_type: snap.queue_type,
-      match_id: matchVerified ? matchId : null,
+      match_id: matchId,
       lp_before: lastLp,
       lp_after: snap.lp,
       lp_delta: lpDelta,
@@ -843,14 +854,20 @@ async function maybeInsertPerGameLpEvent(opts: {
       recorded_at: snap.fetched_at,
       note: stepDelta > 0 ? 'PROMOTED' : stepDelta < 0 ? 'DEMOTED' : null,
       match_verified: matchVerified,
-      match_verify_error: matchVerified ? null : verifyError ? 'match_verify_query_failed' : 'puuid_not_in_match',
+      match_verify_error: matchVerified
+        ? null
+        : matchId
+          ? verifyError
+            ? 'match_verify_query_failed'
+            : 'puuid_not_in_match'
+          : 'no_match_candidate',
     })
 
     if (error && !String(error.message ?? '').toLowerCase().includes('duplicate')) {
       throw error
     }
 
-    console.log('[lp_event]', puuid.slice(0, 12), matchId.slice(0, 10), 'delta', lpDelta)
+    console.log('[lp_event]', puuid.slice(0, 12), (matchId ?? 'no_match').slice(0, 10), 'delta', lpDelta)
   }
 
   await upsertRiotState(puuid, {
@@ -1069,52 +1086,66 @@ async function main() {
     return
   }
 
-  const { data: states, error: stErr } = await supabase
-    .from('player_riot_state')
-    .select(
-      'puuid, last_poll_at, last_matches_sync_at, last_solo_lp, last_solo_tier, last_solo_rank, last_solo_wins, last_solo_losses, last_solo_match_id'
+  const runStartedAt = Date.now()
+  const runDeadline = runStartedAt + REFRESH_RUN_WINDOW_MS
+  let cycles = 0
+
+  while (cycles === 0 || Date.now() < runDeadline) {
+    const { data: states, error: stErr } = await supabase
+      .from('player_riot_state')
+      .select(
+        'puuid, last_poll_at, last_matches_sync_at, last_solo_lp, last_solo_tier, last_solo_rank, last_solo_wins, last_solo_losses, last_solo_match_id'
+      )
+      .in('puuid', puuids)
+
+    if (stErr) throw stErr
+
+    const stateMap = new Map<string, RefreshState>(
+      ((states ?? []) as RefreshState[])
+        .filter((s) => typeof s?.puuid === 'string' && s.puuid.length > 0)
+        .map((s) => [s.puuid as string, s])
     )
-    .in('puuid', puuids)
 
-  if (stErr) throw stErr
-  const stateMap = new Map<string, RefreshState>(
-    ((states ?? []) as RefreshState[])
-      .filter((s) => typeof s?.puuid === 'string' && s.puuid.length > 0)
-      .map((s) => [s.puuid as string, s])
-  )
+    const ordered = [...puuids].sort((a, b) => {
+      const stateA = stateMap.get(a)
+      const stateB = stateMap.get(b)
+      const ta = typeof stateA?.last_poll_at === 'string' ? new Date(stateA.last_poll_at).getTime() : 0
+      const tb = typeof stateB?.last_poll_at === 'string' ? new Date(stateB.last_poll_at).getTime() : 0
+      return ta - tb
+    })
 
-  const ordered = [...puuids].sort((a, b) => {
-    const stateA = stateMap.get(a)
-    const stateB = stateMap.get(b)
-    const ta = typeof stateA?.last_poll_at === 'string' ? new Date(stateA.last_poll_at).getTime() : 0
-    const tb = typeof stateB?.last_poll_at === 'string' ? new Date(stateB.last_poll_at).getTime() : 0
-    return ta - tb
-  })
+    const cycleStartedAt = Date.now()
 
-  const cycleStartedAt = Date.now()
+    for (let offset = 0; offset < ordered.length; offset += PLAYER_CHECKS_PER_SECOND) {
+      const secondStartedAt = Date.now()
+      const batch = ordered.slice(offset, offset + PLAYER_CHECKS_PER_SECOND)
 
-  for (let offset = 0; offset < ordered.length; offset += PLAYER_CHECKS_PER_SECOND) {
-    const secondStartedAt = Date.now()
-    const batch = ordered.slice(offset, offset + PLAYER_CHECKS_PER_SECOND)
+      await Promise.all(batch.map((puuid) => refreshOnePlayer(puuid, stateMap.get(puuid))))
 
-    await Promise.all(batch.map((puuid) => refreshOnePlayer(puuid, stateMap.get(puuid))))
-
-    const secondElapsed = Date.now() - secondStartedAt
-    if (secondElapsed < 1000) {
-      await sleep(1000 - secondElapsed)
+      const secondElapsed = Date.now() - secondStartedAt
+      if (secondElapsed < 1000) {
+        await sleep(1000 - secondElapsed)
+      }
     }
-  }
 
-  const cycleElapsed = Date.now() - cycleStartedAt
-  if (cycleElapsed < PLAYER_REFRESH_CYCLE_MS) {
-    await sleep(PLAYER_REFRESH_CYCLE_MS - cycleElapsed)
-  } else {
-    await sleep(PLAYER_REFRESH_CYCLE_MS)
+    cycles += 1
+
+    const remainingRunMs = runDeadline - Date.now()
+    if (remainingRunMs <= 0) break
+
+    const cycleElapsed = Date.now() - cycleStartedAt
+    const desiredPauseMs =
+      cycleElapsed < PLAYER_REFRESH_CYCLE_MS
+        ? PLAYER_REFRESH_CYCLE_MS - cycleElapsed
+        : PLAYER_REFRESH_CYCLE_MS
+
+    const pauseMs = Math.min(desiredPauseMs, remainingRunMs)
+    if (pauseMs > 0) await sleep(pauseMs)
   }
 
   await finalizeLeaderboardGoalsIfNeeded()
 
-  console.log('Done.')
+  console.log('Done.', { cycles })
 }
 
 async function finalizeLeaderboardGoalsIfNeeded() {

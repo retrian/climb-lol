@@ -214,9 +214,10 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const seasonStartIso = getSeasonStartIso()
   const { data: historyRaw } = await supabase
-    .from('leaderboard_lp_history')
+    .from('player_lp_history')
     .select('puuid, tier, rank, lp, wins, losses, fetched_at')
-    .eq('leaderboard_id', lb.id)
+    .in('puuid', puuids)
+    .eq('queue_type', 'RANKED_SOLO_5x5')
     .gte('fetched_at', seasonStartIso)
     .order('fetched_at', { ascending: true })
 
