@@ -11,6 +11,9 @@ import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 
+export const revalidate = 30
+export const dynamic = 'force-dynamic'
+
 // --- Types ---
 
 type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
