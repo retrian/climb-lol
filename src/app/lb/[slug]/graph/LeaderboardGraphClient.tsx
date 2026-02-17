@@ -736,7 +736,8 @@ export default function LeaderboardGraphClient({
 
   const handleShowAll = () => setShowAll(true)
   const handleReset = () => setShowAll(false)
-  const matchesAgo = showAll ? matchRange : filteredPoints.length
+  const latestGameNumber = rawFiltered.length > 0 ? rawFiltered[rawFiltered.length - 1].totalGames : 0
+  const viewedGameCount = showAll ? latestGameNumber : Math.min(30, latestGameNumber)
   const peakPoint = useMemo(() => {
     if (rawFiltered.length === 0) return null
     const peakRaw = rawFiltered.reduce((best, cur) => (cur.ladderValue > best.ladderValue ? cur : best), rawFiltered[0])
@@ -1129,7 +1130,7 @@ export default function LeaderboardGraphClient({
                   <button
                     type="button"
                     onClick={showAll ? handleReset : handleShowAll}
-                    className="absolute z-10 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-white hover:text-slate-900 dark:border-slate-800/70 dark:bg-slate-950/70 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900 dark:hover:text-slate-100"
+                    className="absolute bottom-3 right-3 z-10 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-white hover:text-slate-900 dark:border-slate-800/70 dark:bg-slate-950/70 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900 dark:hover:text-slate-100"
                     style={plotButtonStyle ?? undefined}
                   >
                     {showAll ? "Reset" : "Show all"}
@@ -1142,15 +1143,16 @@ export default function LeaderboardGraphClient({
           )}
 
               {tooltipRender}
-              {plotLabelStyle ? (
-                <div
-                  className="absolute z-10 flex justify-between px-1 text-xs text-slate-500 dark:text-slate-400"
-                  style={plotLabelStyle}
-                >
-                  <span>{matchesAgo} matches ago</span>
-                  <span>Last match</span>
-                </div>
-              ) : null}
+              <div
+                className="absolute bottom-3 left-3 right-3 z-10 flex justify-between px-1 text-xs text-slate-500 dark:text-slate-400"
+                style={plotLabelStyle ?? undefined}
+              >
+                <span>
+                  {showAll
+                    ? `Showing ${latestGameNumber} games`
+                    : `Last ${viewedGameCount} games`}
+                </span>
+              </div>
             </div>
           </div>
         </div>
