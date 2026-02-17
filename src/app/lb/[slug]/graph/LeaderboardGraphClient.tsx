@@ -778,8 +778,8 @@ export default function LeaderboardGraphClient({
 
   const handleShowAll = () => setShowAll(true)
   const handleReset = () => setShowAll(false)
-  const latestGameNumber = filteredWithLp.length > 0 ? filteredWithLp[filteredWithLp.length - 1].totalGames : 0
-  const viewedGameCount = showAll ? latestGameNumber : Math.min(30, latestGameNumber)
+  const recordedGameCount = filteredWithLp.length
+  const latestGameNumber = recordedGameCount
   const peakPoint = useMemo(() => {
     if (filteredPoints.length === 0 || !chart) return null
     const peakRaw = filteredPoints.reduce((best, cur) => (cur.ladderValue > best.ladderValue ? cur : best), filteredPoints[0])
@@ -1197,7 +1197,9 @@ export default function LeaderboardGraphClient({
                 <span>
                   {showAll
                     ? `Showing ${latestGameNumber} games`
-                    : `Last ${viewedGameCount} games`}
+                    : filteredWithLp.length <= 30
+                      ? `Showing ${filteredWithLp.length} games`
+                      : 'Last 30 games'}
                 </span>
               </div>
             </div>

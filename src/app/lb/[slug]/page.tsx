@@ -147,6 +147,12 @@ interface TopChampionRaw {
 interface MoverDeltaRaw {
   puuid: string
   lp_delta: number | null
+  start_tier?: string | null
+  start_rank?: string | null
+  start_lp?: number | null
+  end_tier?: string | null
+  end_rank?: string | null
+  end_lp?: number | null
 }
 
 interface RecentParticipantRaw {
@@ -332,12 +338,43 @@ function getLatestMatchEndTsMs(matches: unknown): number | null {
 }
 
 function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) {
-  if (active.size === 0) return new Map<string, number>(deltas)
+  if (active.size === 0) return new Map<string, number>()
   const filtered = new Map<string, number>()
   for (const [puuid, delta] of deltas.entries()) {
     if (active.has(puuid)) filtered.set(puuid, delta)
   }
   return filtered
+}
+
+const LADDER_TIER_ORDER = [
+  'IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM',
+  'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER',
+] as const
+
+const LADDER_DIV_ORDER = ['IV', 'III', 'II', 'I'] as const
+
+function baseMasterLadderValue(): number {
+  const diamondIndex = LADDER_TIER_ORDER.indexOf('DIAMOND')
+  return diamondIndex * 400 + 3 * 100 + 100
+}
+
+function toLadderLp(tier: string | null, division: string | null, lp: number | null): number {
+  const t = (tier ?? '').toUpperCase()
+  const d = (division ?? '').toUpperCase()
+  const safeLp = Math.max(0, lp ?? 0)
+
+  const tierIndex = LADDER_TIER_ORDER.indexOf(t as typeof LADDER_TIER_ORDER[number])
+  if (tierIndex === -1) return safeLp
+
+  const divIndex = LADDER_DIV_ORDER.indexOf(d as typeof LADDER_DIV_ORDER[number])
+
+  if (tierIndex <= LADDER_TIER_ORDER.indexOf('DIAMOND')) {
+    const base = tierIndex * 400
+    const divOffset = divIndex === -1 ? 0 : divIndex * 100
+    return base + divOffset + safeLp
+  }
+
+  return baseMasterLadderValue() + safeLp
 }
 
 function LpChangePill({ lpChange }: { lpChange: number }) {
@@ -542,6 +579,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
               .select('puuid, win, matches!inner(game_end_ts, queue_id)')
               .in('puuid', allRelevantPuuids)
               .eq('matches.queue_id', 420)
+              .gte('matches.game_end_ts', weekStartTs)
               .limit(MAX_RECENT_PARTICIPANT_ROWS),
             [] as RecentParticipantRaw[],
             'recent_participants_week'
@@ -743,7 +781,12 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
     const dailyDeltaMap = new Map<string, number>()
     for (const row of dailyMoverRows) {
       if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
-      dailyDeltaMap.set(row.puuid, row.lp_delta)
+      const ladderDelta =
+        row.end_tier != null && row.start_tier != null
+          ? toLadderLp(row.end_tier, row.end_rank ?? null, row.end_lp ?? null)
+            - toLadderLp(row.start_tier, row.start_rank ?? null, row.start_lp ?? null)
+          : row.lp_delta
+      dailyDeltaMap.set(row.puuid, ladderDelta)
     }
     const dailyLpByPuuid = filterDeltasByActive(dailyDeltaMap, dailyActivePuuids)
     const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
@@ -756,16 +799,17 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
     const dailyTopLoss = dailyLpEntries.length
       ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
       : null
-    const resolvedTopLoss = dailyLpEntries.length > 1
-      ? (dailyTopLoss && dailyTopLoss[1] < 0
-          ? dailyTopLoss
-          : dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
-      : null
+    const resolvedTopLoss = dailyTopLoss && dailyTopLoss[1] < 0 ? dailyTopLoss : null
 
     const weeklyDeltaMap = new Map<string, number>()
     for (const row of weeklyMoverRows) {
       if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
-      weeklyDeltaMap.set(row.puuid, row.lp_delta)
+      const ladderDelta =
+        row.end_tier != null && row.start_tier != null
+          ? toLadderLp(row.end_tier, row.end_rank ?? null, row.end_lp ?? null)
+            - toLadderLp(row.start_tier, row.start_rank ?? null, row.start_lp ?? null)
+          : row.lp_delta
+      weeklyDeltaMap.set(row.puuid, ladderDelta)
     }
     const weeklyLpByPuuid = filterDeltasByActive(weeklyDeltaMap, weeklyActivePuuids)
     const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
@@ -775,11 +819,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
     const weeklyTopLoss = weeklyLpEntries.length
       ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
       : null
-    const resolvedWeeklyTopLoss = weeklyLpEntries.length > 1
-      ? (weeklyTopLoss && weeklyTopLoss[1] < 0
-          ? weeklyTopLoss
-          : weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best)))
-      : null
+    const resolvedWeeklyTopLoss = weeklyTopLoss && weeklyTopLoss[1] < 0 ? weeklyTopLoss : null
 
     return {
       champMap,
@@ -798,7 +838,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       lastUpdatedIso,
     }
   },
-  ['lb-page-data-v4', lbId, ddVersion],
+  ['lb-page-data-v5', lbId, ddVersion],
   { revalidate: 30 }
 )()
 
