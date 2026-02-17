@@ -734,7 +734,16 @@ async function updateMatchParticipantsWithLpData(puuid: string, matchIds: string
 
   const matchTimestamps = new Map(matches?.map(m => [m.match_id, m.game_end_ts]) || [])
 
-  // Update each match participant with LP data
+  const participantPatches: Array<{
+    match_id: string
+    puuid: string
+    lp_change: number | null
+    lp_note: string | null
+    rank_tier: string
+    rank_division: string
+  }> = []
+
+  // Build each match participant patch with LP data
   for (const event of lpEvents) {
     const matchEndTs = matchTimestamps.get(event.match_id)
     if (!matchEndTs) continue
@@ -746,19 +755,36 @@ async function updateMatchParticipantsWithLpData(puuid: string, matchIds: string
 
     if (!beforeSnapshot) continue
 
-    const { error: updateError } = await supabase
-      .from('match_participants')
-      .update({
-        lp_change: event.lp_delta,
-        lp_note: event.note,
-        rank_tier: beforeSnapshot.tier,
-        rank_division: beforeSnapshot.rank,
-      })
-      .eq('match_id', event.match_id)
-      .eq('puuid', puuid)
+    participantPatches.push({
+      match_id: String(event.match_id),
+      puuid,
+      lp_change: event.lp_delta ?? null,
+      lp_note: event.note ?? null,
+      rank_tier: beforeSnapshot.tier,
+      rank_division: beforeSnapshot.rank,
+    })
+  }
 
-    if (updateError) {
-      console.warn('[updateLpData] error updating participant:', updateError.message)
+  for (const chunk of chunkArray(participantPatches, 20)) {
+    const results = await Promise.all(
+      chunk.map((patch) =>
+        supabase
+          .from('match_participants')
+          .update({
+            lp_change: patch.lp_change,
+            lp_note: patch.lp_note,
+            rank_tier: patch.rank_tier,
+            rank_division: patch.rank_division,
+          })
+          .eq('match_id', patch.match_id)
+          .eq('puuid', patch.puuid)
+      )
+    )
+
+    for (const res of results) {
+      if (res.error) {
+        console.warn('[updateLpData] error updating participant:', res.error.message)
+      }
     }
   }
 
@@ -1320,6 +1346,7 @@ async function finalizeLeaderboardGoalsIfNeeded() {
         .select('puuid, tier, rank, lp, fetched_at')
         .in('puuid', puuids)
         .eq('queue_type', QUEUE_SOLO)
+        .gte('fetched_at', MATCHLIST_SEASON_START_ISO)
         .gte('lp', lb.lp_goal)
         .in('tier', ['MASTER', 'GRANDMASTER', 'CHALLENGER'])
         .order('fetched_at', { ascending: true })
@@ -1362,6 +1389,7 @@ async function finalizeLeaderboardGoalsIfNeeded() {
         .select('puuid, tier, rank, lp, fetched_at')
         .in('puuid', puuids)
         .eq('queue_type', QUEUE_SOLO)
+        .gte('fetched_at', MATCHLIST_SEASON_START_ISO)
         .order('fetched_at', { ascending: true })
 
       if (histErr) throw histErr
