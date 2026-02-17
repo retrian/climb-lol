@@ -271,7 +271,7 @@ export default async function DashboardPage({
   // Fetch Leaderboards
   const { data: leaderboardsRaw } = await supabase
     .from('leaderboards')
-    .select('id, name, slug, visibility, description, banner_url, goal_mode, race_start_at, race_end_at, lp_goal, rank_goal_tier, updated_at')
+    .select('id, name, slug, leaderboard_code, visibility, description, banner_url, goal_mode, race_start_at, race_end_at, lp_goal, rank_goal_tier, updated_at')
     .eq('user_id', user.id)
     .order('updated_at', { ascending: false })
 
@@ -279,6 +279,7 @@ export default async function DashboardPage({
     id: string
     name: string
     slug: string
+    leaderboard_code: number
     visibility: string | null
     description: string | null
     banner_url: string | null
@@ -1241,7 +1242,7 @@ export default async function DashboardPage({
   }
 
   // --- JSX Render ---
-  const shareUrl = lb ? `https://cwf.lol/lb/${lb.slug}` : null
+  const shareUrl = lb ? `https://cwf.lol/leaderboards/${lb.leaderboard_code}` : null
   const playerCount = players?.length ?? 0
   const clubSlugParts = parseClubSlug(club?.slug)
   const clubShareUrl = club ? `https://cwf.lol/clubs/${club.slug}` : null
@@ -1677,7 +1678,7 @@ export default async function DashboardPage({
                           />
 
                           <Link
-                            href={`/lb/${lb.slug}`}
+                            href={`/leaderboards/${lb.leaderboard_code}`}
                             className="rounded-none bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-inset ring-slate-300 transition-all duration-200 hover:bg-slate-50 hover:shadow-lg hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/40 dark:bg-slate-900 dark:text-slate-100 dark:ring-slate-700 dark:hover:bg-slate-800"
                           >
                             View Leaderboard →

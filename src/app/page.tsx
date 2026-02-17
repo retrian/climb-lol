@@ -14,10 +14,10 @@ export default async function HomePage() {
   const { data: leaderboardsRaw } = slugs.length
     ? await supabase
         .from('leaderboards')
-        .select('id, name, slug, description, banner_url')
+        .select('id, name, slug, leaderboard_code, description, banner_url')
         .eq('visibility', 'PUBLIC')
         .in('slug', slugs)
-    : { data: [] as Array<{ id: string; name: string; slug: string; description: string | null; banner_url: string | null }> }
+    : { data: [] as Array<{ id: string; name: string; slug: string; leaderboard_code: number; description: string | null; banner_url: string | null }> }
 
   const leaderboardsBySlug = new Map((leaderboardsRaw ?? []).map((lb) => [lb.slug, lb]))
   const popularLeaderboards = viewRows
@@ -25,7 +25,7 @@ export default async function HomePage() {
       const lb = leaderboardsBySlug.get(row.slug)
       return lb ? { ...lb, views: row.views ?? 0 } : null
     })
-    .filter((lb): lb is { id: string; name: string; slug: string; description: string | null; banner_url: string | null; views: number } => !!lb)
+    .filter((lb): lb is { id: string; name: string; slug: string; leaderboard_code: number; description: string | null; banner_url: string | null; views: number } => !!lb)
 
   return (
     <main className="min-h-[calc(100vh-8.5rem)] bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
@@ -71,7 +71,7 @@ export default async function HomePage() {
             {(popularLeaderboards ?? []).map((lb) => (
               <Link
                 key={lb.id}
-                href={`/lb/${lb.slug}`}
+                href={`/leaderboards/${lb.leaderboard_code}`}
                 className="group relative overflow-hidden rounded-3xl border border-slate-200 bg-slate-900 text-left shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-slate-300 hover:shadow-xl dark:border-slate-800 dark:hover:border-slate-700"
               >
                 <div className="relative h-56 w-full">

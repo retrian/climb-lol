@@ -105,6 +105,7 @@ type LeaderboardRow = {
   id: string
   name: string
   slug: string
+  leaderboard_code: number
   description: string | null
   updated_at: string | null
   banner_url: string | null
@@ -222,7 +223,7 @@ export default async function ClubDetailPage({
     canManage
       ? supabase
           .from('leaderboards')
-          .select('id, name, slug, description, updated_at, banner_url, visibility')
+          .select('id, name, slug, leaderboard_code, description, updated_at, banner_url, visibility')
           .eq('user_id', ownerId!)
           .order('name', { ascending: true })
       : Promise.resolve({ data: [] as LeaderboardRow[], error: null }),
@@ -262,7 +263,7 @@ export default async function ClubDetailPage({
   const leaderboardsRes = leaderboardIds.length
     ? await supabase
         .from('leaderboards')
-        .select('id, name, slug, description, updated_at, banner_url, visibility')
+        .select('id, name, slug, leaderboard_code, description, updated_at, banner_url, visibility')
         .in('id', leaderboardIds)
     : { data: [] as LeaderboardRow[], error: null }
 
@@ -983,7 +984,7 @@ async function addMember(formData: FormData) {
                         <div className="flex flex-col gap-2">
                           {lb?.slug && (
                             <Link
-                              href={`/lb/${lb.slug}`}
+                              href={`/leaderboards/${lb.leaderboard_code}`}
                               className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
                             >
                               Open leaderboard

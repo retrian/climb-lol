@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
@@ -37,7 +37,7 @@ function profileIconUrl(profileIconId: number | null | undefined, ddVersion: str
 function TeamHeaderCard({
   name,
   description,
-  slug,
+  leaderboardCode,
   visibility,
   activeTab,
   cutoffs,
@@ -45,7 +45,7 @@ function TeamHeaderCard({
 }: {
   name: string
   description?: string | null
-  slug: string
+  leaderboardCode: number
   visibility: string
   activeTab: 'overview' | 'graph' | 'stats'
   cutoffs: Array<{ label: string; lp: number; icon: string }>
@@ -70,7 +70,7 @@ function TeamHeaderCard({
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
           <div className="mb-4 lg:mb-6">
-            <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
+            <LeaderboardTabs leaderboardCode={leaderboardCode} activeTab={activeTab} visibility={visibility} />
           </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">
             {name}
@@ -112,7 +112,13 @@ function TeamHeaderCard({
   )
 }
 
-export default async function LeaderboardGraphPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function LeaderboardGraphPage({
+  params,
+  fromCodeRoute = false,
+}: {
+  params: Promise<{ slug: string }>
+  fromCodeRoute?: boolean
+}) {
   const { slug } = await params
   const supabase = await createClient()
   const latestPatch = await getLatestDdragonVersion().catch(() => null)
@@ -120,7 +126,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const { data: lb } = await supabase
     .from('leaderboards')
-    .select('id, user_id, name, visibility, banner_url, description')
+    .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description')
     .eq('slug', slug)
     .maybeSingle()
 
@@ -132,6 +138,10 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
     if (error || !data.user || data.user.id !== lb.user_id) {
       notFound()
     }
+  }
+
+  if (!fromCodeRoute) {
+    redirect(`/leaderboards/${lb.leaderboard_code}/graph`)
   }
 
   // Use service-role client for data reads after access checks to avoid RLS-caused empty datasets.
@@ -174,7 +184,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
-            slug={slug}
+            leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="graph"
             cutoffs={cutoffsDisplay}
@@ -237,7 +247,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
-            slug={slug}
+            leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="graph"
             cutoffs={cutoffsDisplay}

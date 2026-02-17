@@ -1,4 +1,4 @@
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
@@ -138,7 +138,7 @@ function topUniquePlayers<T extends { puuid: string }>(rows: T[], limit = Number
 function TeamHeaderCard({
   name,
   description,
-  slug,
+  leaderboardCode,
   visibility,
   activeTab,
   cutoffs,
@@ -146,7 +146,7 @@ function TeamHeaderCard({
 }: {
   name: string
   description?: string | null
-  slug: string
+  leaderboardCode: number
   visibility: string
   activeTab: 'overview' | 'graph' | 'stats'
   cutoffs: Array<{ label: string; lp: number; icon: string }>
@@ -171,7 +171,7 @@ function TeamHeaderCard({
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
           <div className="mb-4 lg:mb-6">
-            <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
+            <LeaderboardTabs leaderboardCode={leaderboardCode} activeTab={activeTab} visibility={visibility} />
           </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
@@ -193,7 +193,13 @@ function TeamHeaderCard({
   )
 }
 
-export default async function LeaderboardStatsPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function LeaderboardStatsPage({
+  params,
+  fromCodeRoute = false,
+}: {
+  params: Promise<{ slug: string }>
+  fromCodeRoute?: boolean
+}) {
   const { slug } = await params
   const supabase = await createClient()
 
@@ -201,7 +207,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     getLatestDdragonVersion(),
     supabase
       .from('leaderboards')
-      .select('id, user_id, name, visibility, banner_url, description')
+      .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description')
       .eq('slug', slug)
       .maybeSingle(),
   ])
@@ -219,6 +225,10 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     if (error || !data.user || data.user.id !== lb.user_id) {
       notFound()
     }
+  }
+
+  if (!fromCodeRoute) {
+    redirect(`/leaderboards/${lb.leaderboard_code}/stats`)
   }
 
   const { data: playersRaw } = await supabase
@@ -258,7 +268,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
-            slug={slug}
+            leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="stats"
             cutoffs={cutoffsDisplay}
@@ -773,7 +783,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
-            slug={slug}
+            leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="stats"
             cutoffs={cutoffsDisplay}

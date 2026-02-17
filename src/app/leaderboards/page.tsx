@@ -13,7 +13,7 @@ export default async function LeaderboardsPage({
 
   let query = supabase
     .from('leaderboards')
-    .select('name, slug, visibility, description, updated_at, banner_url')
+    .select('name, slug, leaderboard_code, visibility, description, updated_at, banner_url')
     .eq('visibility', 'PUBLIC')
     .order('updated_at', { ascending: false })
 
@@ -76,8 +76,8 @@ export default async function LeaderboardsPage({
         <div className="space-y-3">
           {(leaderboards ?? []).map((lb) => (
             <Link
-              key={lb.slug}
-              href={`/lb/${lb.slug}`}
+              key={lb.leaderboard_code}
+              href={`/leaderboards/${lb.leaderboard_code}`}
               className="group block rounded-2xl border-2 border-slate-200 bg-white overflow-hidden shadow-sm transition-all duration-200 hover:border-slate-300 hover:shadow-lg hover:-translate-y-0.5 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
             >
               {/* Banner Image */}

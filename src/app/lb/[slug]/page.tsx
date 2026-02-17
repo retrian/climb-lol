@@ -1,5 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { cache, Suspense } from 'react'
 import { unstable_cache } from 'next/cache'
 import { getChampionMap } from '@/lib/champions'
@@ -168,6 +168,7 @@ interface LeaderboardRaw {
   id: string
   user_id: string
   name: string
+  leaderboard_code: number
   description: string | null
   visibility: Visibility
   banner_url: string | null
@@ -207,7 +208,7 @@ interface LeaderboardPageData {
 interface TeamHeaderCardProps {
   name: string
   description: string | null
-  slug: string
+  leaderboardCode: number
   visibility: Visibility
   activeTab: 'overview' | 'stats' | 'graph'
   bannerUrl: string | null
@@ -459,7 +460,7 @@ const getLeaderboardBySlug = cache(async (slug: string): Promise<LeaderboardRaw 
   const supabase = await createClient()
   const { data } = await supabase
     .from('leaderboards')
-    .select('id, user_id, name, description, visibility, banner_url, updated_at')
+    .select('id, user_id, name, leaderboard_code, description, visibility, banner_url, updated_at')
     .eq('slug', slug)
     .maybeSingle()
 
@@ -844,7 +845,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
 
 // --- Components ---
 
-  function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs = [], lastUpdated = null }: TeamHeaderCardProps) {
+  function TeamHeaderCard({ name, description, leaderboardCode, visibility, activeTab, bannerUrl, cutoffs = [], lastUpdated = null }: TeamHeaderCardProps) {
     const formattedLastUpdated = lastUpdated
       ? new Date(lastUpdated).toLocaleString('en-US', {
           month: 'short',
@@ -872,7 +873,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
           <div className="mb-4 lg:mb-6">
-            <LeaderboardTabs slug={slug} activeTab={activeTab} visibility={visibility} />
+            <LeaderboardTabs leaderboardCode={leaderboardCode} activeTab={activeTab} visibility={visibility} />
           </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
@@ -1069,8 +1070,10 @@ async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: 
 
 export default async function LeaderboardDetail({
   params,
+  fromCodeRoute = false,
 }: {
   params: Promise<{ slug: string }>
+  fromCodeRoute?: boolean
 }) {
   const { slug } = await params
   const latestPatch = await getLatestDdragonVersion().catch(() => null)
@@ -1086,6 +1089,10 @@ export default async function LeaderboardDetail({
     if (!user || user.id !== lb.user_id) notFound()
   }
 
+  if (!fromCodeRoute) {
+    redirect(`/leaderboards/${lb.leaderboard_code}`)
+  }
+
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto w-full px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
@@ -1093,7 +1100,7 @@ export default async function LeaderboardDetail({
           <TeamHeaderCard
             name={lb.name}
             description={lb.description}
-            slug={slug}
+            leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="overview"
             bannerUrl={lb.banner_url}

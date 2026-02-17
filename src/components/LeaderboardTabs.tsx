@@ -9,12 +9,12 @@ const tabs = [
 type TabId = (typeof tabs)[number]['id']
 
 type LeaderboardTabsProps = {
-  slug: string
+  leaderboardCode: number
   activeTab: TabId
   visibility: string
 }
 
-export default function LeaderboardTabs({ slug, activeTab, visibility }: LeaderboardTabsProps) {
+export default function LeaderboardTabs({ leaderboardCode, activeTab, visibility }: LeaderboardTabsProps) {
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <span className="inline-flex items-center rounded-full bg-gradient-to-r from-slate-100 to-slate-50 px-3.5 py-1.5 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-300/50 uppercase tracking-wider shadow-sm dark:from-slate-800 dark:to-slate-900 dark:text-slate-200 dark:ring-slate-700/70">
@@ -22,7 +22,7 @@ export default function LeaderboardTabs({ slug, activeTab, visibility }: Leaderb
       </span>
       <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/90 p-1 text-sm font-semibold text-slate-600 shadow-sm backdrop-blur dark:border-slate-700 dark:bg-slate-900/85 dark:text-slate-200">
         {tabs.map((tab) => {
-          const href = tab.id === 'overview' ? `/lb/${slug}` : `/lb/${slug}/${tab.id}`
+          const href = tab.id === 'overview' ? `/leaderboards/${leaderboardCode}` : `/leaderboards/${leaderboardCode}/${tab.id}`
 
           if (tab.id === activeTab) {
             return (
