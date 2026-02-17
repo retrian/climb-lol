@@ -443,38 +443,36 @@ export default function LatestGamesFeedClient({
         window.clearTimeout(initRefreshTimeoutRef.current)
         initRefreshTimeoutRef.current = null
       }
-    }
-  }, [games.length])
-
-  // Keep feed fresh in production without manual refresh
-  useEffect(() => {
-    const refreshIfVisible = () => {
-      if (document.visibilityState === 'visible') {
-        router.refresh()
-      }
+      return
     }
 
-    refreshIfVisible()
-    if (games.length === 0) {
+    if (initRefreshTimeoutRef.current === null) {
       initRefreshTimeoutRef.current = window.setTimeout(() => {
         setIsInitializing(false)
         initRefreshTimeoutRef.current = null
       }, 2000)
     }
 
-    const interval = window.setInterval(refreshIfVisible, FEED_REFRESH_INTERVAL_MS)
-
-    window.addEventListener('focus', refreshIfVisible)
-
     return () => {
-      window.clearInterval(interval)
-      window.removeEventListener('focus', refreshIfVisible)
       if (initRefreshTimeoutRef.current !== null) {
         window.clearTimeout(initRefreshTimeoutRef.current)
         initRefreshTimeoutRef.current = null
       }
     }
-  }, [router, games.length])
+  }, [games.length])
+
+  // Keep feed fresh in production without manual refresh
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        router.refresh()
+      }
+    }, FEED_REFRESH_INTERVAL_MS)
+
+    return () => {
+      window.clearInterval(interval)
+    }
+  }, [router])
 
   // Prefetch on hover only; avoid eager network work on initial page load
 
