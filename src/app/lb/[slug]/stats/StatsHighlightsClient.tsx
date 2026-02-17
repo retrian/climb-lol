@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 export type PodiumEntry = {
@@ -62,111 +62,22 @@ export default function StatsHighlightsClient({
           <div className="mt-4 space-y-4">
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {singleGameTopRow.map((block) => (
-                <button
+                <PodiumCard
                   key={block.id}
-                  type="button"
-                  onClick={() => setActiveBlockId(block.id)}
-                  className="group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60"
-                >
-                  <div className="p-4">
-                    <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                      {block.title}
-                    </div>
-                    {block.entries.length === 0 ? (
-                      <div className="mt-3 text-xs text-slate-400">No data yet.</div>
-                    ) : (
-                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                        {block.entries.slice(0, 3).map((entry, idx) => {
-                          const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
-                          const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
-                          return (
-                            <div key={entry.puuid} className={orderClass}>
-                              <div className={`relative px-4 py-3 ${sizeClass}`}>
-                                <div className="flex flex-col items-center text-center gap-2">
-                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
-                                  <div className="relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 border-amber-400">
-                                    <div className="h-full w-full overflow-hidden rounded-full">
-                                      {entry.iconUrl ? (
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={entry.iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
-                                      ) : (
-                                        <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="min-w-0">
-                                    <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-700 dark:text-slate-100">
-                                      {entry.name}
-                                    </div>
-                                  </div>
-                                  <div className="text-2xl font-black tabular-nums text-slate-900 dark:text-slate-100">
-                                    {entry.valueLabel ?? entry.value}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </button>
+                  block={block}
+                  onOpen={setActiveBlockId}
+                />
               ))}
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
               {singleGameBottomRow.map((block, idx) => (
-                <button
+                <PodiumCard
                   key={block.id}
-                  type="button"
-                  onClick={() => setActiveBlockId(block.id)}
-                  className={`group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60 lg:col-span-2 ${
-                    idx === 0 ? 'lg:col-start-2' : 'lg:col-start-4'
-                  }`}
-                >
-                  <div className="p-4">
-                    <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                      {block.title}
-                    </div>
-                    {block.entries.length === 0 ? (
-                      <div className="mt-3 text-xs text-slate-400">No data yet.</div>
-                    ) : (
-                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                        {block.entries.slice(0, 3).map((entry, entryIdx) => {
-                          const orderClass = entryIdx === 0 ? 'sm:order-2' : entryIdx === 1 ? 'sm:order-1' : 'sm:order-3'
-                          const sizeClass = entryIdx === 0 ? 'sm:scale-105' : entryIdx === 2 ? 'sm:scale-95' : 'sm:scale-100'
-                          return (
-                            <div key={entry.puuid} className={orderClass}>
-                              <div className={`relative px-4 py-3 ${sizeClass}`}>
-                                <div className="flex flex-col items-center text-center gap-2">
-                                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{entryIdx + 1}</div>
-                                  <div className="relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 border-amber-400">
-                                    <div className="h-full w-full overflow-hidden rounded-full">
-                                      {entry.iconUrl ? (
-                                        // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={entry.iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
-                                      ) : (
-                                        <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="min-w-0">
-                                    <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-700 dark:text-slate-100">
-                                      {entry.name}
-                                    </div>
-                                  </div>
-                                  <div className="text-2xl font-black tabular-nums text-slate-900 dark:text-slate-100">
-                                    {entry.valueLabel ?? entry.value}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </button>
+                  block={block}
+                  onOpen={setActiveBlockId}
+                  className={`lg:col-span-2 ${idx === 0 ? 'lg:col-start-2' : 'lg:col-start-4'}`}
+                />
               ))}
             </div>
           </div>
@@ -197,7 +108,7 @@ export default function StatsHighlightsClient({
                           <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
                             {topPlayer.iconUrl ? (
                               // eslint-disable-next-line @next/next/no-img-element
-                              <img src={topPlayer.iconUrl} alt="" className="h-full w-full object-cover" />
+                              <img src={topPlayer.iconUrl} alt="" width={48} height={48} className="h-full w-full object-cover" />
                             ) : (
                               <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
                             )}
@@ -225,6 +136,8 @@ export default function StatsHighlightsClient({
                                   <img
                                     src={entry.iconUrl}
                                     alt=""
+                                    width={28}
+                                    height={28}
                                     className="h-7 w-7 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
                                   />
                                 ) : (
@@ -254,57 +167,12 @@ export default function StatsHighlightsClient({
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
             {timeBlocks.map((block, idx) => (
-              <button
+              <PodiumCard
                 key={block.id}
-                type="button"
-                onClick={() => setActiveBlockId(block.id)}
-                className={`group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60 lg:col-span-2 ${
-                  idx % 2 === 0 ? 'lg:col-start-2' : 'lg:col-start-4'
-                }`}
-              >
-                <div className="p-4">
-                  <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">
-                    {block.title}
-                  </div>
-                  {block.entries.length === 0 ? (
-                    <div className="mt-3 text-xs text-slate-400">No data yet.</div>
-                  ) : (
-                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                      {block.entries.slice(0, 3).map((entry, idx) => {
-                        const orderClass = idx === 0 ? 'sm:order-2' : idx === 1 ? 'sm:order-1' : 'sm:order-3'
-                        const sizeClass = idx === 0 ? 'sm:scale-105' : idx === 2 ? 'sm:scale-95' : 'sm:scale-100'
-                        return (
-                          <div key={entry.puuid} className={orderClass}>
-                            <div className={`relative px-4 py-3 ${sizeClass}`}>
-                              <div className="flex flex-col items-center text-center gap-2">
-                                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{idx + 1}</div>
-                                <div className="relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 border-amber-400">
-                                  <div className="h-full w-full overflow-hidden rounded-full">
-                                    {entry.iconUrl ? (
-                                      // eslint-disable-next-line @next/next/no-img-element
-                                      <img src={entry.iconUrl} alt="" className="h-full w-full rounded-full object-cover" />
-                                    ) : (
-                                      <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="min-w-0">
-                                  <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-700 dark:text-slate-100">
-                                    {entry.name}
-                                  </div>
-                                </div>
-                                <div className="text-2xl font-black tabular-nums text-slate-900 dark:text-slate-100">
-                                  {entry.valueLabel ?? entry.value}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              </button>
+                block={block}
+                onOpen={setActiveBlockId}
+                className={`lg:col-span-2 ${idx % 2 === 0 ? 'lg:col-start-2' : 'lg:col-start-4'}`}
+              />
             ))}
           </div>
         </div>
@@ -331,7 +199,7 @@ export default function StatsHighlightsClient({
           </div>
 
           <div className="leaderboard-scroll max-h-[52vh] overflow-y-auto pr-2">
-            {'entries' in activeBlock && activeBlock.entries.length === 0 ? (
+            {activeBlock.entries.length === 0 ? (
               <div className="text-sm text-slate-500 dark:text-slate-400">No data available.</div>
             ) : (
               <ol className="space-y-3">
@@ -342,7 +210,7 @@ export default function StatsHighlightsClient({
                       <span className="h-9 w-9 rounded-full overflow-hidden border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
                         {entry.iconUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
-                          <img src={entry.iconUrl} alt="" className="h-full w-full object-cover" />
+                          <img src={entry.iconUrl} alt="" width={36} height={36} className="h-full w-full object-cover" />
                         ) : (
                           <div className="h-full w-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
                         )}
@@ -364,31 +232,146 @@ export default function StatsHighlightsClient({
 }
 
 function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-  const [mounted, setMounted] = useState(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    setMounted(true)
-  }, [])
-
-  useEffect(() => {
-    if (!mounted) return
     const originalOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => {
       document.body.style.overflow = originalOverflow
     }
-  }, [mounted])
+  }, [])
 
-  if (!mounted) return null
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const dialogElement = dialogRef.current
+    dialogElement?.focus()
+
+    const getFocusableElements = (): HTMLElement[] => {
+      if (!dialogElement) return []
+      return Array.from(
+        dialogElement.querySelectorAll<HTMLElement>(
+          'a[href], area[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute('disabled') && element.getAttribute('aria-hidden') !== 'true')
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+
+      if (event.key !== 'Tab') return
+
+      const focusableElements = getFocusableElements()
+      if (focusableElements.length === 0) {
+        event.preventDefault()
+        dialogElement?.focus()
+        return
+      }
+
+      const firstFocusable = focusableElements[0]
+      const lastFocusable = focusableElements[focusableElements.length - 1]
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      const isInsideDialog = activeElement ? dialogElement?.contains(activeElement) : false
+
+      if (event.shiftKey) {
+        if (!isInsideDialog || activeElement === firstFocusable) {
+          event.preventDefault()
+          lastFocusable.focus()
+        }
+        return
+      }
+
+      if (!isInsideDialog || activeElement === lastFocusable) {
+        event.preventDefault()
+        firstFocusable.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      previouslyFocused?.focus()
+    }
+  }, [onClose])
+
+  if (typeof document === 'undefined') return null
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-8">
       <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="relative w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-900"
+      >
         {children}
       </div>
     </div>,
     document.body,
+  )
+}
+
+function PodiumCard({
+  block,
+  onOpen,
+  className,
+}: {
+  block: PodiumBlock
+  onOpen: (blockId: string) => void
+  className?: string
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(block.id)}
+      className={`group relative overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition-transform duration-200 hover:-translate-y-1 hover:shadow-lg hover:shadow-slate-900/10 hover:ring-1 hover:ring-slate-300/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70 dark:border-slate-800 dark:bg-slate-900 dark:hover:shadow-black/30 dark:hover:ring-slate-700/60 ${className ?? ''}`}
+    >
+      <div className="p-4">
+        <div className="text-[11px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">{block.title}</div>
+        {block.entries.length === 0 ? <div className="mt-3 text-xs text-slate-400">No data yet.</div> : <PodiumEntries entries={block.entries} />}
+      </div>
+    </button>
+  )
+}
+
+function PodiumEntries({ entries }: { entries: PodiumEntry[] }) {
+  return (
+    <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+      {entries.slice(0, 3).map((entry, entryIdx) => {
+        const orderClass = entryIdx === 0 ? 'sm:order-2' : entryIdx === 1 ? 'sm:order-1' : 'sm:order-3'
+        const sizeClass = entryIdx === 0 ? 'sm:scale-105' : entryIdx === 2 ? 'sm:scale-95' : 'sm:scale-100'
+        return (
+          <div key={entry.puuid} className={orderClass}>
+            <div className={`relative px-4 py-3 ${sizeClass}`}>
+              <div className="flex flex-col items-center text-center gap-2">
+                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">#{entryIdx + 1}</div>
+                <div className="relative h-20 w-20 rounded-full border-2 shadow-sm overflow-visible bg-slate-100 dark:bg-slate-800 border-amber-400">
+                  <div className="h-full w-full overflow-hidden rounded-full">
+                    {entry.iconUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={entry.iconUrl} alt="" width={80} height={80} className="h-full w-full rounded-full object-cover" />
+                    ) : (
+                      <div className="h-full w-full rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-700 dark:to-slate-800" />
+                    )}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-[10px] font-semibold uppercase tracking-widest text-slate-700 dark:text-slate-100">{entry.name}</div>
+                </div>
+                <div className="text-2xl font-black tabular-nums text-slate-900 dark:text-slate-100">{entry.valueLabel ?? entry.value}</div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

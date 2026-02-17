@@ -1,7 +1,6 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { getSeasonStartIso } from '@/lib/riot/season'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import LeaderboardGraphClient from './LeaderboardGraphClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
@@ -12,6 +11,7 @@ export const revalidate = 600
 // --- Constants ---
 const DEFAULT_GRANDMASTER_CUTOFF = 200
 const DEFAULT_CHALLENGER_CUTOFF = 500
+const DEFAULT_DDRAGON_VERSION = '15.24.1'
 
 // --- Types ---
 type Player = {
@@ -20,17 +20,6 @@ type Player = {
   game_name: string | null
   tag_line: string | null
 }
-
-type LpHistoryRow = {
-  puuid: string
-  tier: string | null
-  rank: string | null
-  lp: number | null
-  wins: number | null
-  losses: number | null
-  fetched_at: string
-}
-
 
 // --- Helpers ---
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
@@ -126,8 +115,8 @@ function TeamHeaderCard({
 export default async function LeaderboardGraphPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params
   const supabase = await createClient()
-  const latestPatch = await getLatestDdragonVersion()
-  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
+  const latestPatch = await getLatestDdragonVersion().catch(() => null)
+  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || DEFAULT_DDRAGON_VERSION
 
   const { data: lb } = await supabase
     .from('leaderboards')
@@ -216,29 +205,6 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
 
   const rankBy = new Map((rankSnapshotRaw ?? []).map((row) => [row.puuid, row]))
 
-  const seasonStartIso = getSeasonStartIso()
-  const { data: historyRaw } = await dataClient
-    .from('player_lp_history')
-    .select('puuid, tier, rank, lp, wins, losses, fetched_at')
-    .in('puuid', puuids)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
-    .gte('fetched_at', seasonStartIso)
-    .order('fetched_at', { ascending: true })
-
-  const hasSeasonHistory = (historyRaw?.length ?? 0) > 0
-  const { data: fallbackHistoryRaw } = hasSeasonHistory
-    ? { data: null as LpHistoryRow[] | null }
-    : await dataClient
-        .from('player_lp_history')
-        .select('puuid, tier, rank, lp, wins, losses, fetched_at')
-        .in('puuid', puuids)
-        .eq('queue_type', 'RANKED_SOLO_5x5')
-        .order('fetched_at', { ascending: true })
-
-  const pointsForGraph = ((hasSeasonHistory ? historyRaw : fallbackHistoryRaw) as LpHistoryRow[] | null) ?? []
-
-
-
   const playersSorted = [...players].sort((a, b) =>
     compareRanks(rankBy.get(a.puuid) ?? undefined, rankBy.get(b.puuid) ?? undefined)
   )
@@ -280,7 +246,7 @@ export default async function LeaderboardGraphPage({ params }: { params: Promise
         </div>
 
         <div className="mx-auto w-full max-w-[1460px]">
-          <LeaderboardGraphClient players={playerSummaries} points={pointsForGraph} cutoffs={cutoffs} />
+          <LeaderboardGraphClient players={playerSummaries} slug={slug} cutoffs={cutoffs} />
         </div>
       </div>
     </main>

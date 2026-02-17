@@ -1,6 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
-import { cache } from 'react'
+import { cache, Suspense } from 'react'
 import { unstable_cache } from 'next/cache'
 import { getChampionMap } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
@@ -12,7 +12,8 @@ import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 
 export const revalidate = 30
-export const dynamic = 'force-dynamic'
+const DEFAULT_DDRAGON_VERSION = '15.24.1'
+const MAX_RECENT_PARTICIPANT_ROWS = 500
 
 // --- Types ---
 
@@ -89,6 +90,30 @@ interface LatestMatchRaw {
   game_end_ts: number | null
 }
 
+interface LatestGameRpcRaw {
+  match_id: string
+  puuid: string
+  champion_id: number
+  win: boolean
+  kills: number | null
+  deaths: number | null
+  assists: number | null
+  cs: number | null
+  game_end_ts: number | null
+  queue_id: number | null
+  lp_change?: number | null
+  lp_delta?: number | null
+  lp_diff?: number | null
+  lp_note?: string | null
+  note?: string | null
+  game_duration_s?: number | null
+  gameDuration?: number | null
+  game_ended_in_early_surrender?: boolean | null
+  gameEndedInEarlySurrender?: boolean | null
+  game_ended_in_surrender?: boolean | null
+  gameEndedInSurrender?: boolean | null
+}
+
 interface LpEventRaw {
   match_id: string
   puuid: string
@@ -127,10 +152,10 @@ interface MoverDeltaRaw {
 interface RecentParticipantRaw {
   puuid: string
   win: boolean | null
-  matches: {
+  matches: Array<{
     game_end_ts: number | null
     queue_id: number | null
-  } | null
+  }>
 }
 
 interface LeaderboardRaw {
@@ -149,7 +174,14 @@ interface LeaderboardPageData {
   rankByPuuidRecord: Record<string, PlayerRankSnapshot | null>
   participantsByMatchRecord: Record<string, MatchParticipant[]>
   playerIconsByPuuidRecord: Record<string, number | null>
-  preloadedMatchDataRecord: Record<string, any>
+  preloadedMatchDataRecord: Record<
+    string,
+    {
+      match: unknown
+      timeline: unknown
+      accounts: Record<string, unknown>
+    }
+  >
   playerCards: Array<{
     player: Player
     index: number
@@ -163,35 +195,55 @@ interface LeaderboardPageData {
   resolvedTopLoss: [string, number] | null
   weeklyTopGain: [string, number] | null
   resolvedWeeklyTopLoss: [string, number] | null
-  dailyStatsByPuuidRecord: Record<string, { games: number; wins: number; losses: number }>
   lastUpdatedIso: string | null
+}
+
+interface TeamHeaderCardProps {
+  name: string
+  description: string | null
+  slug: string
+  visibility: Visibility
+  activeTab: 'overview' | 'stats' | 'graph'
+  bannerUrl: string | null
+  cutoffs?: Array<{ label: string; lp: number; icon: string }>
+  lastUpdated?: string | null
+}
+
+interface MoverCardProps {
+  puuid: string
+  lpDelta: number
+  timeframeLabel: string
+  borderTone: 'emerald' | 'rose' | 'amber'
+  playersByPuuid: Record<string, Player>
+  playerIconsByPuuid: Record<string, number | null>
+  ddVersion: string
 }
 
 // --- Helpers ---
 
 async function safeDb<T>(
-  query: Promise<{ data: T | null; error: unknown }> | any,
+  query: PromiseLike<{ data: T | null; error: unknown }>,
   fallback: T,
   label?: string
 ): Promise<T> {
   const describeError = (error: unknown) => {
-    const asAny = error as any
-    let ownProps: Record<string, unknown> = {}
+    const asRecord = typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : null
+    const ownProps: Record<string, unknown> = {}
     try {
-      for (const key of Object.getOwnPropertyNames(asAny ?? {})) {
-        ownProps[key] = asAny?.[key]
+      for (const key of Object.getOwnPropertyNames(asRecord ?? {})) {
+        ownProps[key] = asRecord?.[key]
       }
     } catch {}
 
     return {
       label,
       type: typeof error,
-      constructorName: asAny?.constructor?.name ?? null,
-      message: asAny?.message ?? null,
-      details: asAny?.details ?? null,
-      hint: asAny?.hint ?? null,
-      code: asAny?.code ?? null,
-      name: asAny?.name ?? null,
+      constructorName: (asRecord?.constructor as { name?: string } | undefined)?.name ?? null,
+      message: asRecord?.message ?? null,
+      details: asRecord?.details ?? null,
+      hint: asRecord?.hint ?? null,
+      code: asRecord?.code ?? null,
+      name: asRecord?.name ?? null,
       toString: (() => {
         try {
           return String(error)
@@ -258,8 +310,29 @@ function makeLpKey(matchId: string, puuid: string): string {
   return `${matchId}-${puuid}`
 }
 
+function normalizeTimestampToMs(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  return value < 1_000_000_000_000 ? value * 1000 : value
+}
+
+function getLatestMatchEndTsMs(matches: unknown): number | null {
+  if (!matches) return null
+  const rows = Array.isArray(matches) ? matches : [matches]
+  let latestTs: number | null = null
+  for (const row of rows) {
+    const gameEndTs =
+      typeof row === 'object' && row !== null && 'game_end_ts' in row
+        ? (row as { game_end_ts?: number | null }).game_end_ts
+        : null
+    const normalized = normalizeTimestampToMs(gameEndTs)
+    if (normalized === null) continue
+    if (latestTs === null || normalized > latestTs) latestTs = normalized
+  }
+  return latestTs
+}
+
 function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) {
-  if (active.size === 0) return new Map<string, number>()
+  if (active.size === 0) return new Map<string, number>(deltas)
   const filtered = new Map<string, number>()
   for (const [puuid, delta] of deltas.entries()) {
     if (active.has(puuid)) filtered.set(puuid, delta)
@@ -267,7 +340,7 @@ function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) 
   return filtered
 }
 
-function renderLpChangePill(lpChange: number) {
+function LpChangePill({ lpChange }: { lpChange: number }) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
@@ -292,6 +365,59 @@ function renderLpChangePill(lpChange: number) {
   )
 }
 
+function MoverCard({
+  puuid,
+  lpDelta,
+  timeframeLabel,
+  borderTone,
+  playersByPuuid,
+  playerIconsByPuuid,
+  ddVersion,
+}: MoverCardProps) {
+  const player = playersByPuuid[puuid]
+  const iconId = playerIconsByPuuid[puuid]
+  const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
+  const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
+
+  const borderClass =
+    borderTone === 'emerald'
+      ? 'border-l-emerald-400 border-emerald-100 dark:border-emerald-500/40'
+      : borderTone === 'rose'
+      ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
+      : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
+
+  return (
+    <a
+      href="#"
+      data-open-pmh={puuid}
+      className={`block rounded-xl border-l-4 border-y border-r bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${borderClass}`}
+    >
+      <div className="group w-full text-left">
+        <div className="flex items-center gap-3">
+          {iconSrc ? (
+            <div className="relative h-11 w-11 shrink-0">
+              <img src={iconSrc} alt="" width={44} height={44} loading="lazy" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
+            </div>
+          ) : null}
+
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
+                <span className="truncate">{displayId}</span>
+              </span>
+              <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{timeframeLabel}</span>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
+              <LpChangePill lpChange={lpDelta} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </a>
+  )
+}
+
 const getLeaderboardBySlug = cache(async (slug: string): Promise<LeaderboardRaw | null> => {
   const supabase = await createClient()
   const { data } = await supabase
@@ -303,8 +429,9 @@ const getLeaderboardBySlug = cache(async (slug: string): Promise<LeaderboardRaw 
   return (data as LeaderboardRaw | null) ?? null
 })
 
-const getLeaderboardPageDataCached = unstable_cache(
-  async (lbId: string, ddVersion: string): Promise<LeaderboardPageData> => {
+const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
+  unstable_cache(
+  async (): Promise<LeaderboardPageData> => {
     const supabase = createServiceClient()
 
     const [
@@ -326,7 +453,7 @@ const getLeaderboardPageDataCached = unstable_cache(
         .select('queue_type, tier, cutoff_lp')
         .in('tier', ['GRANDMASTER', 'CHALLENGER']), [] as RankCutoffRaw[], 'rank_cutoffs'
       ),
-      safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lbId, lim: 10 }), [] as any[], 'get_leaderboard_latest_games')
+      safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lbId, lim: 10 }), [] as LatestGameRpcRaw[], 'get_leaderboard_latest_games')
     ])
 
     const players: Player[] = playersRaw
@@ -380,7 +507,16 @@ const getLeaderboardPageDataCached = unstable_cache(
         ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[], 'player_riot_state')
         : ([] as PlayerRiotState[]),
       allRelevantPuuids.length > 0
-        ? safeDb(supabase.from('player_rank_snapshot').select('*').in('puuid', allRelevantPuuids), [] as PlayerRankSnapshot[], 'player_rank_snapshot')
+        ? safeDb(
+            supabase
+              .from('player_rank_snapshot')
+              .select('*')
+              .in('puuid', allRelevantPuuids)
+              .in('queue_type', ['RANKED_SOLO_5x5', 'RANKED_FLEX_SR'])
+              .gte('fetched_at', seasonStartIso),
+            [] as PlayerRankSnapshot[],
+            'player_rank_snapshot'
+          )
         : ([] as PlayerRankSnapshot[]),
       top50Puuids.length > 0 ? safeDb(
         supabase
@@ -406,7 +542,7 @@ const getLeaderboardPageDataCached = unstable_cache(
               .select('puuid, win, matches!inner(game_end_ts, queue_id)')
               .in('puuid', allRelevantPuuids)
               .eq('matches.queue_id', 420)
-              .gte('matches.game_end_ts', weekStartTs),
+              .limit(MAX_RECENT_PARTICIPANT_ROWS),
             [] as RecentParticipantRaw[],
             'recent_participants_week'
           )
@@ -465,7 +601,7 @@ const getLeaderboardPageDataCached = unstable_cache(
     }
 
     const rankBy = new Map<string, PlayerRankSnapshot | null>()
-    const queuesByPuuid = new Map<string, { solo: any; flex: any }>()
+    const queuesByPuuid = new Map<string, { solo: PlayerRankSnapshot | null; flex: PlayerRankSnapshot | null }>()
 
     for (const r of ranksRaw) {
       if (r.fetched_at && (!seasonStartMsLatest || new Date(r.fetched_at).getTime() >= seasonStartMsLatest)) {
@@ -509,7 +645,7 @@ const getLeaderboardPageDataCached = unstable_cache(
     ].map((i) => ({ label: i.label, lp: cutoffsMap.get(i.key) as number, icon: i.icon })).filter((x) => x.lp !== undefined)
 
     const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
-    const filteredLatestRaw = (latestRaw ?? []).filter((row: any) => {
+    const filteredLatestRaw = (latestRaw ?? []).filter((row: LatestGameRpcRaw) => {
       if (!allowedMatchIds.has(row.match_id)) return false
       return row.queue_id === 420
     })
@@ -522,10 +658,10 @@ const getLeaderboardPageDataCached = unstable_cache(
     }
 
     const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
-    const latestGames: Game[] = filteredLatestRaw.map((row: any) => {
+    const latestGames: Game[] = filteredLatestRaw.map((row: LatestGameRpcRaw) => {
       const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
       const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
-      const durationS = row.game_duration_s ?? row.gameDuration
+      const durationS = row.game_duration_s ?? row.gameDuration ?? undefined
       const fallbackEndTs = latestMatchEndById.get(row.match_id) ?? null
 
       return {
@@ -537,9 +673,9 @@ const getLeaderboardPageDataCached = unstable_cache(
         d: row.deaths ?? 0,
         a: row.assists ?? 0,
         cs: row.cs ?? 0,
-        endTs: row.game_end_ts ?? fallbackEndTs ?? null,
+        endTs: row.game_end_ts ?? fallbackEndTs ?? undefined,
         durationS,
-        queueId: row.queue_id,
+        queueId: row.queue_id ?? undefined,
         lpChange,
         lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
         endType: computeEndType({
@@ -576,24 +712,25 @@ const getLeaderboardPageDataCached = unstable_cache(
       Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
     ) as Record<string, number | null>
 
-    const dailyStatsByPuuidRecord: Record<string, { games: number; wins: number; losses: number }> = {}
     const dailyActivePuuids = new Set<string>()
     const weeklyActivePuuids = new Set<string>()
     for (const row of recentParticipantsRaw) {
-      if (!row.puuid || !row.matches?.game_end_ts) continue
-      const endTs = row.matches.game_end_ts
+      if (!row.puuid) continue
+      const endTs = getLatestMatchEndTsMs(row.matches)
+      if (endTs === null) continue
       if (endTs >= weekStartTs) weeklyActivePuuids.add(row.puuid)
       if (endTs >= todayStartTs) dailyActivePuuids.add(row.puuid)
-      if (endTs < todayStartTs) continue
-
-      const current = dailyStatsByPuuidRecord[row.puuid] ?? { games: 0, wins: 0, losses: 0 }
-      current.games += 1
-      if (row.win) current.wins += 1
-      else current.losses += 1
-      dailyStatsByPuuidRecord[row.puuid] = current
     }
 
-    const preloadedMatchDataRecord: Record<string, any> = {}
+    // TODO: Implement server-side preloading for match detail payloads and hydrate this record.
+    const preloadedMatchDataRecord: Record<
+      string,
+      {
+        match: unknown
+        timeline: unknown
+        accounts: Record<string, unknown>
+      }
+    > = {}
 
     const playerCards = playersSorted.map((player, idx) => ({
       player,
@@ -658,23 +795,31 @@ const getLeaderboardPageDataCached = unstable_cache(
       resolvedTopLoss,
       weeklyTopGain,
       resolvedWeeklyTopLoss,
-      dailyStatsByPuuidRecord,
       lastUpdatedIso,
     }
   },
-  ['lb-page-data-v3'],
-  { revalidate: 2 }
-)
+  ['lb-page-data-v4', lbId, ddVersion],
+  { revalidate: 30 }
+)()
 
 // --- Components ---
 
-  function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs }: any) {
+  function TeamHeaderCard({ name, description, slug, visibility, activeTab, bannerUrl, cutoffs = [], lastUpdated = null }: TeamHeaderCardProps) {
+    const formattedLastUpdated = lastUpdated
+      ? new Date(lastUpdated).toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        })
+      : null
+
     return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       {bannerUrl ? (
         <div className="absolute inset-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
+          <img src={bannerUrl} alt="" width={1920} height={480} fetchPriority="high" loading="eager" className="h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-white/45 to-white/25 dark:from-slate-950/80 dark:via-slate-950/55 dark:to-slate-900/35" />
           <div className="absolute inset-0 bg-gradient-to-t from-white/75 via-white/25 to-transparent dark:from-slate-950/80 dark:via-slate-950/40 dark:to-transparent" />
         </div>
@@ -691,11 +836,16 @@ const getLeaderboardPageDataCached = unstable_cache(
           </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
+          {formattedLastUpdated ? (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Updated {formattedLastUpdated}
+            </p>
+          ) : null}
         </div>
         {cutoffs && cutoffs.length > 0 && (
           <div className="bg-gradient-to-br from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-6 lg:p-8 lg:w-80 flex flex-col justify-center gap-5 dark:from-slate-950 dark:to-slate-900 dark:border-slate-800">
             <div className="flex items-center gap-2"><div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" /><div className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Rank Cutoffs</div></div>
-            {cutoffs.map((c: any) => (<div key={c.label} className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"><img src={c.icon} alt={c.label} className="w-12 h-12 object-contain drop-shadow-sm" /><div className="flex-1"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide dark:text-slate-400">{c.label}</div><div className="text-lg font-black text-slate-900 dark:text-slate-100">{c.lp} LP</div></div></div>))}
+            {cutoffs.map((c) => (<div key={c.label} className="group flex items-center gap-4 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-slate-300 transition-all duration-200 dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"><img src={c.icon} alt={c.label} width={48} height={48} className="w-12 h-12 object-contain drop-shadow-sm" /><div className="flex-1"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide dark:text-slate-400">{c.label}</div><div className="text-lg font-black text-slate-900 dark:text-slate-100">{c.lp} LP</div></div></div>))}
           </div>
         )}
       </div>
@@ -735,46 +885,20 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
       description,
       images: [ogImageUrl],
     },
-    other: {
-      // Prefetch DNS for Riot API domains
-      'dns-prefetch': 'https://ddragon.leagueoflegends.com',
-    },
   }
 }
 
-export default async function LeaderboardDetail({
-  params,
-}: {
-  params: Promise<{ slug: string }>
-}) {
-  const { slug } = await params
+async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: string; ddVersion: string }) {
   const supabase = await createClient()
-  const [lb, latestPatch] = await Promise.all([
-    getLeaderboardBySlug(slug),
-    getLatestDdragonVersion(),
+
+  const [viewResult, data] = await Promise.all([
+    supabase.rpc('increment_leaderboard_view', { slug_input: slug }),
+    getLeaderboardPageDataCached(lbId, ddVersion),
   ])
-  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
-
-  if (!lb) notFound()
-
-  if ((lb.visibility as Visibility) === 'PRIVATE') {
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user || user.id !== lb.user_id) notFound()
+  if (viewResult.error) {
+    console.error('Failed to increment leaderboard view:', viewResult.error)
   }
 
-  void (async () => {
-    try {
-      const viewClient = await createClient()
-      const { error: viewError } = await viewClient.rpc('increment_leaderboard_view', { slug_input: slug })
-      if (viewError) {
-        console.error('Failed to increment leaderboard view:', viewError)
-      }
-    } catch (error: unknown) {
-      console.error('Failed to increment leaderboard view:', error)
-    }
-  })()
-  const data = await getLeaderboardPageDataCached(lb.id, ddVersion)
   const {
     champMap,
     playersByPuuidRecord,
@@ -784,23 +908,147 @@ export default async function LeaderboardDetail({
     preloadedMatchDataRecord,
     playerCards,
     latestGames,
-    cutoffs,
     dailyTopGain,
     resolvedTopLoss,
     weeklyTopGain,
     resolvedWeeklyTopLoss,
-    dailyStatsByPuuidRecord,
-    lastUpdatedIso,
   } = data
 
-  const dailyStatsByPuuid = new Map<string, { games: number; wins: number; losses: number }>(
-    Object.entries(dailyStatsByPuuidRecord)
-  )
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,820px)_280px] gap-8 lg:gap-10 items-start justify-center">
+      <aside className="lg:sticky lg:top-6 order-2 lg:order-1">
+        <div className="flex items-center gap-2 mb-6">
+          <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
+          <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
+        </div>
+        <LatestGamesFeedClient
+          games={latestGames}
+          playersByPuuid={playersByPuuidRecord}
+          champMap={champMap}
+          ddVersion={ddVersion}
+          rankByPuuid={rankByPuuidRecord}
+          playerIconsByPuuid={playerIconsByPuuidRecord}
+          participantsByMatch={participantsByMatchRecord}
+          preloadedMatchData={preloadedMatchDataRecord}
+        />
+      </aside>
 
+      <div className="order-1 lg:order-2 space-y-8 lg:space-y-10">
+        <div className="max-w-[820px] mx-auto">
+          <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
+        </div>
+      </div>
+
+      <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
+        <div className="flex items-center gap-2 mb-6">
+          <div className="h-1 w-8 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 rounded-full shadow-sm" />
+          <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">LP Movers</h3>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Daily Movers</div>
+          </div>
+          {dailyTopGain ? (() => {
+            const lpDelta = Math.round(dailyTopGain[1])
+            return (
+              <MoverCard
+                puuid={dailyTopGain[0]}
+                lpDelta={lpDelta}
+                timeframeLabel="24 hours"
+                borderTone="emerald"
+                playersByPuuid={playersByPuuidRecord}
+                playerIconsByPuuid={playerIconsByPuuidRecord}
+                ddVersion={ddVersion}
+              />
+            )
+          })() : (
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+              No one has gained any LP today yet.
+            </div>
+          )}
+
+          {resolvedTopLoss ? (() => {
+            const isLoss = resolvedTopLoss[1] < 0
+            const lpDelta = Math.round(resolvedTopLoss[1])
+            return (
+              <MoverCard
+                puuid={resolvedTopLoss[0]}
+                lpDelta={lpDelta}
+                timeframeLabel="24 hours"
+                borderTone={isLoss ? 'rose' : 'amber'}
+                playersByPuuid={playersByPuuidRecord}
+                playerIconsByPuuid={playerIconsByPuuidRecord}
+                ddVersion={ddVersion}
+              />
+            )
+          })() : null}
+
+          <div className="pt-2">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Weekly Movers</div>
+          </div>
+
+          {weeklyTopGain ? (() => {
+            const lpDelta = Math.round(weeklyTopGain[1])
+            return (
+              <MoverCard
+                puuid={weeklyTopGain[0]}
+                lpDelta={lpDelta}
+                timeframeLabel="7 days"
+                borderTone="emerald"
+                playersByPuuid={playersByPuuidRecord}
+                playerIconsByPuuid={playerIconsByPuuidRecord}
+                ddVersion={ddVersion}
+              />
+            )
+          })() : (
+            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+              No weekly LP changes yet.
+            </div>
+          )}
+
+          {resolvedWeeklyTopLoss ? (() => {
+            const isLoss = resolvedWeeklyTopLoss[1] < 0
+            const lpDelta = Math.round(resolvedWeeklyTopLoss[1])
+            return (
+              <MoverCard
+                puuid={resolvedWeeklyTopLoss[0]}
+                lpDelta={lpDelta}
+                timeframeLabel="7 days"
+                borderTone={isLoss ? 'rose' : 'amber'}
+                playersByPuuid={playersByPuuidRecord}
+                playerIconsByPuuid={playerIconsByPuuidRecord}
+                ddVersion={ddVersion}
+              />
+            )
+          })() : null}
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+export default async function LeaderboardDetail({
+  params,
+}: {
+  params: Promise<{ slug: string }>
+}) {
+  const { slug } = await params
+  const latestPatch = await getLatestDdragonVersion().catch(() => null)
+  const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || DEFAULT_DDRAGON_VERSION
+  const supabase = await createClient()
+  const lb = await getLeaderboardBySlug(slug)
+
+  if (!lb) notFound()
+
+  if ((lb.visibility as Visibility) === 'PRIVATE') {
+    const { data: auth } = await supabase.auth.getUser()
+    const user = auth.user
+    if (!user || user.id !== lb.user_id) notFound()
+  }
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto w-full max-w-none px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
+      <div className="mx-auto w-full px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
         <div className="mx-auto w-full max-w-[1460px]">
           <TeamHeaderCard
             name={lb.name}
@@ -808,207 +1056,20 @@ export default async function LeaderboardDetail({
             slug={slug}
             visibility={lb.visibility}
             activeTab="overview"
-            lastUpdated={lastUpdatedIso}
-            cutoffs={cutoffs}
             bannerUrl={lb.banner_url}
           />
         </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,820px)_280px] gap-8 lg:gap-10 items-start justify-center">
-          <aside className="lg:sticky lg:top-6 order-2 lg:order-1">
-            <div className="flex items-center gap-2 mb-6">
-              <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
+        <Suspense
+          fallback={
+            <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,820px)_280px] gap-8 lg:gap-10 items-start justify-center">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 h-64 animate-pulse dark:border-slate-800 dark:bg-slate-900" />
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 h-96 animate-pulse dark:border-slate-800 dark:bg-slate-900" />
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 h-64 animate-pulse dark:border-slate-800 dark:bg-slate-900" />
             </div>
-            <LatestGamesFeedClient
-              games={latestGames}
-              playersByPuuid={playersByPuuidRecord}
-              champMap={champMap}
-              ddVersion={ddVersion}
-              rankByPuuid={rankByPuuidRecord}
-              playerIconsByPuuid={playerIconsByPuuidRecord}
-              participantsByMatch={participantsByMatchRecord}
-              preloadedMatchData={preloadedMatchDataRecord}
-            />
-          </aside>
-
-          <div className="order-1 lg:order-2 space-y-8 lg:space-y-10">
-            <div className="max-w-[820px] mx-auto">
-              <PlayerMatchHistoryClient playerCards={playerCards} champMap={champMap} ddVersion={ddVersion} />
-            </div>
-          </div>
-
-          <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
-            <div className="flex items-center gap-2 mb-6">
-              <div className="h-1 w-8 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 rounded-full shadow-sm" />
-              <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">LP Movers</h3>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Daily Movers</div>
-              </div>
-              {dailyTopGain ? (() => {
-                const player = playersByPuuidRecord[dailyTopGain[0]]
-                const iconId = playerIconsByPuuidRecord[dailyTopGain[0]]
-                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
-                const stats = dailyStatsByPuuid.get(dailyTopGain[0]) ?? { games: 0, wins: 0, losses: 0 }
-                const lpDelta = Math.round(dailyTopGain[1])
-                return (
-                  <a href="#" data-open-pmh={dailyTopGain[0]} className="block rounded-xl border-l-4 border-y border-r border-l-emerald-400 border-emerald-100 bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:border-emerald-500/40 dark:bg-slate-900">
-                    <div className="group w-full text-left">
-                      <div className="flex items-center gap-3">
-                        {iconSrc ? (
-                          <div className="relative h-11 w-11 shrink-0">
-                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
-                          </div>
-                        ) : null}
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                              <span className="truncate">{displayId}</span>
-                            </span>
-                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">24 hours</span>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
-                            {renderLpChangePill(lpDelta)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </a>
-                )
-              })() : (
-                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                  No one has gained any LP today yet.
-                </div>
-              )}
-
-              {resolvedTopLoss ? (() => {
-                const player = playersByPuuidRecord[resolvedTopLoss[0]]
-                const iconId = playerIconsByPuuidRecord[resolvedTopLoss[0]]
-                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
-                const isLoss = resolvedTopLoss[1] < 0
-                const stats = dailyStatsByPuuid.get(resolvedTopLoss[0]) ?? { games: 0, wins: 0, losses: 0 }
-                const lpDelta = Math.round(resolvedTopLoss[1])
-                return (
-                  <a href="#" data-open-pmh={resolvedTopLoss[0]} className={`block rounded-xl border-l-4 border-y border-r bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${
-                    isLoss
-                      ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
-                      : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
-                  }`}>
-                    <div className="group w-full text-left">
-                      <div className="flex items-center gap-3">
-                        {iconSrc ? (
-                          <div className="relative h-11 w-11 shrink-0">
-                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
-                          </div>
-                        ) : null}
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                              <span className="truncate">{displayId}</span>
-                            </span>
-                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">24 hours</span>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
-                            {renderLpChangePill(lpDelta)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </a>
-                )
-              })() : null}
-
-              <div className="pt-2">
-                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Weekly Movers</div>
-              </div>
-
-              {weeklyTopGain ? (() => {
-                const player = playersByPuuidRecord[weeklyTopGain[0]]
-                const iconId = playerIconsByPuuidRecord[weeklyTopGain[0]]
-                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
-                const lpDelta = Math.round(weeklyTopGain[1])
-                return (
-                  <a href="#" data-open-pmh={weeklyTopGain[0]} className="block rounded-xl border-l-4 border-y border-r border-l-emerald-400 border-emerald-100 bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:border-emerald-500/40 dark:bg-slate-900">
-                    <div className="group w-full text-left">
-                      <div className="flex items-center gap-3">
-                        {iconSrc ? (
-                          <div className="relative h-11 w-11 shrink-0">
-                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
-                          </div>
-                        ) : null}
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                              <span className="truncate">{displayId}</span>
-                            </span>
-                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">7 days</span>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
-                            {renderLpChangePill(lpDelta)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </a>
-                )
-              })() : (
-                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-                  No weekly LP changes yet.
-                </div>
-              )}
-
-              {resolvedWeeklyTopLoss ? (() => {
-                const player = playersByPuuidRecord[resolvedWeeklyTopLoss[0]]
-                const iconId = playerIconsByPuuidRecord[resolvedWeeklyTopLoss[0]]
-                const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-                const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
-                const isLoss = resolvedWeeklyTopLoss[1] < 0
-                const lpDelta = Math.round(resolvedWeeklyTopLoss[1])
-                return (
-                  <a href="#" data-open-pmh={resolvedWeeklyTopLoss[0]} className={`block rounded-xl border-l-4 border-y border-r bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${
-                    isLoss
-                      ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
-                      : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
-                  }`}>
-                    <div className="group w-full text-left">
-                      <div className="flex items-center gap-3">
-                        {iconSrc ? (
-                          <div className="relative h-11 w-11 shrink-0">
-                            <img src={iconSrc} alt="" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
-                          </div>
-                        ) : null}
-
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                              <span className="truncate">{displayId}</span>
-                            </span>
-                            <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">7 days</span>
-                          </div>
-                          <div className="mt-1 flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
-                            {renderLpChangePill(lpDelta)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </a>
-                )
-              })() : null}
-            </div>
-          </aside>
-        </div>
+          }
+        >
+          <LeaderboardBody lbId={lb.id} slug={slug} ddVersion={ddVersion} />
+        </Suspense>
       </div>
     </main>
   )

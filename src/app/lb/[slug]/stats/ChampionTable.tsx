@@ -1,8 +1,14 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatRank } from '@/lib/rankFormat'
 import { getWinrateColor } from '@/lib/formatters'
+
+const CHART_HEIGHT = 460
+const CHART_WIDTH = 1000
+const PADDING = { left: 60, right: 0, top: 20, bottom: 52 }
+const PLOT_WIDTH = CHART_WIDTH - PADDING.left - PADDING.right
+const PLOT_HEIGHT = CHART_HEIGHT - PADDING.top - PADDING.bottom
 
 type ChampionRow = {
   id: number
@@ -37,35 +43,8 @@ type ChampionRow = {
   }>
 }
 
-const getRankIconSrc = (tier?: string | null) => {
-  if (!tier) return '/images/UNRANKED_SMALL.jpg'
-  return `/images/${tier.toUpperCase()}_SMALL.jpg`
-}
-
-const formatTierShort = (tier?: string | null, division?: string | null) => {
-  if (!tier) return 'UR'
-  const normalizedTier = tier.toUpperCase()
-  const tierMap: Record<string, string> = {
-    IRON: 'I',
-    BRONZE: 'B',
-    SILVER: 'S',
-    GOLD: 'G',
-    PLATINUM: 'P',
-    EMERALD: 'E',
-    DIAMOND: 'D',
-    MASTER: 'M',
-    GRANDMASTER: 'GM',
-    CHALLENGER: 'C',
-  }
-  const tierShort = tierMap[normalizedTier] ?? normalizedTier[0] ?? 'U'
-  if (['MASTER', 'GRANDMASTER', 'CHALLENGER'].includes(normalizedTier)) return tierShort
-  const divisionMap: Record<string, string> = { I: '1', II: '2', III: '3', IV: '4' }
-  const normalizedDivision = division?.toUpperCase() ?? ''
-  const divisionShort = divisionMap[normalizedDivision] ?? normalizedDivision
-  return divisionShort ? `${tierShort}${divisionShort}` : tierShort
-}
-
 export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
+  const clipId = useId()
   const [hoveredId, setHoveredId] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<'winrate' | 'games'>('games')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
@@ -125,9 +104,14 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     return [...plotRows.filter((row) => row.id !== hoveredId), hovered]
   }, [hoveredId, plotRows])
 
-  const selectedChampion = useMemo(
-    () => filteredRows.find((row) => row.id === selectedChampionId) ?? null,
+  const activeSelectedChampionId = useMemo(
+    () => (selectedChampionId && filteredRows.some((row) => row.id === selectedChampionId) ? selectedChampionId : null),
     [filteredRows, selectedChampionId]
+  )
+
+  const selectedChampion = useMemo(
+    () => filteredRows.find((row) => row.id === activeSelectedChampionId) ?? null,
+    [activeSelectedChampionId, filteredRows]
   )
 
   const playerRows = useMemo(() => {
@@ -147,22 +131,31 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     return selectedPlayer.games ? selectedPlayer.wins / selectedPlayer.games : 0
   }, [selectedPlayer])
 
-  useEffect(() => {
+  const rowsById = useMemo(() => new Map(filteredRows.map((row) => [row.id, row])), [filteredRows])
+
+  const showTooltip = useCallback((id: number, event: ReactMouseEvent<SVGGElement>) => {
+    const container = chartRef.current
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    setTooltip({
+      id,
+      x: event.clientX - rect.left + 12,
+      y: event.clientY - rect.top + 12,
+    })
+  }, [])
+
+  const hideTooltip = useCallback(() => setTooltip(null), [])
+
+  const handleChampionToggle = useCallback((id: number) => {
+    setSelectedChampionId((prev) => (prev === id ? null : id))
     setSelectedPlayerPuuid(null)
-  }, [selectedChampionId])
-  useEffect(() => {
     setHoveredPlayerPuuid(null)
-  }, [selectedChampionId])
+    setTooltip(null)
+  }, [])
+
   useEffect(() => {
-    if (!selectedChampionId) return
-    if (filteredRows.some((row) => row.id === selectedChampionId)) return
-    setSelectedChampionId(null)
-    setSelectedPlayerPuuid(null)
-    setHoveredId(null)
-  }, [filteredRows, selectedChampionId])
-  useEffect(() => {
-    if (!selectedChampionId) return
-    const node = championItemRefs.current[selectedChampionId]
+    if (!activeSelectedChampionId) return
+    const node = championItemRefs.current[activeSelectedChampionId]
     const container = championListRef.current
     if (!node || !container) return
     const nodeTop = node.offsetTop
@@ -170,7 +163,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     const containerHeight = container.clientHeight
     const target = nodeTop - containerHeight / 2 + nodeHeight / 2
     container.scrollTo({ top: target, behavior: 'smooth' })
-  }, [selectedChampionId])
+  }, [activeSelectedChampionId])
 
   const jitterForId = (id: number) => {
     const seed = (id * 9301 + 49297) % 233280
@@ -186,20 +179,15 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
     )
   }
 
-  const chartHeight = 460
-  const chartWidth = 1000
-  const padding = { left: 60, right: 0, top: 20, bottom: 52 }
-  const plotWidth = chartWidth - padding.left - padding.right
-  const plotHeight = chartHeight - padding.top - padding.bottom
   const selectedChampionJitter = selectedChampion ? jitterForId(selectedChampion.id) : null
   const selectedChampionX = selectedChampion
-    ? (selectedChampion.games / maxGames) * plotWidth + (selectedChampionJitter?.x ?? 0)
+    ? (selectedChampion.games / maxGames) * PLOT_WIDTH + (selectedChampionJitter?.x ?? 0)
     : null
   const selectedChampionY = selectedChampion
-    ? (1 - selectedChampion.winrateValue) * plotHeight + (selectedChampionJitter?.y ?? 0)
+    ? (1 - selectedChampion.winrateValue) * PLOT_HEIGHT + (selectedChampionJitter?.y ?? 0)
     : null
-  const selectedPlayerX = selectedPlayer ? (selectedPlayer.games / maxGames) * plotWidth : null
-  const selectedPlayerY = selectedPlayer ? (1 - selectedPlayerWinrateValue) * plotHeight : null
+  const selectedPlayerX = selectedPlayer ? (selectedPlayer.games / maxGames) * PLOT_WIDTH : null
+  const selectedPlayerY = selectedPlayer ? (1 - selectedPlayerWinrateValue) * PLOT_HEIGHT : null
   const selectedHighlightY = selectedPlayer ? selectedPlayerY : selectedChampionY
   const selectedWinrateLabel = selectedPlayer
     ? selectedPlayer.winrate
@@ -262,14 +250,14 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 <button
                   key={row.id}
                   type="button"
-                  onClick={() => setSelectedChampionId((prev) => (prev === row.id ? null : row.id))}
+                  onClick={() => handleChampionToggle(row.id)}
                   onMouseEnter={() => setHoveredId(row.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   ref={(el) => {
                     championItemRefs.current[row.id] = el
                   }}
                   className={`w-full text-left [direction:ltr] grid grid-cols-[40px_1fr_56px_56px] items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
-                    selectedChampionId === row.id
+                    activeSelectedChampionId === row.id
                       ? 'bg-slate-100 text-slate-900 dark:bg-slate-800/70 dark:text-slate-100'
                       : 'text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800/40'
                   }`}
@@ -277,7 +265,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                   <div className="text-[10px] font-bold text-slate-400 text-center">{idx + 1}</div>
                   {row.iconUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={row.iconUrl} alt="" className="h-6 w-6 rounded-lg border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800" />
+                    <img src={row.iconUrl} alt="" width={24} height={24} className="h-6 w-6 rounded-lg border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800" />
                   ) : (
                     <div className="h-6 w-6 rounded-lg border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
                   )}
@@ -317,7 +305,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                     <div className="flex min-w-0 items-center gap-2">
                       {player.iconUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img src={player.iconUrl} alt="" className="h-6 w-6 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800" />
+                        <img src={player.iconUrl} alt="" width={24} height={24} className="h-6 w-6 rounded-full border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800" />
                       ) : (
                         <div className="h-6 w-6 rounded-full border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
                       )}
@@ -393,40 +381,33 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                   onClick={() => {
                     setSelectedChampionId(null)
                     setSelectedPlayerPuuid(null)
+                    setHoveredPlayerPuuid(null)
                     setHoveredId(null)
+                    setTooltip(null)
                   }}
                   className="absolute bottom-3 right-3 z-10 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-[11px] font-semibold text-slate-600 shadow-sm transition hover:bg-white hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950/80 dark:text-slate-300 dark:hover:text-slate-100"
                 >
                   Reset
                 </button>
-                <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} width="100%" height={chartHeight} role="img" aria-label="Champion winrate by games played scatter plot">
+                 <svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} width="100%" height={CHART_HEIGHT} role="img" aria-label="Champion winrate by games played scatter plot">
               <defs>
-                {plotRows.map((row) => (
-                  <clipPath key={`clip-${row.id}`} id={`clip-${row.id}`}>
-                    <circle cx={0} cy={0} r={14} />
-                  </clipPath>
-                ))}
-                {selectedChampion?.players.map((player) => (
-                  <clipPath key={`clip-player-${player.puuid}`} id={`clip-player-${player.puuid}`}>
-                    <circle cx={0} cy={0} r={14} />
-                  </clipPath>
-                ))}
-                {selectedPlayer?.iconUrl ? (
-                  <clipPath id="clip-player">
-                    <circle cx={0} cy={0} r={16} />
-                  </clipPath>
-                ) : null}
+                <clipPath id={`clip-icon-14-${clipId}`}>
+                  <circle cx={0} cy={0} r={14} />
+                </clipPath>
+                <clipPath id={`clip-icon-16-${clipId}`}>
+                  <circle cx={0} cy={0} r={16} />
+                </clipPath>
               </defs>
-              <g transform={`translate(${padding.left}, ${padding.top})`}>
-                <rect x={0} y={0} width={plotWidth} height={plotHeight / 2} className="fill-emerald-500/5" />
-                <rect x={0} y={plotHeight / 2} width={plotWidth} height={plotHeight / 2} className="fill-rose-500/5" />
-                <line x1={0} y1={plotHeight / 2} x2={plotWidth} y2={plotHeight / 2} stroke="currentColor" className="text-slate-500/30" strokeDasharray="2 6" strokeLinecap="round" />
+              <g transform={`translate(${PADDING.left}, ${PADDING.top})`}>
+                <rect x={0} y={0} width={PLOT_WIDTH} height={PLOT_HEIGHT / 2} className="fill-emerald-500/5" />
+                <rect x={0} y={PLOT_HEIGHT / 2} width={PLOT_WIDTH} height={PLOT_HEIGHT / 2} className="fill-rose-500/5" />
+                <line x1={0} y1={PLOT_HEIGHT / 2} x2={PLOT_WIDTH} y2={PLOT_HEIGHT / 2} stroke="currentColor" className="text-slate-500/30" strokeDasharray="2 6" strokeLinecap="round" />
                 {selectedPlayer ? (
                   <line
                     x1={selectedPlayerX ?? 0}
                     x2={selectedPlayerX ?? 0}
                     y1={0}
-                    y2={plotHeight}
+                    y2={PLOT_HEIGHT}
                     stroke="currentColor"
                     className="text-blue-400/70"
                     strokeDasharray="6 6"
@@ -437,7 +418,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                     x1={selectedChampionX ?? 0}
                     x2={selectedChampionX ?? 0}
                     y1={0}
-                    y2={plotHeight}
+                    y2={PLOT_HEIGHT}
                     stroke="currentColor"
                     className="text-blue-400/70"
                     strokeDasharray="6 6"
@@ -447,7 +428,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 {selectedHighlightY !== null ? (
                   <line
                     x1={0}
-                    x2={plotWidth}
+                    x2={PLOT_WIDTH}
                     y1={selectedHighlightY}
                     y2={selectedHighlightY}
                     stroke="currentColor"
@@ -459,9 +440,9 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 ) : null}
                 {yTicks.map((tick) => (
                   <g key={`y-${tick}`}>
-                    <line x1={0} y1={(1 - tick) * plotHeight} x2={plotWidth} y2={(1 - tick) * plotHeight} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeDasharray="4 4" />
+                    <line x1={0} y1={(1 - tick) * PLOT_HEIGHT} x2={PLOT_WIDTH} y2={(1 - tick) * PLOT_HEIGHT} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeDasharray="4 4" />
                     {!selectedChampion && !selectedPlayer ? (
-                      <text x={-10} y={(1 - tick) * plotHeight + 4} textAnchor="end" className="fill-slate-400 text-[10px] font-semibold dark:fill-slate-500">
+                      <text x={-10} y={(1 - tick) * PLOT_HEIGHT + 4} textAnchor="end" className="fill-slate-400 text-[10px] font-semibold dark:fill-slate-500">
                         {Math.round(tick * 100)}%
                       </text>
                     ) : null}
@@ -469,9 +450,9 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 ))}
                 {xTicks.map((tick) => (
                   <g key={`x-${tick.value}`}>
-                    <line x1={tick.ratio * plotWidth} y1={plotHeight} x2={tick.ratio * plotWidth} y2={plotHeight + 6} stroke="currentColor" className="text-slate-300 dark:text-slate-700" />
+                    <line x1={tick.ratio * PLOT_WIDTH} y1={PLOT_HEIGHT} x2={tick.ratio * PLOT_WIDTH} y2={PLOT_HEIGHT + 6} stroke="currentColor" className="text-slate-300 dark:text-slate-700" />
                     {!selectedChampion && !selectedPlayer && tick.ratio > 0 && tick.ratio < 1 ? (
-                      <text x={tick.ratio * plotWidth} y={plotHeight + 22} textAnchor="middle" className="fill-slate-400 text-[10px] font-semibold dark:fill-slate-500">
+                      <text x={tick.ratio * PLOT_WIDTH} y={PLOT_HEIGHT + 22} textAnchor="middle" className="fill-slate-400 text-[10px] font-semibold dark:fill-slate-500">
                         {Math.round(maxGames * tick.ratio)}
                       </text>
                     ) : null}
@@ -490,7 +471,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 {selectedGamesLabel !== null && (selectedPlayer ? selectedPlayerX !== null : selectedChampionX !== null) ? (
                   <text
                     x={selectedPlayer ? (selectedPlayerX ?? 0) : (selectedChampionX ?? 0)}
-                    y={plotHeight + 22}
+                    y={PLOT_HEIGHT + 22}
                     textAnchor="middle"
                     className="fill-blue-300 text-[11px] font-semibold"
                   >
@@ -499,24 +480,38 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 ) : null}
                 {displayRows.map((row) => {
                   const jitter = jitterForId(row.id)
-                  const x = (row.games / maxGames) * plotWidth + jitter.x
-                  const y = (1 - row.winrateValue) * plotHeight + jitter.y
+                  const x = (row.games / maxGames) * PLOT_WIDTH + jitter.x
+                  const y = (1 - row.winrateValue) * PLOT_HEIGHT + jitter.y
                   const isHovered = hoveredId === row.id
-                  const isSelected = selectedChampionId === row.id
-                  const isDimmed = selectedChampionId !== null && !isSelected
-                  const isChampionLocked = selectedChampionId !== null && !isSelected
+                  const isSelected = activeSelectedChampionId === row.id
+                  const isDimmed = activeSelectedChampionId !== null && !isSelected
+                  const isChampionLocked = activeSelectedChampionId !== null && !isSelected
                   return (
                     <g
                       key={row.id}
                       transform={`translate(${x}, ${y}) scale(${isHovered || isSelected ? 1.12 : 1})`}
                       onMouseEnter={() => setHoveredId(row.id)}
-                      onMouseLeave={() => setHoveredId(null)}
+                      onMouseLeave={() => {
+                        setHoveredId(null)
+                        hideTooltip()
+                      }}
+                      onMouseMove={(event) => showTooltip(row.id, event)}
                       onClick={() => {
                         if (isChampionLocked) return
-                        setSelectedChampionId((prev) => (prev === row.id ? null : row.id))
+                        handleChampionToggle(row.id)
                       }}
                       onFocus={() => setHoveredId(row.id)}
-                      onBlur={() => setHoveredId(null)}
+                      onBlur={() => {
+                        setHoveredId(null)
+                        hideTooltip()
+                      }}
+                      onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault()
+                            if (isChampionLocked) return
+                            handleChampionToggle(row.id)
+                          }
+                      }}
                       role="button"
                       tabIndex={0}
                       className={`transition-opacity ${
@@ -531,7 +526,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                           y={-14}
                           width={28}
                           height={28}
-                          clipPath={`url(#clip-${row.id})`}
+                          clipPath={`url(#clip-icon-14-${clipId})`}
                           preserveAspectRatio="xMidYMid slice"
                           className={isHovered || isSelected ? 'drop-shadow-[0_0_12px_rgba(59,130,246,0.7)]' : ''}
                         />
@@ -550,8 +545,8 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                       if (selectedPlayerPuuid === player.puuid) return null
                       const jitter = jitterForId(idx + 1)
                       const winrateValue = player.games ? player.wins / player.games : 0
-                      const px = (player.games / maxGames) * plotWidth + jitter.x * 0.5
-                      const py = (1 - winrateValue) * plotHeight + jitter.y * 0.5
+                      const px = (player.games / maxGames) * PLOT_WIDTH + jitter.x * 0.5
+                      const py = (1 - winrateValue) * PLOT_HEIGHT + jitter.y * 0.5
                       const isPlayerHovered = hoveredPlayerPuuid === player.puuid
                       const isPlayerSelected = selectedPlayerPuuid === player.puuid
                       const scale = isPlayerHovered || isPlayerSelected ? 1.15 : 1
@@ -562,6 +557,12 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                           onMouseEnter={() => setHoveredPlayerPuuid(player.puuid)}
                           onMouseLeave={() => setHoveredPlayerPuuid(null)}
                           onClick={() => setSelectedPlayerPuuid(player.puuid)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              setSelectedPlayerPuuid(player.puuid)
+                            }
+                          }}
                           role="button"
                           tabIndex={0}
                           className="cursor-pointer"
@@ -573,7 +574,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                               y={-14}
                               width={28}
                               height={28}
-                              clipPath={`url(#clip-player-${player.puuid})`}
+                              clipPath={`url(#clip-icon-14-${clipId})`}
                               preserveAspectRatio="xMidYMid slice"
                               className={isPlayerHovered || isPlayerSelected ? 'drop-shadow-[0_0_12px_rgba(59,130,246,0.7)]' : 'drop-shadow-[0_0_8px_rgba(59,130,246,0.6)]'}
                             />
@@ -592,7 +593,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                 ) : null}
                 {selectedPlayer ? (
                   <g
-                    transform={`translate(${(selectedPlayer.games / maxGames) * plotWidth}, ${(1 - selectedPlayerWinrateValue) * plotHeight})`}
+                    transform={`translate(${(selectedPlayer.games / maxGames) * PLOT_WIDTH}, ${(1 - selectedPlayerWinrateValue) * PLOT_HEIGHT})`}
                     className="pointer-events-none"
                   >
                     <title>{`${selectedPlayer.name} • ${selectedPlayer.winrate} • ${selectedPlayer.games} games`}</title>
@@ -603,7 +604,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
                         y={-16}
                         width={32}
                         height={32}
-                        clipPath="url(#clip-player)"
+                        clipPath={`url(#clip-icon-16-${clipId})`}
                         preserveAspectRatio="xMidYMid slice"
                         className="drop-shadow-[0_0_14px_rgba(16,185,129,0.7)]"
                       />
@@ -625,7 +626,7 @@ export default function ChampionTable({ rows }: { rows: ChampionRow[] }) {
             {tooltip ? (
               <div className="pointer-events-none absolute z-10 rounded-xl border border-slate-800/70 bg-slate-950/85 px-3 py-2 text-xs text-slate-200 shadow-lg backdrop-blur" style={{ left: tooltip.x, top: tooltip.y }}>
                 {(() => {
-                  const champ = rows.find((row) => row.id === tooltip.id)
+                  const champ = rowsById.get(tooltip.id)
                   if (!champ) return null
                   return (
                     <div className="space-y-1">

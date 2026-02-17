@@ -2,11 +2,15 @@
 
 import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import dynamic from 'next/dynamic'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
-import MatchDetailsModal, { preloadStaticData } from './MatchDetailsModal'
 import { useMatchPrefetch } from './useMatchPrefetch'
+
+const MatchDetailsModal = dynamic(() => import('./MatchDetailsModal'), {
+  ssr: false,
+})
 
 const LIVE_TIME_INTERVAL_MS = 60_000
 const FEED_REFRESH_INTERVAL_MS = 60_000
@@ -241,7 +245,7 @@ const GameItem = memo(({
               <span className="text-[11px] leading-none">{lpNote === 'PROMOTED' ? '▲' : '▼'}</span>
               {rankIcon && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />
+                <img src={rankIcon} alt="" width={12} height={12} className="h-3 w-3 object-contain" loading="lazy" />
               )}
               <span>{rankLabel}</span>
             </span>
@@ -281,7 +285,7 @@ const GameItem = memo(({
     >
       {rankIcon && (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />
+        <img src={rankIcon} alt="" width={12} height={12} className="h-3 w-3 object-contain" loading="lazy" />
       )}
       {rankLabel} <span className="text-[9px] opacity-70">(N/A)</span>
     </span>
@@ -305,6 +309,8 @@ const GameItem = memo(({
               <img
                 src={champSrc}
                 alt=""
+                width={44}
+                height={44}
                 loading="lazy"
                 className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800"
               />
@@ -314,6 +320,8 @@ const GameItem = memo(({
               <img
                 src={profileIconSrc}
                 alt=""
+                width={22}
+                height={22}
                 className="absolute -bottom-1 -right-1 h-5.5 w-5.5 rounded-full border-2 border-white bg-slate-100 object-cover shadow-sm dark:border-slate-900 dark:bg-slate-800"
                 loading="lazy"
               />
@@ -418,13 +426,25 @@ export default function LatestGamesFeedClient({
 }) {
   const router = useRouter()
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
+  const [isInitializing, setIsInitializing] = useState(games.length === 0)
   const { prefetchMatch, getPrefetchedData } = useMatchPrefetch()
   const prefetchedMatches = useRef<Set<string>>(new Set())
   const participantsByMatchRef = useRef(participantsByMatch)
+  const initRefreshTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     participantsByMatchRef.current = participantsByMatch
   }, [participantsByMatch])
+
+  useEffect(() => {
+    if (games.length > 0) {
+      setIsInitializing(false)
+      if (initRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(initRefreshTimeoutRef.current)
+        initRefreshTimeoutRef.current = null
+      }
+    }
+  }, [games.length])
 
   // Keep feed fresh in production without manual refresh
   useEffect(() => {
@@ -435,6 +455,12 @@ export default function LatestGamesFeedClient({
     }
 
     refreshIfVisible()
+    if (games.length === 0) {
+      initRefreshTimeoutRef.current = window.setTimeout(() => {
+        setIsInitializing(false)
+        initRefreshTimeoutRef.current = null
+      }, 2000)
+    }
 
     const interval = window.setInterval(refreshIfVisible, FEED_REFRESH_INTERVAL_MS)
 
@@ -443,15 +469,19 @@ export default function LatestGamesFeedClient({
     return () => {
       window.clearInterval(interval)
       window.removeEventListener('focus', refreshIfVisible)
+      if (initRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(initRefreshTimeoutRef.current)
+        initRefreshTimeoutRef.current = null
+      }
     }
-  }, [router])
+  }, [router, games.length])
 
   // Prefetch on hover only; avoid eager network work on initial page load
 
   const handleGameHover = useCallback((matchId: string) => {
     if (!matchId || participantsByMatchRef.current[matchId]?.length === 0) return
     if (prefetchedMatches.current.has(matchId)) return
-    preloadStaticData(ddVersion)
+    void import('./MatchDetailsModal').then((mod) => mod.preloadStaticData(ddVersion))
     prefetchMatch(matchId)
     prefetchedMatches.current.add(matchId)
   }, [prefetchMatch, ddVersion])
@@ -496,6 +526,19 @@ export default function LatestGamesFeedClient({
   const selectedParticipants = useMemo(() => {
     return selectedGame ? participantsByMatch[selectedGame.matchId] ?? [] : []
   }, [selectedGame, participantsByMatch])
+
+  if (games.length === 0 && isInitializing) {
+    return (
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div className="space-y-2 animate-pulse">
+          <div className="h-3 w-20 rounded bg-slate-200 dark:bg-slate-700" />
+          <div className="h-9 rounded-lg bg-slate-100 dark:bg-slate-800" />
+          <div className="h-9 rounded-lg bg-slate-100 dark:bg-slate-800" />
+          <div className="h-9 rounded-lg bg-slate-100 dark:bg-slate-800" />
+        </div>
+      </div>
+    )
+  }
 
   if (games.length === 0) {
     return (

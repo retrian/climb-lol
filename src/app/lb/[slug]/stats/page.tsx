@@ -4,7 +4,6 @@ import { getChampionMap, championIconUrl } from '@/lib/champions'
 import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { getSeasonStartIso } from '@/lib/riot/season'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
-import { timeAgo } from '@/lib/timeAgo'
 import ChampionTable from './ChampionTable'
 import StatsHighlightsClient, { type ListBlock, type PodiumBlock } from '@/app/lb/[slug]/stats/StatsHighlightsClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
@@ -35,14 +34,11 @@ type MatchParticipantRow = MatchParticipant & {
     game_duration_s: number | null
     game_end_ts: number | null
     queue_id?: number | null
-  } | null
-}
-
-type MatchRow = {
-  match_id: string
-  game_duration_s: number | null
-  game_end_ts: number | null
-  queue_id?: number | null
+  } | {
+    game_duration_s: number | null
+    game_end_ts: number | null
+    queue_id?: number | null
+  }[] | null
 }
 
 type StatTotals = {
@@ -137,10 +133,6 @@ function topUniquePlayers<T extends { puuid: string }>(rows: T[], limit = Number
   return unique
 }
 
-function uniqueByPuuid<T extends { puuid: string }>(rows: T[]) {
-  return topUniquePlayers(rows)
-}
-
 // --- Components ---
 
 function TeamHeaderCard({
@@ -205,15 +197,18 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const { slug } = await params
   const supabase = await createClient()
 
-  const latestPatch = await getLatestDdragonVersion()
+  const [latestPatch, leaderboardRes] = await Promise.all([
+    getLatestDdragonVersion(),
+    supabase
+      .from('leaderboards')
+      .select('id, user_id, name, visibility, banner_url, description')
+      .eq('slug', slug)
+      .maybeSingle(),
+  ])
   const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'
   const champMap = await getChampionMap(ddVersion)
 
-  const { data: lb } = await supabase
-    .from('leaderboards')
-    .select('id, user_id, name, visibility, banner_url, description')
-    .eq('slug', slug)
-    .maybeSingle()
+  const { data: lb } = leaderboardRes
 
 
   if (!lb) notFound()
@@ -279,46 +274,48 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
 
   const seasonStartMs = new Date(getSeasonStartIso({ ddVersion })).getTime()
 
-  const { data: stateRaw } = await supabase
-    .from('player_riot_state')
-    .select('puuid, profile_icon_id')
-    .in('puuid', puuids)
+  const [stateRes, rankRes, participantsRes] = await Promise.all([
+    supabase
+      .from('player_riot_state')
+      .select('puuid, profile_icon_id')
+      .in('puuid', puuids),
+    supabase
+      .from('player_rank_snapshot')
+      .select('puuid, queue_type, tier, rank, league_points, wins, losses')
+      .in('puuid', puuids),
+    supabase
+      .from('match_participants')
+      .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, end_type, matches!inner(game_duration_s, game_end_ts, queue_id)')
+      .in('puuid', puuids)
+      .or('end_type.is.null,end_type.neq.REMAKE')
+      .eq('matches.queue_id', 420)
+      .gte('matches.game_end_ts', seasonStartMs),
+  ])
 
-
-  const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
-
-  const { data: rankSnapshotRaw } = await supabase
-    .from('player_rank_snapshot')
-    .select('puuid, queue_type, tier, rank, league_points, wins, losses')
-    .in('puuid', puuids)
-
+  const stateBy = new Map((stateRes.data ?? []).map((row) => [row.puuid, row]))
+  const iconUrlByPuuid = new Map(
+    puuids.map((puuid) => [puuid, profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion)])
+  )
 
   const rankByPuuid = new Map(
-    (rankSnapshotRaw ?? [])
+    (rankRes.data ?? [])
       .filter((row) => row.queue_type === 'RANKED_SOLO_5x5')
       .map((row) => [row.puuid, row])
   )
-
-  const { data: participantsRaw } = await supabase
-    .from('match_participants')
-    .select('match_id, puuid, champion_id, kills, deaths, assists, cs, win, vision_score, end_type, matches!inner(game_duration_s, game_end_ts, queue_id)')
-    .in('puuid', puuids)
-    .or('end_type.is.null,end_type.neq.REMAKE')
-    .eq('matches.queue_id', 420)
-    .gte('matches.game_end_ts', seasonStartMs)
 
 
   // Build match Map from joined matches to avoid separate batched queries
   const matchById = new Map<string, { durationS: number; endTs: number }>()
   const participants: MatchParticipant[] = []
 
-  const participantRows = (participantsRaw ?? []) as unknown as MatchParticipantRow[]
+  const participantRows = (participantsRes.data ?? []) as unknown as MatchParticipantRow[]
   const seenPlayerMatch = new Set<string>()
   for (const row of participantRows) {
     const endType = String(row.end_type ?? '').toUpperCase()
     if (endType === 'REMAKE') continue
 
-    const durationS = Number((Array.isArray(row.matches) ? row.matches[0]?.game_duration_s : row.matches?.game_duration_s) ?? 0)
+    const match = Array.isArray(row.matches) ? row.matches[0] : row.matches
+    const durationS = Number(match?.game_duration_s ?? 0)
     // Fallback remake exclusion for legacy/misclassified rows:
     // treat <= 3 minutes as remake-like.
     if (Number.isFinite(durationS) && durationS > 0 && durationS <= 180) continue
@@ -327,7 +324,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     if (seenPlayerMatch.has(dedupeKey)) continue
     seenPlayerMatch.add(dedupeKey)
 
-    const match = Array.isArray(row.matches) ? row.matches[0] : row.matches
     if (!match || typeof match.game_end_ts !== 'number') continue
     matchById.set(row.match_id, {
       durationS: typeof match.game_duration_s === 'number' ? match.game_duration_s : 0,
@@ -363,6 +359,14 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
   const playersTotals = new Map<string, StatTotals>()
   const championsTotals = new Map<number, StatTotals>()
   const championPlayers = new Map<number, Map<string, StatTotals>>()
+  const participantsByMatch = new Map<string, MatchParticipant[]>()
+  const winDurationByPuuid = new Map<string, { total: number; wins: number }>()
+  const lossDurationByPuuid = new Map<string, { total: number; losses: number }>()
+  const bestKillsByPuuid = new Map<string, number>()
+  const bestDeathsByPuuid = new Map<string, number>()
+  const bestAssistsByPuuid = new Map<string, number>()
+  const bestCsByPuuid = new Map<string, number>()
+  const bestVisionByPuuid = new Map<string, number>()
 
   for (const row of participants) {
     const matchMeta = matchById.get(row.match_id)!
@@ -424,6 +428,43 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     champPlayer.assists += row.assists
     champPlayer.cs += row.cs
     champPlayer.durationS += durationS
+
+    const matchParticipants = participantsByMatch.get(row.match_id)
+    if (matchParticipants) {
+      matchParticipants.push(row)
+    } else {
+      participantsByMatch.set(row.match_id, [row])
+    }
+
+    if (durationS > 0) {
+      if (row.win) {
+        const winEntry = winDurationByPuuid.get(row.puuid) ?? { total: 0, wins: 0 }
+        winEntry.total += durationS
+        winEntry.wins += 1
+        winDurationByPuuid.set(row.puuid, winEntry)
+      } else {
+        const lossEntry = lossDurationByPuuid.get(row.puuid) ?? { total: 0, losses: 0 }
+        lossEntry.total += durationS
+        lossEntry.losses += 1
+        lossDurationByPuuid.set(row.puuid, lossEntry)
+      }
+    }
+
+    if (row.kills > (bestKillsByPuuid.get(row.puuid) ?? Number.NEGATIVE_INFINITY)) {
+      bestKillsByPuuid.set(row.puuid, row.kills)
+    }
+    if (row.deaths > (bestDeathsByPuuid.get(row.puuid) ?? Number.NEGATIVE_INFINITY)) {
+      bestDeathsByPuuid.set(row.puuid, row.deaths)
+    }
+    if (row.assists > (bestAssistsByPuuid.get(row.puuid) ?? Number.NEGATIVE_INFINITY)) {
+      bestAssistsByPuuid.set(row.puuid, row.assists)
+    }
+    if (row.cs > (bestCsByPuuid.get(row.puuid) ?? Number.NEGATIVE_INFINITY)) {
+      bestCsByPuuid.set(row.puuid, row.cs)
+    }
+    if (typeof row.vision_score === 'number' && row.vision_score > (bestVisionByPuuid.get(row.puuid) ?? Number.NEGATIVE_INFINITY)) {
+      bestVisionByPuuid.set(row.puuid, row.vision_score)
+    }
   }
 
   const playerLeaderboard = Array.from(playersTotals.entries()).map(([puuid, stats]) => {
@@ -432,7 +473,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     return {
       puuid,
       name: player ? displayRiotId(player) : puuid,
-      iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+      iconUrl: iconUrlByPuuid.get(puuid) ?? null,
       ...stats,
       winrate: formatWinrate(stats.wins, stats.games),
       kda,
@@ -460,7 +501,7 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         puuid,
         name: player ? displayRiotId(player) : puuid,
         tagLine: player?.tag_line ?? null,
-        iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+        iconUrl: iconUrlByPuuid.get(puuid) ?? null,
         games: values.games,
         wins: values.wins,
         losses: values.losses,
@@ -517,80 +558,33 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     players: champ.players,
   }))
 
-  const championTotalsKda = (totals.kills + totals.assists) / Math.max(1, totals.deaths)
-  const championTotalsAvgCs = totals.games > 0 ? totals.cs / totals.games : 0
-  const championRollup = championTableRows.reduce(
-    (acc, row) => {
-      acc.games += row.games
-      acc.wins += row.wins
-      acc.losses += row.losses
-      return acc
-    },
-    { games: 0, wins: 0, losses: 0 }
-  )
-  const playerRollup = playerLeaderboard.reduce(
-    (acc, row) => {
-      acc.games += row.games
-      acc.wins += row.wins
-      acc.losses += row.losses
-      return acc
-    },
-    { games: 0, wins: 0, losses: 0 }
-  )
-  const integrityMismatch =
-    championRollup.games !== totals.games
-    || championRollup.wins !== totals.wins
-    || championRollup.losses !== totals.losses
-    || playerRollup.games !== totals.games
-    || playerRollup.wins !== totals.wins
-    || playerRollup.losses !== totals.losses
-
   const averagePerGame = (value: number, games: number) => (games > 0 ? value / games : 0)
-  const topKills = uniqueByPuuid([...playerLeaderboard].sort((a, b) => averagePerGame(b.kills, b.games) - averagePerGame(a.kills, a.games)))
-  const topDeaths = uniqueByPuuid([...playerLeaderboard].sort((a, b) => averagePerGame(b.deaths, b.games) - averagePerGame(a.deaths, a.games)))
-  const topAssists = uniqueByPuuid([...playerLeaderboard].sort((a, b) => averagePerGame(b.assists, b.games) - averagePerGame(a.assists, a.games)))
-  const topKdaPlayers = uniqueByPuuid([...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value))
-  const bottomKdaPlayers = uniqueByPuuid([...playerLeaderboard].sort((a, b) => a.kda.value - b.kda.value))
-  const topTotalTime = uniqueByPuuid([...playerLeaderboard].sort((a, b) => b.durationS - a.durationS))
+  const topKills = [...playerLeaderboard].sort((a, b) => averagePerGame(b.kills, b.games) - averagePerGame(a.kills, a.games))
+  const topDeaths = [...playerLeaderboard].sort((a, b) => averagePerGame(b.deaths, b.games) - averagePerGame(a.deaths, a.games))
+  const topAssists = [...playerLeaderboard].sort((a, b) => averagePerGame(b.assists, b.games) - averagePerGame(a.assists, a.games))
+  const topKdaPlayers = [...playerLeaderboard].sort((a, b) => b.kda.value - a.kda.value)
+  const topTotalTime = [...playerLeaderboard].sort((a, b) => b.durationS - a.durationS)
 
-  const topKillsSingle = topUniquePlayers([...participants].sort((a, b) => b.kills - a.kills))
-  const topDeathsSingle = topUniquePlayers([...participants].sort((a, b) => b.deaths - a.deaths))
-  const topAssistsSingle = topUniquePlayers([...participants].sort((a, b) => b.assists - a.assists))
-  const topCsSingle = topUniquePlayers([...participants].sort((a, b) => b.cs - a.cs))
-  const topVisionSingle = topUniquePlayers(
-    [...participants]
-      .filter((row) => typeof row.vision_score === 'number')
-      .sort((a, b) => (b.vision_score ?? 0) - (a.vision_score ?? 0)),
-  )
+  const toSingleStatRows = (map: Map<string, number>) =>
+    Array.from(map.entries())
+      .map(([puuid, value]) => ({ puuid, value }))
+      .sort((a, b) => b.value - a.value)
+
+  const topKillsSingle = toSingleStatRows(bestKillsByPuuid)
+  const topDeathsSingle = toSingleStatRows(bestDeathsByPuuid)
+  const topAssistsSingle = toSingleStatRows(bestAssistsByPuuid)
+  const topCsSingle = toSingleStatRows(bestCsByPuuid)
+  const topVisionSingle = toSingleStatRows(bestVisionByPuuid)
 
   const singleGameBlocks = [
-    { id: 'single-kills', title: 'Most Kills / Match', data: topKillsSingle, key: 'kills', accent: 'from-rose-400 to-rose-600' },
-    { id: 'single-deaths', title: 'Most Deaths / Match', data: topDeathsSingle, key: 'deaths', accent: 'from-slate-400 to-slate-600' },
-    { id: 'single-assists', title: 'Most Assists / Match', data: topAssistsSingle, key: 'assists', accent: 'from-emerald-400 to-emerald-600' },
-    { id: 'single-cs', title: 'Most CS / Match', data: topCsSingle, key: 'cs', accent: 'from-sky-400 to-sky-600' },
-    { id: 'single-vision', title: 'Most Vision / Match', data: topVisionSingle, key: 'vision_score', accent: 'from-violet-400 to-violet-600' },
+    { id: 'single-kills', title: 'Most Kills / Match', data: topKillsSingle, accent: 'from-rose-400 to-rose-600' },
+    { id: 'single-deaths', title: 'Most Deaths / Match', data: topDeathsSingle, accent: 'from-slate-400 to-slate-600' },
+    { id: 'single-assists', title: 'Most Assists / Match', data: topAssistsSingle, accent: 'from-emerald-400 to-emerald-600' },
+    { id: 'single-cs', title: 'Most CS / Match', data: topCsSingle, accent: 'from-sky-400 to-sky-600' },
+    { id: 'single-vision', title: 'Most Vision / Match', data: topVisionSingle, accent: 'from-violet-400 to-violet-600' },
   ]
   const singleGameTopRow = singleGameBlocks.slice(0, 3)
   const singleGameBottomRow = singleGameBlocks.slice(3)
-
-  const participantsByMatch = new Map<string, MatchParticipant[]>()
-  for (const row of participants) {
-    const matchParticipants = participantsByMatch.get(row.match_id)
-    if (matchParticipants) {
-      matchParticipants.push(row)
-    } else {
-      participantsByMatch.set(row.match_id, [row])
-    }
-  }
-
-
-  const endTypeByMatch = new Map<string, string>()
-  for (const row of participants) {
-    if (!row.end_type) continue
-    if (!endTypeByMatch.has(row.match_id)) {
-      endTypeByMatch.set(row.match_id, row.end_type)
-    }
-  }
 
 
   const matchSummaries = Array.from(matchById.entries()).map(([matchId, meta]) => {
@@ -603,67 +597,41 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
       endTs: meta.endTs,
       puuid: representative?.puuid ?? 'Unknown',
       playerName: player ? displayRiotId(player) : representative?.puuid ?? 'Unknown',
-      playerIconUrl: representative
-        ? profileIconUrl(stateBy.get(representative.puuid)?.profile_icon_id ?? null, ddVersion)
-        : null,
+      playerIconUrl: representative ? (iconUrlByPuuid.get(representative.puuid) ?? null) : null,
     }
   })
 
-  const longestMatches = uniqueByPuuid(
+  const longestMatches = topUniquePlayers(
     matchSummaries
       .filter((match) => match.durationS > 0)
       .sort((a, b) => b.durationS - a.durationS),
   )
-
-
-  const winsWithDuration = participants.filter((row) => row.win && (matchById.get(row.match_id)?.durationS ?? 0) > 0)
-  const lossesWithDuration = participants.filter((row) => !row.win && (matchById.get(row.match_id)?.durationS ?? 0) > 0)
-  const winDurationByPuuid = new Map<string, { total: number; wins: number }>()
-  for (const row of winsWithDuration) {
-    const durationS = matchById.get(row.match_id)?.durationS ?? 0
-    if (!durationS) continue
-    const entry = winDurationByPuuid.get(row.puuid) ?? { total: 0, wins: 0 }
-    entry.total += durationS
-    entry.wins += 1
-    winDurationByPuuid.set(row.puuid, entry)
-  }
-  const lossDurationByPuuid = new Map<string, { total: number; losses: number }>()
-  for (const row of lossesWithDuration) {
-    const durationS = matchById.get(row.match_id)?.durationS ?? 0
-    if (!durationS) continue
-    const entry = lossDurationByPuuid.get(row.puuid) ?? { total: 0, losses: 0 }
-    entry.total += durationS
-    entry.losses += 1
-    lossDurationByPuuid.set(row.puuid, entry)
-  }
-  const fastestWinTimesAll = uniqueByPuuid(
+  const fastestWinTimesAll =
     Array.from(winDurationByPuuid.entries())
     .map(([puuid, stats]) => {
       const player = playersByPuuid.get(puuid)
       return {
         puuid,
         name: player ? displayRiotId(player) : puuid,
-        iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+        iconUrl: iconUrlByPuuid.get(puuid) ?? null,
         avgWinDurationS: stats.wins ? stats.total / stats.wins : 0,
       }
     })
     .filter((row) => row.avgWinDurationS > 0)
-    .sort((a, b) => a.avgWinDurationS - b.avgWinDurationS),
-  )
-  const fastestLossTimesAll = uniqueByPuuid(
+    .sort((a, b) => a.avgWinDurationS - b.avgWinDurationS)
+  const fastestLossTimesAll =
     Array.from(lossDurationByPuuid.entries())
     .map(([puuid, stats]) => {
       const player = playersByPuuid.get(puuid)
       return {
         puuid,
         name: player ? displayRiotId(player) : puuid,
-        iconUrl: profileIconUrl(stateBy.get(puuid)?.profile_icon_id ?? null, ddVersion),
+        iconUrl: iconUrlByPuuid.get(puuid) ?? null,
         avgLossDurationS: stats.losses ? stats.total / stats.losses : 0,
       }
     })
     .filter((row) => row.avgLossDurationS > 0)
-    .sort((a, b) => a.avgLossDurationS - b.avgLossDurationS),
-  )
+    .sort((a, b) => a.avgLossDurationS - b.avgLossDurationS)
 
   const noGames = participants.length === 0
 
@@ -671,30 +639,30 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
     id: block.id,
     title: block.title,
     accent: block.accent,
-    entries: block.data.map((row) => {
-      const player = playersByPuuid.get(row.puuid)
-      return {
-        puuid: row.puuid,
-        name: player ? displayRiotId(player) : row.puuid,
-        iconUrl: profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion),
-        value: row[block.key as keyof typeof row] as number,
-      }
-    }),
+      entries: block.data.map((row) => {
+        const player = playersByPuuid.get(row.puuid)
+        return {
+          puuid: row.puuid,
+          name: player ? displayRiotId(player) : row.puuid,
+          iconUrl: iconUrlByPuuid.get(row.puuid) ?? null,
+          value: row.value,
+        }
+      }),
   }))
 
   const singleGameBottomBlocks: PodiumBlock[] = singleGameBottomRow.map((block) => ({
     id: block.id,
     title: block.title,
     accent: block.accent,
-    entries: block.data.map((row) => {
-      const player = playersByPuuid.get(row.puuid)
-      return {
-        puuid: row.puuid,
-        name: player ? displayRiotId(player) : row.puuid,
-        iconUrl: profileIconUrl(stateBy.get(row.puuid)?.profile_icon_id ?? null, ddVersion),
-        value: row[block.key as keyof typeof row] as number,
-      }
-    }),
+      entries: block.data.map((row) => {
+        const player = playersByPuuid.get(row.puuid)
+        return {
+          puuid: row.puuid,
+          name: player ? displayRiotId(player) : row.puuid,
+          iconUrl: iconUrlByPuuid.get(row.puuid) ?? null,
+          value: row.value,
+        }
+      }),
   }))
 
   const playerBlocks: ListBlock[] = [
@@ -814,12 +782,6 @@ export default async function LeaderboardStatsPage({ params }: { params: Promise
         </div>
 
         <div className="mx-auto w-full max-w-[1460px] space-y-10 lg:space-y-12">
-          {noGames ? (
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              No games found for this leaderboard yet (current season).
-            </div>
-          ) : null}
-
           <section className="rounded-xl border border-slate-200/70 bg-white/40 px-4 py-3 dark:border-slate-800/80 dark:bg-slate-900/30">
             <div className="grid gap-3 md:grid-cols-3">
             {[
