@@ -136,7 +136,7 @@ function flashFromOpts(opts: {
 }
 
 function sectionRedirect(opts: {
-  section: 'settings' | 'banner' | 'players' | 'club' | 'profile' | 'billing' | 'top'
+  section: 'settings' | 'banner' | 'players' | 'club' | 'profile' | 'billing' | 'tournaments' | 'showdowns' | 'top'
   ok?: string
   err?: string
   clubOk?: string
@@ -162,6 +162,8 @@ function sectionRedirect(opts: {
   let basePath = '/dashboard/profile'
   if (opts.section === 'club') basePath = '/dashboard/club'
   if (opts.section === 'billing') basePath = '/dashboard/billing'
+  if (opts.section === 'tournaments') basePath = '/dashboard/tournaments'
+  if (opts.section === 'showdowns') basePath = '/dashboard/showdowns'
   if (opts.section === 'profile') basePath = '/dashboard/profile'
   if (isLeaderboardSection) basePath = `/dashboard/leaderboards`
   const qs = params.toString()
@@ -169,7 +171,7 @@ function sectionRedirect(opts: {
 }
 
 async function redirectToDashboard(opts: {
-  section: 'settings' | 'banner' | 'players' | 'club' | 'profile' | 'billing' | 'top'
+  section: 'settings' | 'banner' | 'players' | 'club' | 'profile' | 'billing' | 'tournaments' | 'showdowns' | 'top'
   ok?: string
   err?: string
   clubOk?: string
@@ -253,7 +255,7 @@ export default async function DashboardPage({
   const section = (sp.section ?? 'top').toString()
   const billingErr = null
   const billingOk = null
-  const sectionValues = ['profile', 'settings', 'banner', 'players', 'club', 'billing'] as const
+  const sectionValues = ['profile', 'settings', 'banner', 'players', 'club', 'billing', 'tournaments', 'showdowns'] as const
   type DashboardSection = (typeof sectionValues)[number]
   const activeSection: DashboardSection = (sectionValues as readonly string[]).includes(section) ? (section as DashboardSection) : 'profile'
   const effectiveSection: DashboardSection = activeSection === 'banner' || activeSection === 'players' ? 'settings' : activeSection
@@ -1356,21 +1358,19 @@ export default async function DashboardPage({
 
           <div className="grid gap-8 lg:grid-cols-[260px_1fr]">
             <aside className="space-y-4 lg:sticky lg:top-6">
-<div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Profile</div>
-    <Link
-      href={sectionRedirect({ section: 'profile' })} // <--- REMOVED leaderboardId HERE
-      scroll={false}
-      className={`mt-3 flex items-center justify-between rounded-none px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
-        effectiveSection === 'profile'
-          ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-900/20 dark:bg-white dark:text-slate-900 dark:ring-white/20'
-          : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:shadow-sm dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
-      }`}
-                >
-                  <span>Profile settings</span>
-                  <span className="text-xs opacity-70 transition-transform duration-200 group-hover:translate-x-0.5">→</span>
-                </Link>
-              </div>
+<Link
+    href={sectionRedirect({ section: 'profile' })}
+    scroll={false}
+    className={`block rounded-none border p-4 shadow-sm transition-all duration-200 ease-out ${
+      effectiveSection === 'profile'
+        ? 'border-slate-900 bg-slate-900 text-white ring-1 ring-slate-900/20 dark:border-white dark:bg-white dark:text-slate-900 dark:ring-white/20'
+        : 'border-slate-200/80 bg-white hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-900 dark:hover:border-slate-700'
+    }`}
+  >
+    <div className={`text-xs font-semibold uppercase tracking-wide ${effectiveSection === 'profile' ? 'text-white/70 dark:text-slate-500' : 'text-slate-500 dark:text-slate-400'}`}>
+      Profile
+    </div>
+  </Link>
               <div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Leaderboards</div>
                 <div className="mt-3">
@@ -1448,96 +1448,106 @@ export default async function DashboardPage({
                   </div>
                 )}
 
-                <div className="mt-6">
-                  {memberClubs.length > 0 && (
-                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Clubs</div>
-                  )}
-                  {memberClubs.length > 0 && (
-                    <div className="mt-3 grid grid-cols-2 gap-3">
-                      {memberClubs.map((clubItem) => {
-                        const isSelected = club?.id === clubItem.id
-                        return (
-                          <Link
-                            key={clubItem.id}
-                            href={sectionRedirect({ section: 'club', leaderboardId: lb?.id })}
-                            className={`group relative aspect-[4/3] overflow-hidden rounded-xl border transition-all duration-200 ease-out ${
-                              isSelected
-                                ? 'border-slate-900 ring-2 ring-slate-900/30 dark:border-white dark:ring-white/40'
-                                : 'border-slate-200 hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:hover:border-slate-600'
-                            }`}
-                            aria-label={`Open ${clubItem.name}`}
-                          >
-                            {clubItem.banner_url ? (
-                              <div
-                                className="absolute inset-0 bg-cover bg-center"
-                                style={{ backgroundImage: `url(${clubItem.banner_url})` }}
-                              />
-                            ) : (
-                              <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 dark:from-slate-200 dark:via-slate-300 dark:to-slate-100" />
-                            )}
-                            <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-slate-900/20 to-transparent dark:from-slate-900/60" />
-                            <div className="relative flex h-full flex-col justify-end p-3 text-white">
-                              <div className="text-sm font-semibold leading-tight drop-shadow-sm">
-                                {clubItem.name}
-                              </div>
-                              {effectiveSection === 'club' && isSelected && (
-                                <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70">
-                                  Selected
-                                </div>
-                              )}
-                            </div>
-                          </Link>
-                        )
-                      })}
-                    </div>
-                  )}
-                  <div className="mt-3">
-                    <form action={createClub} className="space-y-2">
-                      <input type="hidden" name="quick_create" value="1" />
-                      <div className="flex items-center gap-2">
-                        <input
-                          name="club_name"
-                          placeholder="Club name"
-                          className="min-w-0 h-10 flex-1 rounded-none border border-slate-200 bg-white px-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:placeholder:text-slate-500 dark:disabled:bg-slate-900"
-                          disabled={atClubMembershipLimit}
-                        />
-                        <button
-                          type="submit"
-                          className="h-10 w-10 rounded-none border border-slate-200 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-900"
-                          aria-label="Create club"
-                          disabled={atClubMembershipLimit}
-                        >
-                          →
-                        </button>
-                      </div>
-                    </form>
-                    {atClubMembershipLimit ? (
-                      <div className="mt-2 rounded-none border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-400">
-                        Limit reached. Please leave a club.
-                      </div>
-                    ) : (
-                      <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                        Up to {CLUB_MEMBER_LIMIT} clubs total.
-                      </div>
-                    )}
-                  </div>
-                </div>
               </div>
 <div className="rounded-none border border-slate-200/80 bg-white p-4 shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
-    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Billing</div>
-    <Link
-      href={sectionRedirect({ section: 'billing' })} // <--- REMOVED leaderboardId HERE
-      scroll={false}
-      className={`mt-3 flex items-center justify-between rounded-none px-3 py-2 text-sm font-semibold transition-all duration-200 ease-out ${
-        effectiveSection === 'billing'
-          ? 'bg-slate-900 text-white shadow-sm ring-1 ring-slate-900/20 dark:bg-white dark:text-slate-900 dark:ring-white/20'
-          : 'bg-slate-50 text-slate-700 hover:bg-slate-100 hover:shadow-sm dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800'
-      }`}
-                >
-                  <span>Billing settings</span>
-                  <span className="text-xs opacity-70 transition-transform duration-200 group-hover:translate-x-0.5">→</span>
-                </Link>
-              </div>
+    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Clubs</div>
+    <div className="mt-3">
+      {memberClubs.length === 0 ? (
+        <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">No clubs yet.</p>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 mb-3">
+          {memberClubs.map((clubItem) => {
+            const isSelected = club?.id === clubItem.id
+            return (
+              <Link
+                key={clubItem.id}
+                href={sectionRedirect({ section: 'club', leaderboardId: lb?.id })}
+                className={`group relative aspect-[4/3] overflow-hidden rounded-xl border transition-all duration-200 ease-out ${
+                  isSelected
+                    ? 'border-slate-900 ring-2 ring-slate-900/30 dark:border-white dark:ring-white/40'
+                    : 'border-slate-200 hover:border-slate-300 hover:shadow-md dark:border-slate-800 dark:hover:border-slate-600'
+                }`}
+                aria-label={`Open ${clubItem.name}`}
+              >
+                {clubItem.banner_url ? (
+                  <div
+                    className="absolute inset-0 bg-cover bg-center"
+                    style={{ backgroundImage: `url(${clubItem.banner_url})` }}
+                  />
+                ) : (
+                  <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-700 to-slate-500 dark:from-slate-200 dark:via-slate-300 dark:to-slate-100" />
+                )}
+                <div className="absolute inset-0 bg-gradient-to-t from-slate-900/80 via-slate-900/20 to-transparent dark:from-slate-900/60" />
+                <div className="relative flex h-full flex-col justify-end p-3 text-white">
+                  <div className="text-sm font-semibold leading-tight drop-shadow-sm">
+                    {clubItem.name}
+                  </div>
+                  {effectiveSection === 'club' && isSelected && (
+                    <div className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-white/70">
+                      Selected
+                    </div>
+                  )}
+                </div>
+              </Link>
+            )
+          })}
+        </div>
+      )}
+
+    </div>
+
+    {atClubMembershipLimit ? (
+      <div className="mt-3 rounded-none border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-400">
+        Limit reached. Please leave a club.
+      </div>
+    ) : (
+      <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
+        Up to {CLUB_MEMBER_LIMIT} clubs total.
+      </div>
+    )}
+    <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+      You can only create and own 1 club.
+    </div>
+  </div>
+<Link
+    href={sectionRedirect({ section: 'tournaments' })}
+    scroll={false}
+    className={`block rounded-none border p-4 shadow-sm transition-all duration-200 ease-out ${
+      effectiveSection === 'tournaments'
+        ? 'border-slate-900 bg-slate-900 text-white ring-1 ring-slate-900/20 dark:border-white dark:bg-white dark:text-slate-900 dark:ring-white/20'
+        : 'border-slate-200/80 bg-white hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-900 dark:hover:border-slate-700'
+    }`}
+  >
+    <div className={`text-xs font-semibold uppercase tracking-wide ${effectiveSection === 'tournaments' ? 'text-white/70 dark:text-slate-500' : 'text-slate-500 dark:text-slate-400'}`}>
+      Tournaments
+    </div>
+  </Link>
+<Link
+    href={sectionRedirect({ section: 'showdowns' })}
+    scroll={false}
+    className={`block rounded-none border p-4 shadow-sm transition-all duration-200 ease-out ${
+      effectiveSection === 'showdowns'
+        ? 'border-slate-900 bg-slate-900 text-white ring-1 ring-slate-900/20 dark:border-white dark:bg-white dark:text-slate-900 dark:ring-white/20'
+        : 'border-slate-200/80 bg-white hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-900 dark:hover:border-slate-700'
+    }`}
+  >
+    <div className={`text-xs font-semibold uppercase tracking-wide ${effectiveSection === 'showdowns' ? 'text-white/70 dark:text-slate-500' : 'text-slate-500 dark:text-slate-400'}`}>
+      Showdowns
+    </div>
+  </Link>
+<Link
+    href={sectionRedirect({ section: 'billing' })}
+    scroll={false}
+    className={`block rounded-none border p-4 shadow-sm transition-all duration-200 ease-out ${
+      effectiveSection === 'billing'
+        ? 'border-slate-900 bg-slate-900 text-white ring-1 ring-slate-900/20 dark:border-white dark:bg-white dark:text-slate-900 dark:ring-white/20'
+        : 'border-slate-200/80 bg-white hover:border-slate-300 dark:border-slate-800/80 dark:bg-slate-900 dark:hover:border-slate-700'
+    }`}
+  >
+    <div className={`text-xs font-semibold uppercase tracking-wide ${effectiveSection === 'billing' ? 'text-white/70 dark:text-slate-500' : 'text-slate-500 dark:text-slate-400'}`}>
+      Billing
+    </div>
+  </Link>
             </aside>
 
             <div className="min-w-0 space-y-8">
@@ -2150,6 +2160,38 @@ export default async function DashboardPage({
                     </div>
                   </div>
                 )}
+              </section>
+              )}
+
+              {effectiveSection === 'tournaments' && (
+              <section id="tournaments" className="scroll-mt-24">
+                <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+                  <div className="border-b border-slate-100 p-6 dark:border-slate-800">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Tournament settings</h2>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Outline and configure upcoming tournament features.</p>
+                  </div>
+                  <div className="p-6">
+                    <div className="rounded-none border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+                      Tournament management panel coming next.
+                    </div>
+                  </div>
+                </div>
+              </section>
+              )}
+
+              {effectiveSection === 'showdowns' && (
+              <section id="showdowns" className="scroll-mt-24">
+                <div className="mx-auto max-w-3xl overflow-hidden rounded-none border border-slate-200/80 bg-white shadow-sm dark:border-slate-800/80 dark:bg-slate-900">
+                  <div className="border-b border-slate-100 p-6 dark:border-slate-800">
+                    <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Showdown settings</h2>
+                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Plan and manage showdown workflows here.</p>
+                  </div>
+                  <div className="p-6">
+                    <div className="rounded-none border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+                      Showdown planning panel coming next.
+                    </div>
+                  </div>
+                </div>
               </section>
               )}
             </div>

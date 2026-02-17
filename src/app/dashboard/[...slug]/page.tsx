@@ -27,6 +27,10 @@ export default async function DashboardSlugPage({
     section = 'club'
   } else if (slug[0] === 'billing') {
     section = 'billing'
+  } else if (slug[0] === 'tournaments') {
+    section = 'tournaments'
+  } else if (slug[0] === 'showdowns') {
+    section = 'showdowns'
   } else if (slug[0] === 'profile') {
     section = 'profile'
   }

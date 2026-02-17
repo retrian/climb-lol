@@ -11,9 +11,12 @@ import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 
-export const revalidate = 30
+const PAGE_CACHE_TTL_SECONDS = 30
+export const revalidate = PAGE_CACHE_TTL_SECONDS
 const DEFAULT_DDRAGON_VERSION = '15.24.1'
-const MAX_RECENT_PARTICIPANT_ROWS = 500
+const MOVER_QUEUE_ID = 420
+const MOVER_ACTIVITY_FALLBACK_RATIO = 0.1
+const MOVER_ACTIVITY_FALLBACK_MIN = 1
 
 // --- Types ---
 
@@ -153,15 +156,6 @@ interface MoverDeltaRaw {
   end_tier?: string | null
   end_rank?: string | null
   end_lp?: number | null
-}
-
-interface RecentParticipantRaw {
-  puuid: string
-  win: boolean | null
-  matches: Array<{
-    game_end_ts: number | null
-    queue_id: number | null
-  }>
 }
 
 interface LeaderboardRaw {
@@ -317,34 +311,48 @@ function makeLpKey(matchId: string, puuid: string): string {
   return `${matchId}-${puuid}`
 }
 
-function normalizeTimestampToMs(value: number | null | undefined): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null
-  return value < 1_000_000_000_000 ? value * 1000 : value
+function shouldFallbackMoverActivityGate({
+  activeCount,
+  trackedCount,
+  lbId,
+  timeframe,
+}: {
+  activeCount: number
+  trackedCount: number
+  lbId: string
+  timeframe: 'daily' | 'weekly'
+}): boolean {
+  if (trackedCount <= 0) return true
+
+  const minimumExpectedActive = Math.max(
+    MOVER_ACTIVITY_FALLBACK_MIN,
+    Math.ceil(trackedCount * MOVER_ACTIVITY_FALLBACK_RATIO)
+  )
+
+  const shouldFallback = activeCount < minimumExpectedActive
+
+  if (shouldFallback) {
+    console.warn('[lb-movers] activity gate fallback engaged', {
+      lbId,
+      timeframe,
+      activeCount,
+      trackedCount,
+      activeRatio: Number((activeCount / trackedCount).toFixed(3)),
+      minimumExpectedActive,
+      ratioFloor: MOVER_ACTIVITY_FALLBACK_RATIO,
+      queueId: MOVER_QUEUE_ID,
+    })
+  }
+
+  return shouldFallback
 }
 
-function getLatestMatchEndTsMs(matches: unknown): number | null {
-  if (!matches) return null
-  const rows = Array.isArray(matches) ? matches : [matches]
-  let latestTs: number | null = null
+function countDistinctMoverPuuids(rows: MoverDeltaRaw[]): number {
+  const puuids = new Set<string>()
   for (const row of rows) {
-    const gameEndTs =
-      typeof row === 'object' && row !== null && 'game_end_ts' in row
-        ? (row as { game_end_ts?: number | null }).game_end_ts
-        : null
-    const normalized = normalizeTimestampToMs(gameEndTs)
-    if (normalized === null) continue
-    if (latestTs === null || normalized > latestTs) latestTs = normalized
+    if (row.puuid) puuids.add(row.puuid)
   }
-  return latestTs
-}
-
-function filterDeltasByActive(deltas: Map<string, number>, active: Set<string>) {
-  if (active.size === 0) return new Map<string, number>()
-  const filtered = new Map<string, number>()
-  for (const [puuid, delta] of deltas.entries()) {
-    if (active.has(puuid)) filtered.set(puuid, delta)
-  }
-  return filtered
+  return puuids.size
 }
 
 const LADDER_TIER_ORDER = [
@@ -537,9 +545,8 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       latestMatchesRaw,
       lpEventsRaw,
       matchParticipantsRaw,
-      recentParticipantsRaw,
-      dailyMoverRows,
-      weeklyMoverRows,
+      dailyMoverRowsActive,
+      weeklyMoverRowsActive,
     ] = await Promise.all([
       allRelevantPuuids.length > 0
         ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[], 'player_riot_state')
@@ -575,35 +582,26 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
         : ([] as MatchParticipantRaw[]),
       allRelevantPuuids.length > 0
         ? safeDb(
-            supabase
-              .from('match_participants')
-              .select('puuid, win, matches!inner(game_end_ts, queue_id)')
-              .in('puuid', allRelevantPuuids)
-              .eq('matches.queue_id', 420)
-              .gte('matches.game_end_ts', weekStartTs)
-              .limit(MAX_RECENT_PARTICIPANT_ROWS),
-            [] as RecentParticipantRaw[],
-            'recent_participants_week'
-          )
-        : ([] as RecentParticipantRaw[]),
-      allRelevantPuuids.length > 0
-        ? safeDb(
-            supabase.rpc('get_leaderboard_mover_deltas', {
+            supabase.rpc('get_leaderboard_mover_deltas_v2', {
               lb_id: lbId,
               start_at: new Date(todayStartTs).toISOString(),
+              queue_filter: MOVER_QUEUE_ID,
+              require_recent_activity: true,
             }),
             [] as MoverDeltaRaw[],
-            'movers_daily'
+            'movers_daily_active'
           )
         : ([] as MoverDeltaRaw[]),
       allRelevantPuuids.length > 0
         ? safeDb(
-            supabase.rpc('get_leaderboard_mover_deltas', {
+            supabase.rpc('get_leaderboard_mover_deltas_v2', {
               lb_id: lbId,
               start_at: new Date(weekStartTs).toISOString(),
+              queue_filter: MOVER_QUEUE_ID,
+              require_recent_activity: true,
             }),
             [] as MoverDeltaRaw[],
-            'movers_weekly'
+            'movers_weekly_active'
           )
         : ([] as MoverDeltaRaw[]),
     ])
@@ -686,7 +684,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
     const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
     const filteredLatestRaw = (latestRaw ?? []).filter((row: LatestGameRpcRaw) => {
       if (!allowedMatchIds.has(row.match_id)) return false
-      return row.queue_id === 420
+      return row.queue_id === MOVER_QUEUE_ID
     })
 
     const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
@@ -751,15 +749,18 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
     ) as Record<string, number | null>
 
-    const dailyActivePuuids = new Set<string>()
-    const weeklyActivePuuids = new Set<string>()
-    for (const row of recentParticipantsRaw) {
-      if (!row.puuid) continue
-      const endTs = getLatestMatchEndTsMs(row.matches)
-      if (endTs === null) continue
-      if (endTs >= weekStartTs) weeklyActivePuuids.add(row.puuid)
-      if (endTs >= todayStartTs) dailyActivePuuids.add(row.puuid)
-    }
+    const shouldFallbackDailyActivityGate = shouldFallbackMoverActivityGate({
+      activeCount: countDistinctMoverPuuids(dailyMoverRowsActive),
+      trackedCount: allRelevantPuuids.length,
+      lbId,
+      timeframe: 'daily',
+    })
+    const shouldFallbackWeeklyActivityGate = shouldFallbackMoverActivityGate({
+      activeCount: countDistinctMoverPuuids(weeklyMoverRowsActive),
+      trackedCount: allRelevantPuuids.length,
+      lbId,
+      timeframe: 'weekly',
+    })
 
     // TODO: Implement server-side preloading for match detail payloads and hydrate this record.
     const preloadedMatchDataRecord: Record<
@@ -779,6 +780,17 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       topChamps: champsBy.get(player.puuid) ?? [],
     }))
 
+    const dailyMoverRows = shouldFallbackDailyActivityGate
+      ? await safeDb(
+          supabase.rpc('get_leaderboard_mover_deltas', {
+            lb_id: lbId,
+            start_at: new Date(todayStartTs).toISOString(),
+          }),
+          [] as MoverDeltaRaw[],
+          'movers_daily_fallback'
+        )
+      : dailyMoverRowsActive
+
     const dailyDeltaMap = new Map<string, number>()
     for (const row of dailyMoverRows) {
       if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
@@ -789,7 +801,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
           : row.lp_delta
       dailyDeltaMap.set(row.puuid, ladderDelta)
     }
-    const dailyLpByPuuid = filterDeltasByActive(dailyDeltaMap, dailyActivePuuids)
+    const dailyLpByPuuid = dailyDeltaMap
     const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
     const dailyTopGainCandidate = dailyLpEntries.length
       ? dailyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
@@ -802,6 +814,17 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       : null
     const resolvedTopLoss = dailyTopLoss && dailyTopLoss[1] < 0 ? dailyTopLoss : null
 
+    const weeklyMoverRows = shouldFallbackWeeklyActivityGate
+      ? await safeDb(
+          supabase.rpc('get_leaderboard_mover_deltas', {
+            lb_id: lbId,
+            start_at: new Date(weekStartTs).toISOString(),
+          }),
+          [] as MoverDeltaRaw[],
+          'movers_weekly_fallback'
+        )
+      : weeklyMoverRowsActive
+
     const weeklyDeltaMap = new Map<string, number>()
     for (const row of weeklyMoverRows) {
       if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
@@ -812,7 +835,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
           : row.lp_delta
       weeklyDeltaMap.set(row.puuid, ladderDelta)
     }
-    const weeklyLpByPuuid = filterDeltasByActive(weeklyDeltaMap, weeklyActivePuuids)
+    const weeklyLpByPuuid = weeklyDeltaMap
     const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
     const weeklyTopGain = weeklyLpEntries.length
       ? weeklyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
@@ -839,8 +862,8 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       lastUpdatedIso,
     }
   },
-  ['lb-page-data-v5', lbId, ddVersion],
-  { revalidate: 30 }
+  ['lb-page-data-v6', lbId, ddVersion],
+  { revalidate: PAGE_CACHE_TTL_SECONDS }
 )()
 
 // --- Components ---
