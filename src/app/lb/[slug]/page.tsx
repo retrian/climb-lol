@@ -663,7 +663,7 @@ const getLeaderboardPageDataCached = unstable_cache(
     }
   },
   ['lb-page-data-v3'],
-  { revalidate: 30 }
+  { revalidate: 2 }
 )
 
 // --- Components ---

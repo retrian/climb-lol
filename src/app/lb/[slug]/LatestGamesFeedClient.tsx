@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
 import { timeAgo } from '@/lib/timeAgo'
@@ -348,6 +349,7 @@ export default function LatestGamesFeedClient({
   participantsByMatch: Record<string, MatchParticipant[]>
   preloadedMatchData?: Record<string, { match: any; timeline: any; accounts: Record<string, any> }>
 }) {
+  const router = useRouter()
   const normalizeEndTs = useCallback((value?: number | string | null) => {
     if (value === null || value === undefined) return null
     const num = typeof value === 'string' ? Number(value) : value
@@ -365,6 +367,16 @@ export default function LatestGamesFeedClient({
     const timer = window.setInterval(() => setNowTs(Date.now()), 60_000)
     return () => window.clearInterval(timer)
   }, [])
+
+  // Keep feed fresh in production without manual refresh
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        router.refresh()
+      }
+    }, 3000)
+    return () => window.clearInterval(interval)
+  }, [router])
 
   // Prefetch on hover only; avoid eager network work on initial page load
 
