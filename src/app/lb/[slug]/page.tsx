@@ -11,8 +11,8 @@ import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 
-const PAGE_CACHE_TTL_SECONDS = 30
-export const revalidate = PAGE_CACHE_TTL_SECONDS
+export const revalidate = 30
+const PAGE_CACHE_TTL_SECONDS = revalidate
 const DEFAULT_DDRAGON_VERSION = '15.24.1'
 const MOVER_QUEUE_ID = 420
 const MOVER_ACTIVITY_FALLBACK_RATIO = 0.1
