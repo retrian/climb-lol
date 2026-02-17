@@ -17,6 +17,7 @@ const DEFAULT_DDRAGON_VERSION = '15.24.1'
 const MOVER_QUEUE_ID = 420
 const MOVER_ACTIVITY_FALLBACK_RATIO = 0.1
 const MOVER_ACTIVITY_FALLBACK_MIN = 1
+const ACTIVE_MOVER_QUERY_TIMEOUT_MS = 1500
 
 // --- Types ---
 
@@ -273,6 +274,27 @@ async function safeDb<T>(
   } catch (error) {
     console.error('Database Exception:', describeError(error), error)
     return fallback
+  }
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  fallback: T,
+  timeoutMs: number,
+  label: string
+): Promise<T> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  try {
+    const timeoutPromise = new Promise<T>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        console.warn('[lb] timed out query path; using fallback', { label, timeoutMs })
+        resolve(fallback)
+      }, timeoutMs)
+    })
+
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
   }
 }
 
@@ -581,26 +603,36 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
         ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[], 'match_participants_latest')
         : ([] as MatchParticipantRaw[]),
       allRelevantPuuids.length > 0
-        ? safeDb(
-            supabase.rpc('get_leaderboard_mover_deltas_v2', {
-              lb_id: lbId,
-              start_at: new Date(todayStartTs).toISOString(),
-              queue_filter: MOVER_QUEUE_ID,
-              require_recent_activity: true,
-            }),
+        ? withTimeout(
+            safeDb(
+              supabase.rpc('get_leaderboard_mover_deltas_v2', {
+                lb_id: lbId,
+                start_at: new Date(todayStartTs).toISOString(),
+                queue_filter: MOVER_QUEUE_ID,
+                require_recent_activity: true,
+              }),
+              [] as MoverDeltaRaw[],
+              'movers_daily_active'
+            ),
             [] as MoverDeltaRaw[],
+            ACTIVE_MOVER_QUERY_TIMEOUT_MS,
             'movers_daily_active'
           )
         : ([] as MoverDeltaRaw[]),
       allRelevantPuuids.length > 0
-        ? safeDb(
-            supabase.rpc('get_leaderboard_mover_deltas_v2', {
-              lb_id: lbId,
-              start_at: new Date(weekStartTs).toISOString(),
-              queue_filter: MOVER_QUEUE_ID,
-              require_recent_activity: true,
-            }),
+        ? withTimeout(
+            safeDb(
+              supabase.rpc('get_leaderboard_mover_deltas_v2', {
+                lb_id: lbId,
+                start_at: new Date(weekStartTs).toISOString(),
+                queue_filter: MOVER_QUEUE_ID,
+                require_recent_activity: true,
+              }),
+              [] as MoverDeltaRaw[],
+              'movers_weekly_active'
+            ),
             [] as MoverDeltaRaw[],
+            ACTIVE_MOVER_QUERY_TIMEOUT_MS,
             'movers_weekly_active'
           )
         : ([] as MoverDeltaRaw[]),

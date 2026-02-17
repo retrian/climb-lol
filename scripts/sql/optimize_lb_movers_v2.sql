@@ -5,11 +5,18 @@
 create index if not exists idx_matches_queue_end_ts
   on public.matches (queue_id, game_end_ts desc);
 
+create index if not exists idx_matches_queue_end_ts_match_id
+  on public.matches (queue_id, game_end_ts desc, match_id);
+
 create index if not exists idx_match_participants_puuid_match_id
   on public.match_participants (puuid, match_id);
 
 create index if not exists idx_leaderboard_players_lb_puuid
   on public.leaderboard_players (leaderboard_id, puuid);
+
+-- 1b) Speed up graph history queries used by /api/lb/[slug]/graph.
+create index if not exists idx_player_lp_history_puuid_queue_fetched_at
+  on public.player_lp_history (puuid, queue_type, fetched_at);
 
 -- 2) Add mover RPC v2 with optional activity gating and queue parameterization.
 --    This wraps existing get_leaderboard_mover_deltas so current mover math remains source-of-truth.
@@ -40,6 +47,18 @@ as $$
   ),
   bounds as (
     select (extract(epoch from start_at) * 1000)::bigint as start_at_ms
+  ),
+  active_puuids as (
+    select distinct mp.puuid
+    from bounds x
+    join public.matches m
+      on m.queue_id = queue_filter
+     and m.game_end_ts >= x.start_at_ms
+    join public.match_participants mp
+      on mp.match_id = m.match_id
+    join public.leaderboard_players lp
+      on lp.puuid = mp.puuid
+     and lp.leaderboard_id = lb_id
   )
   select
     b.puuid,
@@ -51,19 +70,9 @@ as $$
     null::text as end_rank,
     null::integer as end_lp
   from base b
-  cross join bounds x
+  left join active_puuids ap
+    on ap.puuid = b.puuid
   where
     require_recent_activity = false
-    or exists (
-      select 1
-      from public.leaderboard_players lp
-      join public.match_participants mp
-        on mp.puuid = lp.puuid
-      join public.matches m
-        on m.match_id = mp.match_id
-      where lp.leaderboard_id = lb_id
-        and lp.puuid = b.puuid
-        and m.queue_id = queue_filter
-        and m.game_end_ts >= x.start_at_ms
-    );
+    or ap.puuid is not null;
 $$;

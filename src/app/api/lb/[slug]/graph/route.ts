@@ -4,6 +4,8 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { getSeasonStartIso } from '@/lib/riot/season'
 
 const HISTORY_PAGE_SIZE = 1000
+const GRAPH_PUBLIC_S_MAXAGE_SECONDS = 300
+const GRAPH_PUBLIC_STALE_WHILE_REVALIDATE_SECONDS = 1800
 
 type LpHistoryRow = {
   puuid: string
@@ -113,7 +115,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
 
     const res = NextResponse.json({ points })
     if (!isPrivate) {
-      res.headers.set('Cache-Control', 'public, s-maxage=120, stale-while-revalidate=600')
+      res.headers.set(
+        'Cache-Control',
+        `public, s-maxage=${GRAPH_PUBLIC_S_MAXAGE_SECONDS}, stale-while-revalidate=${GRAPH_PUBLIC_STALE_WHILE_REVALIDATE_SECONDS}`
+      )
     } else {
       res.headers.set('Cache-Control', 'private, no-store')
     }
