@@ -42,6 +42,7 @@ type TooltipState = {
   idx: number
   x: number
   y: number
+  wrapWidth: number
   preferBelow: boolean
 }
 
@@ -52,6 +53,8 @@ const HEIGHT = 620
 const PADDING = { top: 40, right: 0, bottom: 50, left: 0 }
 const INNER_WIDTH = WIDTH - PADDING.left - PADDING.right
 const INNER_HEIGHT = HEIGHT - PADDING.top - PADDING.bottom
+const RECENT_HISTORY_LIMIT = 30
+const DENSE_MODE_THRESHOLD = 50
 
 const TIER_ORDER = [
   "IRON",
@@ -118,10 +121,10 @@ function ladderLpWithCutoffs(point: Pick<LpPoint, "tier" | "rank" | "lp">) {
   const div = (point.rank ?? "").toUpperCase()
   const lp = Math.max(0, point.lp ?? 0)
 
-  const tierIndex = TIER_ORDER.indexOf(tier as any)
+  const tierIndex = TIER_ORDER.indexOf(tier as (typeof TIER_ORDER)[number])
   if (tierIndex === -1) return lp
 
-  const divIndex = DIV_ORDER.indexOf(div as any)
+  const divIndex = DIV_ORDER.indexOf(div as (typeof DIV_ORDER)[number])
 
   if (tierIndex <= TIER_ORDER.indexOf("DIAMOND")) {
     const base = tierIndex * 400
@@ -180,7 +183,7 @@ function colorForPoint(p: Pick<LpPoint, "tier" | "rank">) {
 
   // If divisions exist, adjust intensity slightly (IV lightest → I strongest)
   const div = (p.rank ?? "").toUpperCase()
-  const divIndex = DIV_ORDER.indexOf(div as any)
+  const divIndex = DIV_ORDER.indexOf(div as (typeof DIV_ORDER)[number])
   if (divIndex === -1) return base
 
   // IV -> 0.45, III -> 0.30, II -> 0.18, I -> 0.05 (closer to base)
@@ -276,49 +279,6 @@ function buildLadderTicksAdaptive(minValue: number, maxValue: number, cutoffs: R
 }
 
 // --- Smart sampling (UX-friendly) ---
-function smartSampleByGames(points: NormalizedPoint[]) {
-  const n = points.length
-  if (n <= 2) return points
-
-  const lastGames = points[n - 1]?.totalGames ?? 0
-
-  if (lastGames < 100) return points
-
-  const step = lastGames <= 300 ? 3 : lastGames <= 600 ? 5 : 10
-
-  // Preserve global extrema so sampled mode never drops true peak/trough points.
-  let peakIdx = 0
-  let troughIdx = 0
-  for (let i = 1; i < n; i += 1) {
-    if (points[i].ladderValue > points[peakIdx].ladderValue) peakIdx = i
-    if (points[i].ladderValue < points[troughIdx].ladderValue) troughIdx = i
-  }
-
-  const keep = new Set<number>()
-  keep.add(0)
-  keep.add(n - 1)
-  keep.add(peakIdx)
-  keep.add(troughIdx)
-
-  for (let i = 1; i < n; i += 1) {
-    const prev = points[i - 1]
-    const cur = points[i]
-
-    if (cur.totalGames % step === 0) keep.add(i)
-
-    const tierChanged =
-      (prev.tier ?? "").toUpperCase() !== (cur.tier ?? "").toUpperCase() ||
-      (prev.rank ?? "").toUpperCase() !== (cur.rank ?? "").toUpperCase()
-    if (tierChanged) keep.add(i)
-
-    if (cur.totalGames === prev.totalGames && cur.ladderValue !== prev.ladderValue) keep.add(i)
-  }
-
-  return Array.from(keep)
-    .sort((a, b) => a - b)
-    .map((i) => points[i])
-}
-
 function buildSharpPath(points: Array<{ x: number; y: number }>) {
   if (points.length === 0) return ""
   return points.map((p, idx) => `${idx === 0 ? "M" : "L"} ${p.x} ${p.y}`).join(" ")
@@ -350,12 +310,6 @@ function buildColoredLineSegments(
   return segments
 }
 
-function describeProgression(first: NormalizedPoint, last: NormalizedPoint) {
-  const diff = Math.round((last.ladderValue ?? 0) - (first.ladderValue ?? 0))
-  if (diff === 0) return "0 LP"
-  return `${diff > 0 ? "+" : ""}${diff} LP`
-}
-
 export default function LeaderboardGraphClient({
   players,
   slug,
@@ -365,10 +319,11 @@ export default function LeaderboardGraphClient({
   slug: string
   cutoffs: RankCutoffs
 }) {
-  const [isHydrated, setIsHydrated] = useState(false)
   const [selectedPuuid, setSelectedPuuid] = useState(players[0]?.puuid ?? "")
-  const [loadedPoints, setLoadedPoints] = useState<LpPoint[]>([])
+  const [recentPoints, setRecentPoints] = useState<LpPoint[]>([])
+  const [fullPoints, setFullPoints] = useState<LpPoint[] | null>(null)
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
+  const [isLoadingFullHistory, setIsLoadingFullHistory] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
@@ -378,82 +333,87 @@ export default function LeaderboardGraphClient({
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const prefetchCacheRef = useRef<Map<string, LpPoint[]>>(new Map())
   const inflightRef = useRef<Map<string, Promise<LpPoint[]>>>(new Map())
 
-  useEffect(() => {
-    setIsHydrated(true)
-  }, [])
-
-  useEffect(() => {
-    if (!selectedPuuid && players[0]?.puuid) setSelectedPuuid(players[0].puuid)
-  }, [players, selectedPuuid])
+  const effectiveSelectedPuuid = selectedPuuid || players[0]?.puuid || ""
 
   const fetchPlayerHistory = useCallback(
-    async (puuid: string): Promise<LpPoint[]> => {
-      const cached = prefetchCacheRef.current.get(puuid)
+    async (puuid: string, mode: "recent" | "full"): Promise<LpPoint[]> => {
+      const key = `${puuid}:${mode}`
+      const cached = prefetchCacheRef.current.get(key)
       if (cached) return cached
 
-      const inflight = inflightRef.current.get(puuid)
+      const inflight = inflightRef.current.get(key)
       if (inflight) return inflight
 
-      const request = fetch(`/api/lb/${encodeURIComponent(slug)}/graph?puuid=${encodeURIComponent(puuid)}`, {
+      const query =
+        mode === "recent"
+          ? `?puuid=${encodeURIComponent(puuid)}&limit=${RECENT_HISTORY_LIMIT}`
+          : `?puuid=${encodeURIComponent(puuid)}&full=1`
+
+      const request = fetch(`/api/lb/${encodeURIComponent(slug)}/graph${query}`, {
         credentials: "same-origin",
       })
         .then(async (res) => {
           if (!res.ok) return [] as LpPoint[]
           const json = await res.json().catch(() => null)
           const points = Array.isArray(json?.points) ? (json.points as LpPoint[]) : []
-          prefetchCacheRef.current.set(puuid, points)
+          prefetchCacheRef.current.set(key, points)
           return points
         })
         .finally(() => {
-          inflightRef.current.delete(puuid)
+          inflightRef.current.delete(key)
         })
 
-      inflightRef.current.set(puuid, request)
+      inflightRef.current.set(key, request)
       return request
     },
     [slug]
   )
 
   useEffect(() => {
-    setShowAll(false)
-    setHoveredIdx(null)
-    setTooltip(null)
-  }, [selectedPuuid])
-
-  useEffect(() => {
     let cancelled = false
 
-    if (!selectedPuuid) {
-      setLoadedPoints([])
-      setIsLoadingHistory(false)
+    if (!effectiveSelectedPuuid) {
+      queueMicrotask(() => {
+        if (cancelled) return
+        setRecentPoints([])
+        setIsLoadingHistory(false)
+      })
       return () => {
         cancelled = true
       }
     }
 
-    const cached = prefetchCacheRef.current.get(selectedPuuid)
+    const cacheKey = `${effectiveSelectedPuuid}:recent`
+    const cached = prefetchCacheRef.current.get(cacheKey)
     if (cached) {
-      setLoadedPoints(cached)
-      setIsLoadingHistory(false)
+      queueMicrotask(() => {
+        if (cancelled) return
+        setRecentPoints(cached)
+        setIsLoadingHistory(false)
+      })
       return () => {
         cancelled = true
       }
     }
 
-    setLoadedPoints([])
-    setIsLoadingHistory(true)
+    queueMicrotask(() => {
+      if (cancelled) return
+      setRecentPoints([])
+      setIsLoadingHistory(true)
+    })
 
-    fetchPlayerHistory(selectedPuuid)
+    fetchPlayerHistory(effectiveSelectedPuuid, "recent")
       .then((points) => {
         if (cancelled) return
-        setLoadedPoints(points)
+        setRecentPoints(points)
       })
       .catch(() => {
         if (cancelled) return
-        setLoadedPoints([])
+        setRecentPoints([])
       })
       .finally(() => {
         if (cancelled) return
@@ -463,35 +423,75 @@ export default function LeaderboardGraphClient({
     return () => {
       cancelled = true
     }
-  }, [fetchPlayerHistory, selectedPuuid])
+  }, [effectiveSelectedPuuid, fetchPlayerHistory])
 
   const prefetchPlayerHistory = useCallback(
     (puuid: string) => {
       if (!puuid) return
-      if (prefetchCacheRef.current.has(puuid) || inflightRef.current.has(puuid)) return
-      void fetchPlayerHistory(puuid)
+      const key = `${puuid}:recent`
+      if (prefetchCacheRef.current.has(key) || inflightRef.current.has(key)) return
+      void fetchPlayerHistory(puuid, "recent")
     },
     [fetchPlayerHistory]
   )
 
+  const handleShowAll = useCallback(() => {
+    setShowAll(true)
+    if (!effectiveSelectedPuuid || fullPoints || isLoadingFullHistory) return
+
+    setIsLoadingFullHistory(true)
+    void fetchPlayerHistory(effectiveSelectedPuuid, "full")
+      .then((points) => {
+        setFullPoints(points)
+      })
+      .catch(() => {
+        setFullPoints([])
+      })
+      .finally(() => {
+        setIsLoadingFullHistory(false)
+      })
+  }, [effectiveSelectedPuuid, fetchPlayerHistory, fullPoints, isLoadingFullHistory])
+
+  const handleReset = useCallback(() => setShowAll(false), [])
+  const handleSelectPlayer = useCallback((puuid: string) => {
+    setSelectedPuuid(puuid)
+    setShowAll(false)
+    setHoveredIdx(null)
+    setTooltip(null)
+    setFullPoints(null)
+    setIsLoadingFullHistory(false)
+  }, [])
+
 
   const playersByPuuid = useMemo(() => new Map(players.map((p) => [p.puuid, p])), [players])
+  const selectedPlayerRankFallback = useMemo(() => {
+    const player = playersByPuuid.get(effectiveSelectedPuuid)
+    return {
+      tier: player?.rankTier ?? null,
+      rank: player?.rankDivision ?? null,
+    }
+  }, [effectiveSelectedPuuid, playersByPuuid])
 
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
-    return loadedPoints
+    const sourcePoints = showAll && fullPoints ? fullPoints : recentPoints
+    return sourcePoints
       .map((p) => {
         const ts = new Date(p.fetched_at).getTime()
         if (Number.isNaN(ts)) return null
+        const tier = p.tier ?? selectedPlayerRankFallback.tier
+        const rank = p.rank ?? (p.tier ? p.rank : selectedPlayerRankFallback.rank)
         return {
           ...p,
+          tier,
+          rank,
           lpValue: Math.max(0, p.lp ?? 0),
-          ladderValue: ladderLpWithCutoffs(p),
+          ladderValue: ladderLpWithCutoffs({ tier, rank, lp: p.lp }),
           ts,
           totalGames: (p.wins ?? 0) + (p.losses ?? 0),
         }
       })
       .filter((p): p is NormalizedPoint => p !== null)
-  }, [loadedPoints])
+  }, [fullPoints, recentPoints, selectedPlayerRankFallback.rank, selectedPlayerRankFallback.tier, showAll])
 
   const rawFiltered = useMemo(() => {
     const sorted = [...normalizedPoints].sort((a, b) => a.ts - b.ts)
@@ -507,8 +507,9 @@ export default function LeaderboardGraphClient({
 
       const gamesChanged = pt.totalGames > lastPoint.totalGames
       const ladderChanged = pt.ladderValue !== lastPoint.ladderValue
+      const lpChanged = pt.lp !== lastPoint.lp
 
-      if (gamesChanged || ladderChanged) {
+      if (gamesChanged || ladderChanged || lpChanged) {
         processed.push(pt)
         lastPoint = pt
       }
@@ -518,13 +519,7 @@ export default function LeaderboardGraphClient({
   }, [normalizedPoints])
 
   const filteredWithLp = useMemo(() => rawFiltered.filter((p) => p.lp !== null && p.lp !== undefined), [rawFiltered])
-  const last30Raw = useMemo(() => (filteredWithLp.length > 30 ? filteredWithLp.slice(-30) : filteredWithLp), [filteredWithLp])
-  const visibleRaw = showAll ? filteredWithLp : last30Raw
-
-  // Smart sampling only when showing full history; keep all last-30 points intact.
-  const filteredPoints = useMemo(() => {
-    return showAll ? smartSampleByGames(visibleRaw) : visibleRaw
-  }, [showAll, visibleRaw])
+  const filteredPoints = filteredWithLp
 
   const chart = useMemo(() => {
     if (filteredPoints.length === 0) return null
@@ -551,6 +546,8 @@ export default function LeaderboardGraphClient({
       return { x, y, point, idx }
     })
   }, [chart, filteredPoints, firstMatch, matchRange, showAll])
+
+  const useDenseMode = plotPoints.length > DENSE_MODE_THRESHOLD
 
   const activePoint = hoveredIdx !== null ? plotPoints.find((p) => p.idx === hoveredIdx) ?? null : null
 
@@ -626,9 +623,11 @@ export default function LeaderboardGraphClient({
     const gmFloor = baseMaster + cutoffs.grandmaster
     const challFloor = baseMaster + cutoffs.challenger
     return (point: NormalizedPoint) => {
+      if (point.ladderValue >= challFloor) return "CHALLENGER"
+      if (point.ladderValue >= gmFloor) return "GRANDMASTER"
+      if (point.ladderValue >= baseMaster) return "MASTER"
+
       const tier = getTierWord(point.tier ?? "")
-      if (tier === "CHALLENGER" && point.ladderValue < challFloor) return "MASTER"
-      if (tier === "GRANDMASTER" && point.ladderValue < gmFloor) return "MASTER"
       return tier || "UNRANKED"
     }
   }, [cutoffs])
@@ -638,7 +637,10 @@ export default function LeaderboardGraphClient({
   }, [normalizedTierForPoint])
 
   const linePath = useMemo(() => buildSharpPath(plotPoints), [plotPoints])
-  const lineSegments = useMemo(() => buildColoredLineSegments(plotPoints, colorForLinePoint), [plotPoints, colorForLinePoint])
+  const lineSegments = useMemo(
+    () => (useDenseMode ? [] : buildColoredLineSegments(plotPoints, colorForLinePoint)),
+    [colorForLinePoint, plotPoints, useDenseMode]
+  )
   const areaPath = useMemo(() => {
     if (plotPoints.length === 0) return ""
     const baseY = PADDING.top + INNER_HEIGHT
@@ -686,6 +688,77 @@ export default function LeaderboardGraphClient({
       .filter((band): band is { y: number; height: number; color: string } => band !== null)
   }, [chart, cutoffs])
 
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || !chart || !useDenseMode || plotPoints.length < 2) return
+
+    const draw = () => {
+      const rect = canvas.getBoundingClientRect()
+      if (rect.width === 0 || rect.height === 0) return
+
+      const dpr = window.devicePixelRatio || 1
+      const width = Math.max(1, Math.round(rect.width * dpr))
+      const height = Math.max(1, Math.round(rect.height * dpr))
+
+      if (canvas.width !== width) canvas.width = width
+      if (canvas.height !== height) canvas.height = height
+
+      const ctx = canvas.getContext("2d")
+      if (!ctx) return
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      const sx = rect.width / WIDTH
+      const sy = rect.height / HEIGHT
+      ctx.setTransform(dpr * sx, 0, 0, dpr * sy, 0, 0)
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(PADDING.left, PADDING.top, INNER_WIDTH, INNER_HEIGHT)
+      ctx.clip()
+
+      const baseY = PADDING.top + INNER_HEIGHT
+      const first = plotPoints[0]
+      const last = plotPoints[plotPoints.length - 1]
+
+      const fillGradient = ctx.createLinearGradient(0, PADDING.top, 0, baseY)
+      fillGradient.addColorStop(0, "rgba(167, 139, 250, 0.28)")
+      fillGradient.addColorStop(gmOffset, "rgba(167, 139, 250, 0.22)")
+      fillGradient.addColorStop(gmOffset, "rgba(56, 189, 248, 0.16)")
+      fillGradient.addColorStop(1, "rgba(14, 165, 233, 0.14)")
+
+      ctx.beginPath()
+      ctx.moveTo(first.x, first.y)
+      for (let i = 1; i < plotPoints.length; i += 1) {
+        ctx.lineTo(plotPoints[i].x, plotPoints[i].y)
+      }
+      ctx.lineTo(last.x, baseY)
+      ctx.lineTo(first.x, baseY)
+      ctx.closePath()
+      ctx.fillStyle = fillGradient
+      ctx.fill()
+
+      ctx.lineWidth = 2.5
+      ctx.lineCap = "round"
+      ctx.lineJoin = "round"
+      for (let i = 1; i < plotPoints.length; i += 1) {
+        const prev = plotPoints[i - 1]
+        const next = plotPoints[i]
+        ctx.beginPath()
+        ctx.strokeStyle = colorForLinePoint(prev.point)
+        ctx.moveTo(prev.x, prev.y)
+        ctx.lineTo(next.x, next.y)
+        ctx.stroke()
+      }
+
+      ctx.restore()
+    }
+
+    const raf = requestAnimationFrame(draw)
+    return () => cancelAnimationFrame(raf)
+  }, [chart, colorForLinePoint, gmOffset, plotPoints, useDenseMode])
+
   const handleChartHover = (e: React.MouseEvent<SVGSVGElement>) => {
     if (plotPoints.length === 0) return
     const wrap = wrapRef.current
@@ -693,8 +766,8 @@ export default function LeaderboardGraphClient({
     const wrapRect = wrap.getBoundingClientRect()
     const svgRect = e.currentTarget.getBoundingClientRect()
     const scaleX = WIDTH / Math.max(svgRect.width, 1)
-    const x = (e.clientX - svgRect.left) * scaleX
-    const chartX = clamp(x, PADDING.left, PADDING.left + INNER_WIDTH)
+    const svgRelativeX = (e.clientX - svgRect.left) * scaleX
+    const chartX = clamp(svgRelativeX, PADDING.left, PADDING.left + INNER_WIDTH)
     let nearest = plotPoints[0]
     for (let i = 0; i < plotPoints.length; i += 1) {
       const left = i === 0 ? PADDING.left : (plotPoints[i - 1].x + plotPoints[i].x) / 2
@@ -705,9 +778,10 @@ export default function LeaderboardGraphClient({
         break
       }
     }
+    const tooltipX = e.clientX - wrapRect.left
     const y = e.clientY - wrapRect.top
     setHoveredIdx(nearest.idx)
-    setTooltip({ point: nearest.point, idx: nearest.idx, x: chartX, y, preferBelow: y < 120 })
+    setTooltip({ point: nearest.point, idx: nearest.idx, x: tooltipX, y, wrapWidth: wrapRect.width, preferBelow: y < 120 })
   }
 
   const handleChartLeave = () => {
@@ -715,7 +789,7 @@ export default function LeaderboardGraphClient({
     setTooltip(null)
   }
 
-  const activePlayer = playersByPuuid.get(selectedPuuid)
+  const activePlayer = playersByPuuid.get(effectiveSelectedPuuid)
   const latestPoint = rawFiltered.length > 0 ? rawFiltered[rawFiltered.length - 1] : null
   const winRateSummary = useMemo(() => {
     if (!latestPoint) return null
@@ -741,27 +815,32 @@ export default function LeaderboardGraphClient({
 
   const tooltipRender = (() => {
     if (!tooltip) return null
-
-    const wrap = wrapRef.current
-    const wrapW = wrap?.clientWidth ?? 0
-    const wrapH = wrap?.clientHeight ?? 0
-
-    const x = wrapW ? clamp(tooltip.x, 120, wrapW - 120) : tooltip.x
-    const y = wrapH ? clamp(tooltip.y, 20, wrapH - 20) : tooltip.y
+    const x = clamp(tooltip.x, 12, Math.max(12, tooltip.wrapWidth - 12))
+    const y = tooltip.y
+    const preferRight = x < 230
 
     const cur = filteredPoints[tooltip.idx]
     const prev = filteredPoints[tooltip.idx - 1]
     const lpChange = prev ? cur.ladderValue - prev.ladderValue : 0
-    const gamesSpan = prev ? cur.totalGames - prev.totalGames : 0
 
-    const style = tooltip.preferBelow
-      ? { left: x - 14, top: y + 14, transform: "translateX(-100%)" }
-      : { left: x - 14, top: y - 12, transform: "translate(-100%, -100%)" }
+    const style: React.CSSProperties = tooltip.preferBelow
+      ? preferRight
+        ? { left: x + 14, top: y + 14, transform: "translateX(0)" }
+        : { left: x - 14, top: y + 14, transform: "translateX(-100%)" }
+      : preferRight
+        ? { left: x + 14, top: y - 12, transform: "translate(0, -100%)" }
+        : { left: x - 14, top: y - 12, transform: "translate(-100%, -100%)" }
+
+    const tooltipStyle: React.CSSProperties = {
+      ...style,
+      width: "max-content",
+      maxWidth: "none",
+    }
 
     return (
       <div
         className="pointer-events-none absolute z-10 rounded-2xl border border-slate-800/70 bg-slate-950/85 px-3 py-2 text-xs text-slate-200 shadow-lg backdrop-blur"
-        style={style as any}
+        style={tooltipStyle}
       >
         <div className="font-semibold text-slate-100">
           {cur.totalGames === 0 ? "Placement" : `Game #${cur.totalGames}`}
@@ -776,8 +855,6 @@ export default function LeaderboardGraphClient({
     )
   })()
 
-  const handleShowAll = () => setShowAll(true)
-  const handleReset = () => setShowAll(false)
   const recordedGameCount = filteredWithLp.length
   const latestGameNumber = recordedGameCount
   const peakPoint = useMemo(() => {
@@ -833,27 +910,6 @@ export default function LeaderboardGraphClient({
     }
   }, [])
 
-  if (!isHydrated) {
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden dark:border-slate-800/80 dark:bg-slate-900/80 dark:shadow-[0_30px_80px_-40px_rgba(0,0,0,0.75)]">
-        <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <aside className="p-4 lg:border-r border-slate-200 dark:border-slate-800/80">
-            <div className="mb-4 flex items-center gap-2">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
-              <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Leaderboard</h2>
-            </div>
-            <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70" />
-          </aside>
-          <div className="bg-white text-slate-900 dark:bg-slate-950 dark:text-slate-100">
-            <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
-              Loading ranking history…
-            </div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden dark:border-slate-800/80 dark:bg-slate-900/80 dark:shadow-[0_30px_80px_-40px_rgba(0,0,0,0.75)]">
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -864,7 +920,7 @@ export default function LeaderboardGraphClient({
           </div>
           <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70">
             {players.map((player, idx) => {
-              const isActive = player.puuid === selectedPuuid
+              const isActive = player.puuid === effectiveSelectedPuuid
               const lpLabel = player.lp ?? 0
               const tier = (player.rankTier ?? "").toUpperCase()
               const div = (player.rankDivision ?? "").toUpperCase()
@@ -885,7 +941,7 @@ export default function LeaderboardGraphClient({
                 <button
                   key={player.puuid}
                   type="button"
-                  onClick={() => setSelectedPuuid(player.puuid)}
+                  onClick={() => handleSelectPlayer(player.puuid)}
                   onMouseEnter={() => prefetchPlayerHistory(player.puuid)}
                   onFocus={() => prefetchPlayerHistory(player.puuid)}
                   className={`w-full px-1.5 py-2 text-left transition ${
@@ -964,7 +1020,7 @@ export default function LeaderboardGraphClient({
             <svg
               ref={svgRef}
               viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-              className="h-auto w-full"
+              className="relative z-10 h-auto w-full"
               onMouseMove={handleChartHover}
               onMouseLeave={handleChartLeave}
             >
@@ -1087,8 +1143,8 @@ export default function LeaderboardGraphClient({
                   })()
                 ) : null}
 
-                {areaPath ? <path d={areaPath} fill={`url(#plot-fill-${clipId})`} opacity={0.9} /> : null}
-                {lineSegments.length > 0
+                {!useDenseMode && areaPath ? <path d={areaPath} fill={`url(#plot-fill-${clipId})`} opacity={0.9} /> : null}
+                {!useDenseMode && lineSegments.length > 0
                   ? lineSegments.map((seg, idx) => (
                       <path key={`line-seg-${idx}`} d={seg.d} fill="none" stroke={seg.color || lineColor} strokeWidth={2.5} />
                     ))
@@ -1117,7 +1173,7 @@ export default function LeaderboardGraphClient({
                 ) : null}
 
                 {/* Tier-colored points (all tiers, including iron) */}
-                {plotPoints.map((plot, idx) => {
+                {!useDenseMode && plotPoints.map((plot, idx) => {
                   const x0 = idx === 0 ? PADDING.left : (plotPoints[idx - 1].x + plot.x) / 2
                   const x1 = idx === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plot.x + plotPoints[idx + 1].x) / 2
                   return (
@@ -1169,6 +1225,14 @@ export default function LeaderboardGraphClient({
                 ) : null}
               </g>
             </svg>
+            {useDenseMode ? (
+              <canvas
+                ref={canvasRef}
+                className="pointer-events-none absolute left-0 right-0 z-0 w-full"
+                style={{ top: '4rem', height: 'calc(100% - 4rem)' }}
+                aria-hidden="true"
+              />
+            ) : null}
 
                   <button
                     type="button"
@@ -1176,7 +1240,7 @@ export default function LeaderboardGraphClient({
                     className="pointer-events-auto absolute bottom-3 right-3 z-20 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-white hover:text-slate-900 dark:border-slate-800/70 dark:bg-slate-950/70 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900 dark:hover:text-slate-100"
                     style={plotButtonStyle ?? undefined}
                   >
-                    {showAll ? "Reset" : "Show all"}
+                    {showAll ? (isLoadingFullHistory ? "Loading all..." : "Reset") : "Show all"}
                   </button>
                 </>
           ) : isLoadingHistory ? (
@@ -1197,7 +1261,7 @@ export default function LeaderboardGraphClient({
                 <span>
                   {showAll
                     ? `Showing ${latestGameNumber} games`
-                    : filteredWithLp.length <= 30
+                    : filteredWithLp.length <= RECENT_HISTORY_LIMIT
                       ? `Showing ${filteredWithLp.length} games`
                       : 'Last 30 games'}
                 </span>
