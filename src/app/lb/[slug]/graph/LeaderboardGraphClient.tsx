@@ -55,6 +55,7 @@ const INNER_WIDTH = WIDTH - PADDING.left - PADDING.right
 const INNER_HEIGHT = HEIGHT - PADDING.top - PADDING.bottom
 const RECENT_HISTORY_LIMIT = 30
 const DENSE_MODE_THRESHOLD = 50
+const RECENT_QUERY_VERSION = "recent_v2"
 
 const TIER_ORDER = [
   "IRON",
@@ -199,6 +200,25 @@ function colorForTickLabel(label: string) {
   return hasDiv ? lighten(base, 0.25) : base
 }
 
+function tierIndex(tier?: string | null) {
+  const normalized = getTierWord(tier ?? "")
+  return TIER_ORDER.indexOf(normalized as (typeof TIER_ORDER)[number])
+}
+
+function computeDisplayedLpDelta(cur: NormalizedPoint, prev: NormalizedPoint) {
+  const rawDelta = cur.lpValue - prev.lpValue
+  const curTierIndex = tierIndex(cur.tier)
+  const prevTierIndex = tierIndex(prev.tier)
+
+  if (curTierIndex === -1 || prevTierIndex === -1 || curTierIndex === prevTierIndex) {
+    return rawDelta
+  }
+
+  // LP display resets when crossing tier boundaries (e.g. D1 -> M).
+  // Add/subtract 100 per tier crossed so tooltip shows per-game LP change.
+  return rawDelta + (curTierIndex - prevTierIndex) * 100
+}
+
 // --- Ticks (adaptive) ---
 function buildLadderTicksFine(minValue: number, maxValue: number, cutoffs: RankCutoffs) {
   const min = Math.floor(minValue)
@@ -341,7 +361,7 @@ export default function LeaderboardGraphClient({
 
   const fetchPlayerHistory = useCallback(
     async (puuid: string, mode: "recent" | "full"): Promise<LpPoint[]> => {
-      const key = `${puuid}:${mode}`
+      const key = mode === "recent" ? `${puuid}:${mode}:${RECENT_QUERY_VERSION}` : `${puuid}:${mode}`
       const cached = prefetchCacheRef.current.get(key)
       if (cached) return cached
 
@@ -350,11 +370,12 @@ export default function LeaderboardGraphClient({
 
       const query =
         mode === "recent"
-          ? `?puuid=${encodeURIComponent(puuid)}&limit=${RECENT_HISTORY_LIMIT}`
+          ? `?puuid=${encodeURIComponent(puuid)}&limit=${RECENT_HISTORY_LIMIT}&v=${encodeURIComponent(RECENT_QUERY_VERSION)}`
           : `?puuid=${encodeURIComponent(puuid)}&full=1`
 
       const request = fetch(`/api/lb/${encodeURIComponent(slug)}/graph${query}`, {
         credentials: "same-origin",
+        cache: "no-store",
       })
         .then(async (res) => {
           if (!res.ok) return [] as LpPoint[]
@@ -387,7 +408,7 @@ export default function LeaderboardGraphClient({
       }
     }
 
-    const cacheKey = `${effectiveSelectedPuuid}:recent`
+    const cacheKey = `${effectiveSelectedPuuid}:recent:${RECENT_QUERY_VERSION}`
     const cached = prefetchCacheRef.current.get(cacheKey)
     if (cached) {
       queueMicrotask(() => {
@@ -428,7 +449,7 @@ export default function LeaderboardGraphClient({
   const prefetchPlayerHistory = useCallback(
     (puuid: string) => {
       if (!puuid) return
-      const key = `${puuid}:recent`
+      const key = `${puuid}:recent:${RECENT_QUERY_VERSION}`
       if (prefetchCacheRef.current.has(key) || inflightRef.current.has(key)) return
       void fetchPlayerHistory(puuid, "recent")
     },
@@ -821,7 +842,7 @@ export default function LeaderboardGraphClient({
 
     const cur = filteredPoints[tooltip.idx]
     const prev = filteredPoints[tooltip.idx - 1]
-    const lpChange = prev ? cur.ladderValue - prev.ladderValue : 0
+    const lpChange = prev ? computeDisplayedLpDelta(cur, prev) : 0
 
     const style: React.CSSProperties = tooltip.preferBelow
       ? preferRight

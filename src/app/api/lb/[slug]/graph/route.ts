@@ -7,7 +7,7 @@ const HISTORY_PAGE_SIZE = 1000
 const GRAPH_PUBLIC_S_MAXAGE_SECONDS = 300
 const GRAPH_PUBLIC_STALE_WHILE_REVALIDATE_SECONDS = 1800
 const GRAPH_SAMPLE_TARGET_POINTS = 150
-const RECENT_HISTORY_FETCH_MULTIPLIER = 50
+const RECENT_HISTORY_MAX_PAGES = 20
 
 const TIER_ORDER = [
   'IRON',
@@ -123,23 +123,43 @@ async function fetchRecentLpHistoryForPlayer(
   limit: number,
   seasonStartIso?: string
 ): Promise<LpHistoryRow[]> {
-  const fetchCount = Math.max(1, limit * RECENT_HISTORY_FETCH_MULTIPLIER)
+  const targetGames = Math.max(1, Math.floor(limit))
+  const latestByGame = new Map<number, LpHistoryRow>()
 
-  let query = dataClient
-    .from('player_lp_history')
-    .select('puuid, tier, rank, lp, wins, losses, fetched_at')
-    .eq('puuid', puuid)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
-    .order('fetched_at', { ascending: false })
-    .range(0, Math.max(0, fetchCount - 1))
+  for (let page = 0; page < RECENT_HISTORY_MAX_PAGES; page += 1) {
+    const from = page * HISTORY_PAGE_SIZE
+    const to = from + HISTORY_PAGE_SIZE - 1
 
-  if (seasonStartIso) {
-    query = query.gte('fetched_at', seasonStartIso)
+    let query = dataClient
+      .from('player_lp_history')
+      .select('puuid, tier, rank, lp, wins, losses, fetched_at')
+      .eq('puuid', puuid)
+      .eq('queue_type', 'RANKED_SOLO_5x5')
+      .order('fetched_at', { ascending: false })
+      .range(from, to)
+
+    if (seasonStartIso) {
+      query = query.gte('fetched_at', seasonStartIso)
+    }
+
+    const { data } = await query
+    const pageRows = (data ?? []) as LpHistoryRow[]
+    if (pageRows.length === 0) break
+
+    // Ordered newest -> oldest, so first seen per game is the latest snapshot for that game.
+    for (const row of pageRows) {
+      const totalGames = (row.wins ?? 0) + (row.losses ?? 0)
+      if (!Number.isFinite(totalGames) || totalGames < 0) continue
+      if (!latestByGame.has(totalGames)) latestByGame.set(totalGames, row)
+    }
+
+    if (latestByGame.size >= targetGames || pageRows.length < HISTORY_PAGE_SIZE) break
   }
 
-  const { data } = await query
-  const rows = (data ?? []) as LpHistoryRow[]
-  return rows.reverse()
+  return Array.from(latestByGame.entries())
+    .sort((a, b) => a[0] - b[0])
+    .slice(-targetGames)
+    .map(([, row]) => row)
 }
 
 async function fetchRecentLpEventsForPlayer(
@@ -297,11 +317,14 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     let points: LpHistoryRow[] = []
 
     if (limit !== null) {
-      const seasonRows = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit, seasonStartIso)
-      const allRows = seasonRows.length > 0 ? seasonRows : await fetchRecentLpEventsForPlayer(dataClient, puuid, limit)
-      points = allRows.length > 0
-        ? allRows
-        : await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit, seasonStartIso)
+      const seasonRows = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit, seasonStartIso)
+      const allRows = seasonRows.length > 0 ? seasonRows : await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit)
+      points = allRows
+
+      if (points.length === 0) {
+        // Fallback path for edge-cases where history is unavailable.
+        points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit, seasonStartIso)
+      }
     } else {
       const seasonRows = await fetchLpHistoryForPlayer(dataClient, puuid, seasonStartIso)
       const fullRows = seasonRows.length > 0 ? seasonRows : await fetchLpHistoryForPlayer(dataClient, puuid)
@@ -309,7 +332,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     }
 
     const res = NextResponse.json({ points })
-    if (!isPrivate) {
+    // Recent-mode payloads are user-interactive and should never serve stale edge-cache
+    // after server-side logic changes.
+    if (limit !== null) {
+      res.headers.set('Cache-Control', 'no-store')
+    } else if (!isPrivate) {
       res.headers.set(
         'Cache-Control',
         `public, s-maxage=${GRAPH_PUBLIC_S_MAXAGE_SECONDS}, stale-while-revalidate=${GRAPH_PUBLIC_STALE_WHILE_REVALIDATE_SECONDS}`
