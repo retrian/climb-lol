@@ -745,9 +745,23 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
     ].map((i) => ({ label: i.label, lp: cutoffsMap.get(i.key) as number, icon: i.icon })).filter((x) => x.lp !== undefined)
 
     const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
+    const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
     const filteredLatestRaw = (latestRaw ?? []).filter((row: LatestGameRpcRaw) => {
-      if (!allowedMatchIds.has(row.match_id)) return false
-      return row.queue_id === MOVER_QUEUE_ID
+      if (row.queue_id !== MOVER_QUEUE_ID) return false
+
+      // Prefer strict DB-backed filtering, but do not hide fresh RPC rows when
+      // the `matches` table is behind ingestion.
+      if (allowedMatchIds.has(row.match_id)) return true
+
+      // If RPC has a timestamp, keep the seasonal guard.
+      const fallbackEndTs = row.game_end_ts ?? latestMatchEndById.get(row.match_id) ?? null
+      if (typeof fallbackEndTs === 'number') {
+        return fallbackEndTs >= seasonStartMsLatest
+      }
+
+      // No timestamp available yet: still keep it so Latest Activity does not
+      // miss just-finished games.
+      return true
     })
 
     const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
@@ -757,7 +771,6 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       }
     }
 
-    const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
     const latestGames: Game[] = filteredLatestRaw.map((row: LatestGameRpcRaw) => {
       const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
       const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
