@@ -71,6 +71,28 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## Background Refresh Job (recommended for fresh first-visit leaderboard cards)
+
+To keep LP Movers and Latest Activity fresh **before** users open the leaderboard page, run the refresh worker on a schedule using [`cron:refresh`](package.json:8), which executes [`main()`](scripts/refresh.ts:1195).
+
+Use **one scheduler only** (for example Render Cron) to avoid duplicate runs.
+
+### Required scheduler environment variables
+
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `RIOT_API_KEY`
+- `RANKED_SEASON_START` (if your environment uses season boundary logic)
+
+### Cadence guidance
+
+- **Fastest freshness (recommended):** every 1 minute.
+- If 1-minute cadence is not available, every 5 minutes is a good fallback.
+
+### Throughput tuning knobs
+
+The refresh script supports rate/volume tuning via env vars (see constants around [`PLAYER_CHECKS_PER_SECOND`](scripts/refresh.ts:498), [`PLAYER_REFRESH_CYCLE_SECONDS`](scripts/refresh.ts:499), and [`REFRESH_RUN_WINDOW_MS`](scripts/refresh.ts:501)).
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

@@ -125,6 +125,11 @@ interface LpEventRaw {
   note: string | null
 }
 
+interface LpEventDeltaRaw {
+  puuid: string
+  lp_delta: number | null
+}
+
 interface MatchParticipantRaw {
   match_id: string
   puuid: string
@@ -569,6 +574,8 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       matchParticipantsRaw,
       dailyMoverRowsActive,
       weeklyMoverRowsActive,
+      dailyLpEventRows,
+      weeklyLpEventRows,
     ] = await Promise.all([
       allRelevantPuuids.length > 0
         ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[], 'player_riot_state')
@@ -636,6 +643,30 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
             'movers_weekly_active'
           )
         : ([] as MoverDeltaRaw[]),
+      allRelevantPuuids.length > 0
+        ? safeDb(
+            supabase
+              .from('player_lp_events')
+              .select('puuid, lp_delta')
+              .in('puuid', allRelevantPuuids)
+              .eq('queue_type', 'RANKED_SOLO_5x5')
+              .gte('recorded_at', new Date(todayStartTs).toISOString()),
+            [] as LpEventDeltaRaw[],
+            'daily_lp_events_window'
+          )
+        : ([] as LpEventDeltaRaw[]),
+      allRelevantPuuids.length > 0
+        ? safeDb(
+            supabase
+              .from('player_lp_events')
+              .select('puuid, lp_delta')
+              .in('puuid', allRelevantPuuids)
+              .eq('queue_type', 'RANKED_SOLO_5x5')
+              .gte('recorded_at', new Date(weekStartTs).toISOString()),
+            [] as LpEventDeltaRaw[],
+            'weekly_lp_events_window'
+          )
+        : ([] as LpEventDeltaRaw[]),
     ])
 
     const allPlayersMap = new Map<string, Player | Partial<Player>>()
@@ -814,9 +845,11 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
 
     const dailyMoverRows = shouldFallbackDailyActivityGate
       ? await safeDb(
-          supabase.rpc('get_leaderboard_mover_deltas', {
+          supabase.rpc('get_leaderboard_mover_deltas_v2', {
             lb_id: lbId,
             start_at: new Date(todayStartTs).toISOString(),
+            queue_filter: MOVER_QUEUE_ID,
+            require_recent_activity: false,
           }),
           [] as MoverDeltaRaw[],
           'movers_daily_fallback'
@@ -824,6 +857,12 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       : dailyMoverRowsActive
 
     const dailyDeltaMap = new Map<string, number>()
+    for (const row of dailyLpEventRows) {
+      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
+      dailyDeltaMap.set(row.puuid, (dailyDeltaMap.get(row.puuid) ?? 0) + row.lp_delta)
+    }
+
+    const dailyMoverDeltaMap = new Map<string, number>()
     for (const row of dailyMoverRows) {
       if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
       const ladderDelta =
@@ -831,7 +870,14 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
           ? toLadderLp(row.end_tier, row.end_rank ?? null, row.end_lp ?? null)
             - toLadderLp(row.start_tier, row.start_rank ?? null, row.start_lp ?? null)
           : row.lp_delta
-      dailyDeltaMap.set(row.puuid, ladderDelta)
+      dailyMoverDeltaMap.set(row.puuid, ladderDelta)
+    }
+
+    for (const [puuid, moverDelta] of dailyMoverDeltaMap.entries()) {
+      const eventDelta = dailyDeltaMap.get(puuid)
+      if (eventDelta === undefined || Math.abs(moverDelta) > Math.abs(eventDelta)) {
+        dailyDeltaMap.set(puuid, moverDelta)
+      }
     }
     const dailyLpByPuuid = dailyDeltaMap
     const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
@@ -848,9 +894,11 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
 
     const weeklyMoverRows = shouldFallbackWeeklyActivityGate
       ? await safeDb(
-          supabase.rpc('get_leaderboard_mover_deltas', {
+          supabase.rpc('get_leaderboard_mover_deltas_v2', {
             lb_id: lbId,
             start_at: new Date(weekStartTs).toISOString(),
+            queue_filter: MOVER_QUEUE_ID,
+            require_recent_activity: false,
           }),
           [] as MoverDeltaRaw[],
           'movers_weekly_fallback'
@@ -858,6 +906,12 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       : weeklyMoverRowsActive
 
     const weeklyDeltaMap = new Map<string, number>()
+    for (const row of weeklyLpEventRows) {
+      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
+      weeklyDeltaMap.set(row.puuid, (weeklyDeltaMap.get(row.puuid) ?? 0) + row.lp_delta)
+    }
+
+    const weeklyMoverDeltaMap = new Map<string, number>()
     for (const row of weeklyMoverRows) {
       if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
       const ladderDelta =
@@ -865,7 +919,14 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
           ? toLadderLp(row.end_tier, row.end_rank ?? null, row.end_lp ?? null)
             - toLadderLp(row.start_tier, row.start_rank ?? null, row.start_lp ?? null)
           : row.lp_delta
-      weeklyDeltaMap.set(row.puuid, ladderDelta)
+      weeklyMoverDeltaMap.set(row.puuid, ladderDelta)
+    }
+
+    for (const [puuid, moverDelta] of weeklyMoverDeltaMap.entries()) {
+      const eventDelta = weeklyDeltaMap.get(puuid)
+      if (eventDelta === undefined || Math.abs(moverDelta) > Math.abs(eventDelta)) {
+        weeklyDeltaMap.set(puuid, moverDelta)
+      }
     }
     const weeklyLpByPuuid = weeklyDeltaMap
     const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
@@ -987,13 +1048,12 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: string; ddVersion: string }) {
   const supabase = await createClient()
 
-  const [viewResult, data] = await Promise.all([
-    supabase.rpc('increment_leaderboard_view', { slug_input: slug }),
-    getLeaderboardPageDataCached(lbId, ddVersion),
-  ])
+  const viewResult = await supabase.rpc('increment_leaderboard_view', { slug_input: slug })
   if (viewResult.error) {
     console.error('Failed to increment leaderboard view:', viewResult.error)
   }
+
+  const data = await getLeaderboardPageDataCached(lbId, ddVersion)
 
   const {
     champMap,

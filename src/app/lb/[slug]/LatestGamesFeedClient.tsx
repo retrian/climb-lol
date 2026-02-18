@@ -42,9 +42,10 @@ function subscribeLiveTime(listener: (now: number) => void) {
 }
 
 function useLiveTime() {
-  const [now, setNow] = useState(() => Date.now())
+  const [now, setNow] = useState<number | null>(null)
 
   useEffect(() => {
+    setNow(Date.now())
     return subscribeLiveTime(setNow)
   }, [])
 
@@ -185,7 +186,7 @@ const GameItem = memo(({
   const handleHover = useCallback(() => onHover(game.matchId), [onHover, game.matchId])
 
   const normalizedEndTs = normalizeEndTs(game.endTs ?? null)
-  const when = normalizedEndTs ? timeAgo(normalizedEndTs, now) : '—'
+  const when = normalizedEndTs && now !== null ? timeAgo(normalizedEndTs, now) : '—'
   const name = player ? displayRiotId(player) : 'Unknown'
   
   const isRemake = game.endType === 'REMAKE'

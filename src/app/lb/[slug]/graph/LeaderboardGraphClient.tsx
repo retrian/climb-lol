@@ -200,23 +200,12 @@ function colorForTickLabel(label: string) {
   return hasDiv ? lighten(base, 0.25) : base
 }
 
-function tierIndex(tier?: string | null) {
-  const normalized = getTierWord(tier ?? "")
-  return TIER_ORDER.indexOf(normalized as (typeof TIER_ORDER)[number])
-}
-
 function computeDisplayedLpDelta(cur: NormalizedPoint, prev: NormalizedPoint) {
-  const rawDelta = cur.lpValue - prev.lpValue
-  const curTierIndex = tierIndex(cur.tier)
-  const prevTierIndex = tierIndex(prev.tier)
-
-  if (curTierIndex === -1 || prevTierIndex === -1 || curTierIndex === prevTierIndex) {
-    return rawDelta
-  }
-
-  // LP display resets when crossing tier boundaries (e.g. D1 -> M).
-  // Add/subtract 100 per tier crossed so tooltip shows per-game LP change.
-  return rawDelta + (curTierIndex - prevTierIndex) * 100
+  // Use full ladder value delta so division and tier transitions are always correct
+  // (e.g. D3 84 -> D2 4 = +20, not -80).
+  const ladderDelta = cur.ladderValue - prev.ladderValue
+  if (Number.isFinite(ladderDelta)) return ladderDelta
+  return cur.lpValue - prev.lpValue
 }
 
 // --- Ticks (adaptive) ---
