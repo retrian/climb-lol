@@ -6,12 +6,15 @@ import LeaderboardGraphClient from './LeaderboardGraphClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
 import { compareRanks } from '@/lib/rankSort'
 
+
 export const revalidate = 600
+
 
 // --- Constants ---
 const DEFAULT_GRANDMASTER_CUTOFF = 200
 const DEFAULT_CHALLENGER_CUTOFF = 500
 const DEFAULT_DDRAGON_VERSION = '15.24.1'
+
 
 // --- Types ---
 type Player = {
@@ -21,6 +24,26 @@ type Player = {
   tag_line: string | null
 }
 
+
+async function safeDb<T>(
+  query: PromiseLike<{ data: T | null; error: unknown }>,
+  fallback: T,
+  label: string
+): Promise<T> {
+  try {
+    const { data, error } = await query
+    if (error) {
+      console.error('[graph page] database error', { label, error })
+      return fallback
+    }
+    return (data as T) ?? fallback
+  } catch (error) {
+    console.error('[graph page] database exception', { label, error })
+    return fallback
+  }
+}
+
+
 // --- Helpers ---
 function displayRiotId(player: { game_name: string | null; tag_line: string | null; puuid: string }) {
   const gn = (player.game_name ?? '').trim()
@@ -28,10 +51,12 @@ function displayRiotId(player: { game_name: string | null; tag_line: string | nu
   return player.puuid
 }
 
+
 function profileIconUrl(profileIconId: number | null | undefined, ddVersion: string) {
   if (!profileIconId && profileIconId !== 0) return null
   return `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${profileIconId}.png`
 }
+
 
 // --- Components ---
 function TeamHeaderCard({
@@ -67,6 +92,7 @@ function TeamHeaderCard({
           </>
         )}
 
+
       <div className="relative flex flex-col lg:flex-row">
         <div className="flex-1 p-8 lg:p-10">
           <div className="mb-4 lg:mb-6">
@@ -81,6 +107,7 @@ function TeamHeaderCard({
             </p>
           )}
         </div>
+
 
         {cutoffs.length > 0 && (
           <div className="bg-gradient-to-br from-slate-50 to-white border-t lg:border-t-0 lg:border-l border-slate-200 p-6 lg:p-8 lg:w-80 flex flex-col justify-center gap-5 dark:from-slate-950 dark:to-slate-900 dark:border-slate-800">
@@ -112,6 +139,7 @@ function TeamHeaderCard({
   )
 }
 
+
 export default async function LeaderboardGraphPage({
   params,
   fromCodeRoute = false,
@@ -124,6 +152,7 @@ export default async function LeaderboardGraphPage({
   const latestPatch = await getLatestDdragonVersion().catch(() => null)
   const ddVersion = latestPatch || process.env.NEXT_PUBLIC_DDRAGON_VERSION || DEFAULT_DDRAGON_VERSION
 
+
   const { data: lb } = await supabase
     .from('leaderboards')
     .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description')
@@ -131,7 +160,10 @@ export default async function LeaderboardGraphPage({
     .maybeSingle()
 
 
+
+
   if (!lb) notFound()
+
 
   if (lb.visibility === 'PRIVATE') {
     const { data, error } = await supabase.auth.getUser()
@@ -140,32 +172,56 @@ export default async function LeaderboardGraphPage({
     }
   }
 
+
   if (!fromCodeRoute) {
     redirect(`/leaderboards/${lb.leaderboard_code}/graph`)
   }
 
-  // Use service-role client for data reads after access checks to avoid RLS-caused empty datasets.
-  const dataClient = createServiceClient()
 
-  const { data: playersRaw } = await dataClient
-    .from('leaderboard_players')
-    .select('id, puuid, game_name, tag_line')
-    .eq('leaderboard_id', lb.id)
-    .order('sort_order', { ascending: true })
-    .limit(2000)
+  // Use service-role client for data reads after access checks to avoid RLS-caused empty datasets.
+  // Fall back to request client so transient service-client issues do not hard-crash the page.
+  const dataClient = (() => {
+    try {
+      return createServiceClient()
+    } catch (error) {
+      console.error('[graph page] failed to create service client; falling back to request client', error)
+      return supabase
+    }
+  })()
+
+
+  const playersRaw = await safeDb(
+    dataClient
+      .from('leaderboard_players')
+      .select('id, puuid, game_name, tag_line')
+      .eq('leaderboard_id', lb.id)
+      .order('sort_order', { ascending: true })
+      .limit(2000),
+    [] as Player[],
+    'leaderboard_players'
+  )
+
+
 
 
   const players = (playersRaw ?? []) as Player[]
-  const puuids = players.map((p) => p.puuid)
+  const puuids = players.map((p) => p.puuid).filter(Boolean)
 
-  const { data: cutoffsRaw } = await dataClient
-    .from('rank_cutoffs')
-    .select('queue_type, tier, cutoff_lp')
-    .in('tier', ['GRANDMASTER', 'CHALLENGER'])
+
+  const cutoffsRaw = await safeDb(
+    dataClient
+      .from('rank_cutoffs')
+      .select('queue_type, tier, cutoff_lp')
+      .in('tier', ['GRANDMASTER', 'CHALLENGER']),
+    [] as Array<{ queue_type: string; tier: string; cutoff_lp: number }>,
+    'rank_cutoffs'
+  )
+
+
 
 
   const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
-  
+ 
   const cutoffsDisplay = [
     { key: 'CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
     { key: 'GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
@@ -176,6 +232,7 @@ export default async function LeaderboardGraphPage({
       icon: item.icon,
     }))
     .filter((item): item is { label: string; lp: number; icon: string } => item.lp !== undefined)
+
 
   if (puuids.length === 0) {
     return (
@@ -198,26 +255,51 @@ export default async function LeaderboardGraphPage({
     )
   }
 
-  const { data: stateRaw } = await dataClient
-    .from('player_riot_state')
-    .select('puuid, profile_icon_id')
-    .in('puuid', puuids)
+
+  const stateRaw = await safeDb(
+    dataClient
+      .from('player_riot_state')
+      .select('puuid, profile_icon_id')
+      .in('puuid', puuids),
+    [] as Array<{ puuid: string; profile_icon_id: number | null }>,
+    'player_riot_state'
+  )
+
+
 
 
   const stateBy = new Map((stateRaw ?? []).map((row) => [row.puuid, row]))
 
-  const { data: rankSnapshotRaw } = await dataClient
-    .from('player_rank_snapshot')
-    .select('puuid, queue_type, tier, rank, league_points, wins, losses, fetched_at')
-    .in('puuid', puuids)
-    .eq('queue_type', 'RANKED_SOLO_5x5')
+
+  const rankSnapshotRaw = await safeDb(
+    dataClient
+      .from('player_rank_snapshot')
+      .select('puuid, queue_type, tier, rank, league_points, wins, losses, fetched_at')
+      .in('puuid', puuids)
+      .eq('queue_type', 'RANKED_SOLO_5x5'),
+    [] as Array<{
+      puuid: string
+      queue_type: string
+      tier: string | null
+      rank: string | null
+      league_points: number | null
+      wins: number | null
+      losses: number | null
+      fetched_at: string | null
+    }>,
+    'player_rank_snapshot'
+  )
+
+
 
 
   const rankBy = new Map((rankSnapshotRaw ?? []).map((row) => [row.puuid, row]))
 
+
   const playersSorted = [...players].sort((a, b) =>
     compareRanks(rankBy.get(a.puuid) ?? undefined, rankBy.get(b.puuid) ?? undefined)
   )
+
 
   const playerSummaries = playersSorted.map((player, index) => {
     const rankData = rankBy.get(player.puuid)
@@ -233,10 +315,14 @@ export default async function LeaderboardGraphPage({
     }
   })
 
+
   const cutoffs = {
     grandmaster: cutoffsByTier.get('GRANDMASTER') ?? DEFAULT_GRANDMASTER_CUTOFF,
     challenger: cutoffsByTier.get('CHALLENGER') ?? DEFAULT_CHALLENGER_CUTOFF,
   }
+
+
+
 
 
 
@@ -254,6 +340,7 @@ export default async function LeaderboardGraphPage({
             bannerUrl={lb.banner_url}
           />
         </div>
+
 
         <div className="mx-auto w-full max-w-[1460px]">
           <LeaderboardGraphClient players={playerSummaries} slug={slug} cutoffs={cutoffs} />
