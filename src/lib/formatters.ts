@@ -6,7 +6,8 @@ export function getKdaColor(kda: number) {
 }
 
 export function getWinrateColor(winratePercent: number) {
-  if (winratePercent > 60) return 'text-rose-600 dark:text-rose-400'
+  if (winratePercent > 70) return 'text-yellow-600 font-black dark:text-yellow-400'
+  if (winratePercent >= 60) return 'text-blue-600 dark:text-blue-400'
   if (winratePercent > 50) return 'text-emerald-600 dark:text-emerald-400'
   return 'text-slate-500 dark:text-slate-400'
 }

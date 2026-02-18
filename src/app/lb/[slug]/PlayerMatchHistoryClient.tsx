@@ -497,20 +497,24 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
     const champion = champMap?.[match.championId]
     const champSrc = champion ? championIconUrl(ddVersion, champion.id) : null
     const durationLabel = formatMatchDuration(match.durationS ?? 0)
-    const kdaValue = match.d > 0 ? (match.k + match.a) / match.d : 99
-    const kdaLabel = match.d === 0 ? 'Perfect' : kdaValue.toFixed(1)
-    const kdaColor = match.d === 0 ? 'text-yellow-600 font-bold dark:text-yellow-400' : getKdaColor(kdaValue)
+    const kdaValue = match.d > 0 ? (match.k + match.a) / match.d : Infinity
+    const kdaRatioLabel = Number.isFinite(kdaValue) ? `${kdaValue.toFixed(2)}:1 KDA` : 'Perfect KDA'
+    const kdaTextColor = Number.isFinite(kdaValue) ? getKdaColor(kdaValue) : 'text-yellow-500 font-semibold'
     
     // Handle Remake logic
     const isRemake = match.endType === 'REMAKE'
-    const resultLabel = isRemake ? 'Remake' : (match.win ? 'Victory' : 'Defeat')
-    const resultColor = isRemake ? 'text-slate-500' : (match.win ? 'text-emerald-500' : 'text-rose-500')
-    const rowAccent = isRemake ? 'border-slate-300' : (match.win ? 'border-emerald-400' : 'border-rose-400')
-    const rowBg = isRemake ? 'bg-slate-50/80 dark:bg-slate-500/10' : (match.win ? 'bg-emerald-50/80 dark:bg-emerald-500/10' : 'bg-rose-50/80 dark:bg-rose-500/10')
-    const rowBorder = isRemake ? 'border-slate-200/80 dark:border-slate-500/30' : (match.win ? 'border-emerald-200/80 dark:border-emerald-500/30' : 'border-rose-200/80 dark:border-rose-500/30')
+    const rowAccent = isRemake ? 'border-slate-400' : (match.win ? 'border-emerald-500' : 'border-rose-500')
+    const rowBg = isRemake ? 'bg-slate-100/80 dark:bg-slate-500/10' : (match.win ? 'bg-emerald-50/90 dark:bg-emerald-500/10' : 'bg-rose-50/90 dark:bg-rose-500/10')
+    const rowBorder = isRemake ? 'border-slate-200 dark:border-slate-500/30' : (match.win ? 'border-emerald-200 dark:border-emerald-500/30' : 'border-rose-200 dark:border-rose-500/30')
+    const rowItemVars = isRemake
+      ? '[--game-item-color-100:theme(colors.slate.50)] [--game-item-color-200:theme(colors.slate.200)] [--game-item-color-300:theme(colors.slate.300)] [--game-item-color-500:theme(colors.slate.400)] [--game-item-color-600:theme(colors.slate.700)]'
+      : match.win
+        ? '[--game-item-color-100:theme(colors.emerald.50)] [--game-item-color-200:theme(colors.emerald.100)] [--game-item-color-300:theme(colors.emerald.200)] [--game-item-color-500:theme(colors.emerald.500)] [--game-item-color-600:theme(colors.emerald.700)]'
+        : '[--game-item-color-100:theme(colors.rose.50)] [--game-item-color-200:theme(colors.rose.100)] [--game-item-color-300:theme(colors.rose.200)] [--game-item-color-500:theme(colors.rose.500)] [--game-item-color-600:theme(colors.rose.700)]'
 
     const when = match.endTs ? timeAgo(match.endTs) : '—'
     const queueLabel = match.queueId ? QUEUE_LABELS[match.queueId] ?? 'Custom' : 'Custom'
+    const queueLabelDisplay = queueLabel === 'Ranked Solo/Duo' ? 'Ranked Solo' : queueLabel
     const csPerMin = formatCsPerMin(match.cs, match.durationS)
     const targetPuuid = focusedPuuid ?? match.puuid
     const participants = detail?.info.participants ?? []
@@ -544,6 +548,9 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
     const spell1 = participant ? spellMap?.get(participant.summoner1Id) : null
     const spell2 = participant ? spellMap?.get(participant.summoner2Id) : null
     const items = participant ? [participant.item0, participant.item1, participant.item2, participant.item3, participant.item4, participant.item5, participant.item6, participant.roleBoundItem ?? 0] : []
+    const mainItems = items.length > 0 ? items.slice(0, 6) : Array.from({ length: 6 }).map(() => 0)
+    const trinketItem = items.length > 6 ? items[6] : 0
+    const questItem = items.length > 7 ? items[7] : 0
     const imageIssueReason = !detail
       ? 'Waiting for match detail data'
       : !participant
@@ -559,120 +566,270 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
       if (!teamKills) return null
       return Math.round(((match.k + match.a) / teamKills) * 100)
     }, [detail?.info?.participants, participant?.teamId, match.k, match.a])
+    const rosterColumns = (() => {
+      if (!detail?.info?.participants?.length) return [[], []] as Array<Array<{ key: string; name: string; icon: string | null; isFocused: boolean }>>
+      const mapParticipant = (p: RiotParticipant) => {
+        const champ = champMap?.[p.championId]
+        const icon = champ ? championIconUrl(ddVersion, champ.id) : null
+        const name = (p.riotIdGameName || p.summonerName || 'Unknown').trim()
+        const isFocused = p.puuid === targetPuuid || p.puuid === match.puuid
+        return {
+          key: `${p.puuid}-${p.participantId}`,
+          name,
+          icon,
+          isFocused,
+        }
+      }
+
+      const team100 = detail.info.participants
+        .filter((p) => p.teamId === 100)
+        .sort((a, b) => a.participantId - b.participantId)
+        .slice(0, 5)
+        .map(mapParticipant)
+
+      const team200 = detail.info.participants
+        .filter((p) => p.teamId === 200)
+        .sort((a, b) => a.participantId - b.participantId)
+        .slice(0, 5)
+        .map(mapParticipant)
+
+      return [team100, team200]
+    })()
   
     // Rank Fallback Data: Prioritize match snapshot, fallback to current rank
     const tier = match.rankTier ?? currentRankData?.tier
     const division = match.rankDivision ?? currentRankData?.rank
     const rankIcon = tier ? getRankIconSrc(tier) : null
     const rankLabel = tier ? formatTierShort(tier, division) : null
+    const lpDisplay = match.lpChange !== undefined && match.lpChange !== null
+      ? `${match.lpChange >= 0 ? '▲' : '▼'} ${Math.abs(match.lpChange)} LP`
+      : match.lpNote
+        ? match.lpNote
+        : rankLabel
+          ? `${rankLabel} (N/A)`
+          : '— LP'
+    const lpDisplayClass = match.lpChange !== undefined && match.lpChange !== null
+      ? (match.lpChange >= 0 ? 'font-bold text-sm text-emerald-500' : 'font-bold text-sm text-[#F02E48]')
+      : 'text-[var(--game-item-color-600)] text-[11px] font-semibold'
+    const lpBadgeTone = match.lpChange !== undefined && match.lpChange !== null
+      ? (match.lpChange >= 0 ? 'bg-emerald-500/10' : 'bg-rose-500/10')
+      : 'bg-slate-500/10'
+    const queueLabelClass = isRemake
+      ? 'font-bold text-[11px] text-slate-500'
+      : match.win
+        ? 'font-bold text-[11px] text-emerald-500'
+        : 'font-bold text-[11px] text-[#F02E48]'
+    const championOutlineClass = isRemake
+      ? 'border-slate-400'
+      : match.win
+        ? 'border-emerald-500'
+        : 'border-[#F02E48]'
 
     return (
-      <div className={`rounded-2xl border ${rowBorder} ${rowBg} shadow-sm`}>
-        <button type="button" onClick={() => onOpen(match)} onMouseEnter={() => onHover(match)} className="w-full px-4 py-2 text-left transition hover:bg-white/60 dark:hover:bg-slate-900/40">
-          <div className={`flex items-center gap-3 text-xs text-slate-500 ${rowAccent} border-l-4 pl-3 min-w-0`}>
+      <div className={`box-border flex w-full border-l-[6px] ${rowAccent} border ${rowBorder} ${rowBg} ${rowItemVars} shadow-sm md:h-auto md:min-h-28 md:overflow-hidden md:rounded`}>
+        <button type="button" onClick={() => onOpen(match)} onMouseEnter={() => onHover(match)} className="w-full text-left transition hover:bg-white/30 dark:hover:bg-slate-900/30">
+          <div className="flex flex-1 flex-col text-xs text-slate-500 md:flex-row md:items-center md:gap-2 md:p-1 md:px-3">
             
             {/* --- COLUMN 1: Result, Duration, LP, Queue, Time --- */}
-            <div className="flex flex-col w-[130px] shrink-0 leading-tight gap-0.5">
-              {/* Row 1: Result + Duration */}
-              <div className="flex items-baseline gap-1.5">
-                <span className={`text-[12px] font-black uppercase tracking-wide ${resultColor}`}>{resultLabel}</span>
-                <span className="text-[10px] text-slate-400 font-medium">{durationLabel}</span>
+            <div className="flex flex-row-reverse items-center justify-between gap-2 border-b border-b-[var(--game-item-color-200)] py-0.5 pl-3 pr-0.5 md:w-[108px] md:flex-col md:items-baseline md:justify-normal md:border-none md:border-r md:border-[var(--game-item-color-200)] md:py-0 md:pl-0 md:pr-2">
+              <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2 md:flex-col md:items-baseline md:gap-0">
+                  <span className={`${queueLabelClass} uppercase tracking-wide`}>{queueLabelDisplay}</span>
+                  <span className="text-[10px] text-slate-400">{when}</span>
+                </div>
               </div>
 
-              {/* Row 2: LP Change / Note */}
-              <div className="h-4 flex items-center">
-                {match.lpChange !== undefined && match.lpChange !== null ? (
-                  match.lpNote ? (
-                    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-                        match.lpNote === 'PROMOTED' 
-                        ? 'text-emerald-700 bg-emerald-100/50 dark:text-emerald-200 dark:bg-emerald-500/20' 
-                        : 'text-rose-700 bg-rose-100/50 dark:text-rose-200 dark:bg-rose-500/20'
-                    }`}>
-                      {match.lpNote}
-                    </span>
-                  ) : (
-                    <span className={`text-[11px] font-bold ${match.lpChange >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
-                        {match.lpChange > 0 ? '▲' : '▼'} {Math.abs(match.lpChange)} LP
-                    </span>
-                  )
-                ) : (
-                  // Fallback: Show snapshot rank or current rank if LP data missing
-                  rankLabel && !isRemake ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-700/50 dark:text-slate-300">
-                      {rankIcon && <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />}
-                      {rankLabel} <span className="text-[9px] opacity-70">(N/A)</span>
-                    </span>
-                  ) : (
-                    <span className="text-[11px] text-slate-300 dark:text-slate-600 font-medium opacity-50">— LP</span>
-                  )
-                )}
+              <div className="hidden h-[1px] w-12 bg-slate-400/30 md:block" />
+
+              <div className="flex gap-2 md:flex-col md:gap-0">
+                <div className="flex min-h-[17px] items-center gap-1 leading-[17px]">
+                  {rankIcon && !match.lpChange && !match.lpNote ? (
+                    <img src={rankIcon} alt="" className="h-3 w-3 object-contain" loading="lazy" />
+                  ) : null}
+                  <strong className={`${lpDisplayClass} inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-xs ${lpBadgeTone}`}>{lpDisplay}</strong>
+                </div>
+                <span className="text-[10px] text-slate-500">{durationLabel}</span>
               </div>
-
-              {/* Row 3: Queue Type */}
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mt-0.5">{queueLabel}</span>
-
-              {/* Row 4: Time Ago */}
-              <span className="text-[10px] text-slate-400">{when}</span>
             </div>
 
+            <div className="flex flex-1 gap-1 py-2 pl-3 pr-2 md:p-0 md:items-center md:justify-between md:gap-2">
             <div className="flex items-center gap-3 w-[190px] shrink-0">
               {champSrc ? (
                 <div className="relative">
-                  <img loading="lazy" decoding="async" src={champSrc} alt="" className="h-[50px] w-[50px] rounded-lg border-2 border-slate-200 shadow-sm dark:border-slate-700" />
-                  <span className="absolute -bottom-2 -right-2 rounded-full bg-slate-900 px-1.5 text-[10px] font-bold text-white shadow dark:bg-slate-100 dark:text-slate-900">{participant?.champLevel ?? '—'}</span>
+                  <img
+                    loading="lazy"
+                    decoding="async"
+                    src={champSrc}
+                    alt=""
+                    className={`size-14 rounded-full border-2 object-cover shadow-md ${championOutlineClass}`}
+                  />
+                  <span className="absolute bottom-0 right-0 flex size-5 items-center justify-center rounded-full bg-slate-900 text-[11px] leading-[14px] text-white">
+                    {participant?.champLevel ?? '—'}
+                  </span>
                 </div>
-              ) : <div className="h-[50px] w-[50px] rounded-lg bg-slate-200 dark:bg-slate-800" />}
-              <div className="mt-1 grid grid-cols-[24px_24px] grid-rows-2 gap-1">
-                {spell1 ? (
-                  <img loading="lazy" decoding="async" src={buildSpellIconUrl(ddVersion, spell1) ?? ''} alt="" className="h-6 w-6 rounded-md border border-slate-200 dark:border-slate-700" />
-                ) : (
-                  <div className="h-6 w-6 rounded-md bg-slate-200 dark:bg-slate-800" />
-                )}
-                {keystone ? (
-                  <img loading="lazy" decoding="async" src={buildRuneIconUrl(keystone.icon) ?? ''} alt="" className="h-6 w-6 rounded-full bg-slate-100 dark:bg-slate-800" />
-                ) : (
-                  <div className="h-6 w-6 rounded-full bg-slate-200 dark:bg-slate-800" />
-                )}
-                {spell2 ? (
-                  <img loading="lazy" decoding="async" src={buildSpellIconUrl(ddVersion, spell2) ?? ''} alt="" className="h-6 w-6 rounded-md border border-slate-200 dark:border-slate-700" />
-                ) : (
-                  <div className="h-6 w-6 rounded-md bg-slate-200 dark:bg-slate-800" />
-                )}
-                {secondaryStyle ? (
-                  <img loading="lazy" decoding="async" src={buildRuneIconUrl(secondaryStyle.icon) ?? ''} alt="" className="h-6 w-6 rounded-full bg-slate-100 dark:bg-slate-800" />
-                ) : (
-                  <div className="h-6 w-6 rounded-full bg-slate-200 dark:bg-slate-800" />
-                )}
+              ) : <div className="size-14 rounded-full bg-slate-200 dark:bg-slate-800" />}
+              <div className="flex gap-0.5">
+                <ul className="flex flex-col gap-0.5">
+                  <li className="w-[18px] md:w-[22px]">
+                    {spell1 ? (
+                      <img
+                        loading="lazy"
+                        decoding="async"
+                        src={buildSpellIconUrl(ddVersion, spell1) ?? ''}
+                        alt=""
+                        className="rounded size-[18px] md:size-[22px]"
+                      />
+                    ) : (
+                      <div className="rounded size-[18px] md:size-[22px] bg-slate-200 dark:bg-slate-800" />
+                    )}
+                  </li>
+                  <li className="w-[18px] md:w-[22px]">
+                    {spell2 ? (
+                      <img
+                        loading="lazy"
+                        decoding="async"
+                        src={buildSpellIconUrl(ddVersion, spell2) ?? ''}
+                        alt=""
+                        className="rounded size-[18px] md:size-[22px]"
+                      />
+                    ) : (
+                      <div className="rounded size-[18px] md:size-[22px] bg-slate-200 dark:bg-slate-800" />
+                    )}
+                  </li>
+                </ul>
+                <ul className="flex flex-col gap-0.5">
+                  <li className="w-[18px] md:w-[22px]">
+                    {keystone ? (
+                      <img
+                        loading="lazy"
+                        decoding="async"
+                        src={buildRuneIconUrl(keystone.icon) ?? ''}
+                        alt=""
+                        className="rounded-full size-[18px] md:size-[22px] bg-black"
+                      />
+                    ) : (
+                      <div className="rounded-full size-[18px] md:size-[22px] bg-slate-200 dark:bg-slate-800" />
+                    )}
+                  </li>
+                  <li className="w-[18px] md:w-[22px]">
+                    {secondaryStyle ? (
+                      <img
+                        loading="lazy"
+                        decoding="async"
+                        src={buildRuneIconUrl(secondaryStyle.icon) ?? ''}
+                        alt=""
+                        className="rounded-full size-[18px] md:size-[22px]"
+                      />
+                    ) : (
+                      <div className="rounded-full size-[18px] md:size-[22px] bg-slate-200 dark:bg-slate-800" />
+                    )}
+                  </li>
+                </ul>
               </div>
             </div>
-            <div className="flex flex-col w-[150px] shrink-0 leading-tight">
-              <span className="text-sm font-bold text-slate-900 dark:text-slate-100 whitespace-nowrap">
-                {match.k} / {match.d} / {match.a}
-              </span>
-              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                {kdaLabel === 'Perfect' ? 'Perfect' : `${kdaLabel} KDA`}
-              </span>
+            <div className="flex flex-1 flex-col items-center gap-0.5 md:max-w-[114px] md:items-start">
+              <div className="flex items-center gap-1 text-[15px] leading-[22px]">
+                <strong className="text-slate-900 dark:text-slate-100">{match.k}</strong>
+                <span className="text-slate-500">/</span>
+                <strong className="text-red-600 dark:text-red-400">{match.d}</strong>
+                <span className="text-slate-500">/</span>
+                <strong className="text-slate-900 dark:text-slate-100">{match.a}</strong>
+              </div>
+              <div className={`text-[11px] whitespace-nowrap ${kdaTextColor}`}>
+                {kdaRatioLabel}
+              </div>
             </div>
-            <div className="flex flex-col w-[150px] shrink-0 border-l border-slate-200 pl-3 leading-tight dark:border-slate-800">
-              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                {killParticipationPct !== null ? `${killParticipationPct}% KP` : '—'}
-              </span>
-              <span className="text-[10px] font-semibold text-slate-500 dark:text-slate-400 whitespace-nowrap">{match.cs} CS</span>
+            <div className="flex flex-1 flex-col items-center whitespace-nowrap text-[11px] leading-[14px] max-[320px]:hidden md:min-h-[58px] md:w-[131px] md:flex-none md:items-baseline md:border-l md:border-slate-400/30 md:pl-2">
+              <div className="text-slate-500 dark:text-slate-400">
+                P/Kill {killParticipationPct !== null ? `${killParticipationPct}%` : '—'}
+              </div>
+              <div className="text-slate-500 dark:text-slate-400">
+                CS {match.cs}
+              </div>
+              <div className="text-slate-500 dark:text-slate-400">
+                CS/M {csPerMin}
+              </div>
             </div>
-            <div className="grid grid-cols-8 gap-2 ml-auto min-w-0">
-              {items.length > 0 ? items.map((itemId, idx) => {
+            <div className="ml-auto flex min-w-0 items-center gap-1">
+              <div className="grid grid-cols-3 grid-rows-2 gap-0.5">
+                {mainItems.map((itemId, idx) => {
                   const icon = buildItemIconUrl(ddVersion, itemId)
                   return (
-                    <div key={idx} className="h-9 w-9 rounded-md border border-slate-200 bg-slate-100 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div
+                      key={`main-${idx}-${itemId}`}
+                      className="h-[22px] w-[22px] overflow-hidden rounded bg-[var(--game-item-color-300)]"
+                    >
                       {icon ? (
-                        <img loading="lazy" decoding="async" src={icon} alt="" className="h-full w-full rounded-md object-cover" style={{ aspectRatio: '1 / 1' }} />
-                      ) : null}
+                        <img
+                          loading="lazy"
+                          decoding="async"
+                          src={icon}
+                          alt=""
+                          className="h-[22px] w-[22px] rounded object-cover"
+                        />
+                      ) : (
+                        <div className="h-[22px] w-[22px] rounded bg-slate-800/60 border border-slate-700/40" />
+                      )}
                     </div>
                   )
-                }) : Array.from({ length: 8 }).map((_, idx) => (
-                  <div key={`e-${idx}`} className="h-9 w-9 rounded-md border border-slate-200 bg-slate-100 shadow-sm dark:border-slate-700 dark:bg-slate-800" style={{ aspectRatio: '1 / 1' }} />
-                ))}
+                })}
+              </div>
+              <div className="grid grid-cols-1 grid-rows-2 gap-0.5">
+                <div className="h-[24px] w-[24px] overflow-hidden rounded-full bg-[var(--game-item-color-300)]">
+                  {buildItemIconUrl(ddVersion, trinketItem) ? (
+                    <img
+                      loading="lazy"
+                      decoding="async"
+                      src={buildItemIconUrl(ddVersion, trinketItem) ?? ''}
+                      alt=""
+                      className="h-[24px] w-[24px] rounded-full object-cover"
+                    />
+                  ) : null}
+                </div>
+                <div className="h-[24px] w-[24px] overflow-hidden rounded-full bg-[var(--game-item-color-300)]">
+                  {buildItemIconUrl(ddVersion, questItem) ? (
+                    <img
+                      loading="lazy"
+                      decoding="async"
+                      src={buildItemIconUrl(ddVersion, questItem) ?? ''}
+                      alt=""
+                      className="h-[24px] w-[24px] rounded-full object-cover"
+                    />
+                  ) : null}
+                </div>
+              </div>
             </div>
+            {rosterColumns.some((col) => col.length > 0) && (
+              <div className="hidden gap-1 md:flex">
+                {rosterColumns.map((column, colIdx) => (
+                  <div key={`team-col-${colIdx}`} className="flex flex-col gap-0.5">
+                    {column.map((entry) => (
+                      <div key={entry.key} className="flex items-center gap-1">
+                        {entry.icon ? (
+                          <img
+                            loading="lazy"
+                            decoding="async"
+                            src={entry.icon}
+                            alt=""
+                            className={`${entry.isFocused ? 'rounded-full' : 'rounded-[4px]'} h-4 w-4 object-cover`}
+                          />
+                        ) : (
+                          <div className="h-4 w-4 rounded-[4px] bg-slate-300 dark:bg-slate-700" />
+                        )}
+                        <div className="flex w-[60px] items-center gap-1">
+                          <span
+                            className={`cursor-default truncate text-[11px] ${entry.isFocused ? 'font-semibold text-slate-900 dark:text-slate-100' : 'text-slate-600 dark:text-slate-300'}`}
+                            title={entry.name}
+                          >
+                            {entry.name}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
             {imageIssueReason && (
               <div
                 className="ml-2 inline-flex max-w-[220px] shrink-0 items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300"
@@ -682,8 +839,9 @@ const MatchRow = memo(({ match, champMap, ddVersion, detail, onOpen, onHover, sp
                 <span className="truncate">{`No images: ${imageIssueReason}`}</span>
               </div>
             )}
-            <div className="ml-2 text-slate-400">
+            <div className="ml-2 flex items-center text-slate-400 md:self-stretch md:justify-center">
               <svg className="h-4 w-4 transition-transform group-hover:translate-x-0.5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" /></svg>
+            </div>
             </div>
           </div>
         </button>
@@ -754,13 +912,14 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
         if (match.durationS && match.durationS > acc.longestGameS) {
           acc.longestGameS = match.durationS
           acc.longestGameChampionId = match.championId
+          acc.longestGameWin = match.win
         }
-        if (match.k > acc.maxKills.value) acc.maxKills = { value: match.k, championId: match.championId }
-        if (match.d > acc.maxDeaths.value) acc.maxDeaths = { value: match.d, championId: match.championId }
-        if (match.a > acc.maxAssists.value) acc.maxAssists = { value: match.a, championId: match.championId }
-        if (match.cs > acc.maxCs.value) acc.maxCs = { value: match.cs, championId: match.championId }
+        if (match.k > acc.maxKills.value) acc.maxKills = { value: match.k, championId: match.championId, win: match.win }
+        if (match.d > acc.maxDeaths.value) acc.maxDeaths = { value: match.d, championId: match.championId, win: match.win }
+        if (match.a > acc.maxAssists.value) acc.maxAssists = { value: match.a, championId: match.championId, win: match.win }
+        if (match.cs > acc.maxCs.value) acc.maxCs = { value: match.cs, championId: match.championId, win: match.win }
         if ((match.visionScore ?? 0) > acc.maxVision.value) {
-          acc.maxVision = { value: match.visionScore ?? 0, championId: match.championId }
+          acc.maxVision = { value: match.visionScore ?? 0, championId: match.championId, win: match.win }
         }
         return acc
       },
@@ -775,11 +934,12 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
         vision: 0,
         longestGameS: 0,
         longestGameChampionId: 0,
-        maxKills: { value: 0, championId: 0 },
-        maxDeaths: { value: 0, championId: 0 },
-        maxAssists: { value: 0, championId: 0 },
-        maxCs: { value: 0, championId: 0 },
-        maxVision: { value: 0, championId: 0 },
+        longestGameWin: null as boolean | null,
+        maxKills: { value: 0, championId: 0, win: null as boolean | null },
+        maxDeaths: { value: 0, championId: 0, win: null as boolean | null },
+        maxAssists: { value: 0, championId: 0, win: null as boolean | null },
+        maxCs: { value: 0, championId: 0, win: null as boolean | null },
+        maxVision: { value: 0, championId: 0, win: null as boolean | null },
       }
     )
 
@@ -808,6 +968,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       totalVision: totals.vision,
       longestGameS: totals.longestGameS,
       longestGameChampionId: totals.longestGameChampionId,
+      longestGameWin: totals.longestGameWin,
       timePlayedS: totals.durationS,
       maxKills: totals.maxKills,
       maxDeaths: totals.maxDeaths,
@@ -1265,7 +1426,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
           <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/60 backdrop-blur-sm p-4" onClick={handleClose}>
             {/* 4. Backdrop Click Fix: Stop propagation on content click */}
             <div ref={modalRef} role="dialog" aria-modal="true" className="relative flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-950" onClick={e => e.stopPropagation()}>
-              <div className="sticky top-0 z-10 border-b border-slate-200 bg-white/95 px-6 py-5 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95">
+              <div className="sticky top-0 z-10 bg-white/95 px-6 py-5 backdrop-blur dark:bg-slate-950/95">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-start gap-4">
                     {loadingSummary ? (
@@ -1278,8 +1439,18 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                       </div>
                     ) : (
                       <>
-                        <div className="h-20 w-20 overflow-hidden rounded-2xl border-2 border-slate-200 bg-slate-100 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                          {summary?.profileIconId && <img loading="eager" decoding="async" src={profileIconUrl(summary.profileIconId, ddVersion) ?? ''} alt="" className="h-full w-full object-cover" />}
+                        <div className="flex h-[92px] w-[92px] items-center justify-center rounded-full border-2 border-white/30 bg-white/10 p-[5px] shadow-sm dark:border-white/20 dark:bg-slate-900/40">
+                          {summary?.profileIconId ? (
+                            <img
+                              loading="eager"
+                              decoding="async"
+                              src={profileIconUrl(summary.profileIconId, ddVersion) ?? ''}
+                              alt="avatar"
+                              className="h-[80px] w-[80px] rounded-full object-cover object-center"
+                            />
+                          ) : (
+                            <div className="h-[80px] w-[80px] rounded-full bg-slate-200 dark:bg-slate-800" />
+                          )}
                         </div>
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -1388,19 +1559,32 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                     </button>
                   </div>
                 </div>
-                <div className="mt-5 flex flex-wrap items-center gap-2 text-xs font-semibold">
-                  {(['matches', 'stats', 'champions'] as const).map(tab => (
-                    <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-full px-4 py-2 transition ${activeTab === tab ? 'bg-slate-900 text-white shadow dark:bg-slate-100 dark:text-slate-900' : 'border border-slate-200 bg-white text-slate-500 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300'}`}>
-                      {tab.charAt(0).toUpperCase() + tab.slice(1)}
-                    </button>
-                  ))}
+                <div className="relative mt-5 mb-1 flex h-9 w-full gap-4 px-1">
+                  <div className="absolute inset-x-0 bottom-0 h-[2px] rounded bg-slate-200 dark:bg-slate-800" />
+                  {(['matches', 'stats', 'champions'] as const).map((tab) => {
+                    const isActive = activeTab === tab
+                    return (
+                      <button
+                        key={tab}
+                        type="button"
+                        onClick={() => setActiveTab(tab)}
+                        className={`relative pb-3 text-sm font-semibold transition-colors ${isActive ? 'text-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'}`}
+                        aria-current={isActive ? 'page' : undefined}
+                      >
+                        <div className="flex flex-row items-center gap-2">
+                          <span>{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
+                        </div>
+                        <div className={`pointer-events-none absolute -bottom-[2px] left-0 h-0.5 w-full rounded transition-opacity ${isActive ? 'bg-slate-900 opacity-100 dark:bg-white' : 'bg-transparent opacity-0'}`} />
+                      </button>
+                    )
+                  })}
                 </div>
               </div>
               <div className="flex-1 min-h-0 overflow-hidden">
                 {activeTab === 'matches' && (
                   <div
                     data-match-list
-                    className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-5 space-y-3 overscroll-contain"
+                    className="flex h-[calc(90vh-240px)] flex-col gap-1 overflow-y-auto px-6 py-5 overscroll-contain md:gap-2"
                     style={{ contentVisibility: 'auto', containIntrinsicSize: '1200px' }}
                   >
                     {(loadingMatches || !imagesReady) ? (
@@ -1475,24 +1659,50 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                       </div>
                     ) : (
                       <>
-                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                          {[
-                            { label: 'Total Kills', value: statsSnapshot.totalKills },
-                            { label: 'Total Deaths', value: statsSnapshot.totalDeaths },
-                            { label: 'Total Assists', value: statsSnapshot.totalAssists },
-                            { label: 'Overall KDA', value: statsSnapshot.kdaRatio.toFixed(2) },
-                            { label: 'Time Played', value: formatHoursMinutes(statsSnapshot.timePlayedS) },
-                            { label: 'Total Games', value: statsSnapshot.games },
-                          ].map((stat) => (
-                            <div key={stat.label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                              <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{stat.label}</div>
-                              <div className="mt-2 text-xl font-bold text-slate-900 dark:text-slate-100">{stat.value}</div>
+                        <div className="grid gap-3 lg:grid-cols-4">
+                          <div className={`rounded-xl border p-4 shadow-sm ${statsSnapshot.winrate >= 60 ? 'border-blue-400/40 bg-blue-500/10' : statsSnapshot.winrate >= 50 ? 'border-emerald-400/40 bg-emerald-500/10' : 'border-slate-400/40 bg-slate-500/10'}`}>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Winrate</div>
+                            <div className="mt-2 flex items-end gap-2">
+                              <span className={`text-2xl font-black tabular-nums ${statsSnapshot.winrate >= 60 ? 'text-blue-500' : statsSnapshot.winrate >= 50 ? 'text-emerald-500' : 'text-slate-500 dark:text-slate-300'}`}>{statsSnapshot.winrate}%</span>
+                              <span className="pb-0.5 text-xs text-slate-600 dark:text-slate-300">{statsSnapshot.games} Games</span>
                             </div>
-                          ))}
+                            <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-300 dark:bg-slate-800/80">
+                              <div className={`h-full rounded-full ${statsSnapshot.winrate >= 60 ? 'bg-blue-500' : statsSnapshot.winrate >= 50 ? 'bg-emerald-500' : 'bg-slate-500'}`} style={{ width: `${statsSnapshot.winrate}%` }} />
+                            </div>
+                          </div>
+
+                          <div className={`rounded-xl border p-4 shadow-sm ${statsSnapshot.kdaRatio >= 4 ? 'border-blue-400/40 bg-blue-500/10' : statsSnapshot.kdaRatio >= 3 ? 'border-emerald-400/40 bg-emerald-500/10' : 'border-slate-400/40 bg-slate-500/10'}`}>
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Combat</div>
+                            <div className="mt-2 flex items-center gap-1 text-lg font-black tabular-nums">
+                              <span className="text-emerald-500">{statsSnapshot.totalKills}</span>
+                              <span className="text-slate-400">/</span>
+                              <span className="text-rose-500">{statsSnapshot.totalDeaths}</span>
+                              <span className="text-slate-400">/</span>
+                              <span className="text-sky-500">{statsSnapshot.totalAssists}</span>
+                            </div>
+                            <div className={`mt-1 text-xs font-semibold ${statsSnapshot.kdaRatio >= 4 ? 'text-blue-500' : statsSnapshot.kdaRatio >= 3 ? 'text-emerald-500' : 'text-slate-500 dark:text-slate-300'}`}>
+                              {statsSnapshot.kdaRatio.toFixed(2)} KDA
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Averages / Game</div>
+                            <div className="mt-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+                              {statsSnapshot.avgKills.toFixed(1)} / {statsSnapshot.avgDeaths.toFixed(1)} / {statsSnapshot.avgAssists.toFixed(1)}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">CS {statsSnapshot.csPerMin.toFixed(1)} /min</div>
+                            <div className="text-xs text-slate-600 dark:text-slate-300">Vision {(statsSnapshot.totalVision / Math.max(1, statsSnapshot.games)).toFixed(1)} /game</div>
+                          </div>
+
+                          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Volume</div>
+                            <div className="mt-2 text-xl font-black text-slate-900 dark:text-slate-100">{formatHoursMinutes(statsSnapshot.timePlayedS)}</div>
+                            <div className="mt-1 text-xs text-slate-600 dark:text-slate-300">Avg Duration {formatMatchDuration(Math.round(statsSnapshot.avgDuration))}</div>
+                          </div>
                         </div>
 
-                        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                          <h4 className="text-sm font-black uppercase tracking-widest text-slate-700 dark:text-slate-200">Records</h4>
+                        <div className="rounded-2xl bg-transparent p-2">
+                          <h4 className="text-sm font-black uppercase tracking-widest text-slate-500 dark:text-slate-300">Records</h4>
                           <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {([
                               { label: 'Most Kills', stat: statsSnapshot.maxKills },
@@ -1502,34 +1712,51 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                               { label: 'Most Vision Score', stat: statsSnapshot.maxVision },
                               {
                                 label: 'Longest Game',
-                                stat: { value: statsSnapshot.longestGameS, championId: statsSnapshot.longestGameChampionId },
+                                stat: { value: statsSnapshot.longestGameS, championId: statsSnapshot.longestGameChampionId, win: statsSnapshot.longestGameWin },
                                 formatValue: (value: number) => formatMatchDuration(value),
                               },
                             ] as Array<{
                               label: string
-                              stat: { value: number; championId: number }
+                              stat: { value: number; championId: number; win?: boolean | null }
                               formatValue?: (value: number) => string | number
                             }>).map(({ label, stat, formatValue }) => {
                               const formatStatValue = formatValue ?? ((value: number) => value)
                               const champ = champMap?.[stat.championId]
+                              const recordResultClass = 'text-slate-900 dark:text-slate-100'
+                              const recordCardOutcomeClass = stat.win === true
+                                ? 'border-emerald-500/40 bg-emerald-500/10'
+                                : stat.win === false
+                                  ? 'border-rose-500/40 bg-rose-500/10'
+                                  : 'border-slate-700/60 bg-transparent'
+                              const recordLeftOutcomeClass = stat.win === true
+                                ? 'border-l-emerald-500'
+                                : stat.win === false
+                                  ? 'border-l-rose-500'
+                                  : 'border-l-slate-600'
+                              const recordIconOutcomeClass = stat.win === true
+                                ? 'border-emerald-500/50'
+                                : stat.win === false
+                                  ? 'border-rose-500/50'
+                                  : 'border-slate-700'
                               return (
-                                <div key={label} className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-950">
+                                <div key={label} className={`flex items-center gap-4 rounded-2xl border border-l-4 ${recordLeftOutcomeClass} ${recordCardOutcomeClass} p-4 text-sm`}>
                                   {champ ? (
                                     <img
                                       loading="lazy"
                                       decoding="async"
                                       src={championIconUrl(ddVersion, champ.id)}
                                       alt=""
-                                      className="h-12 w-12 rounded-lg border border-slate-200 dark:border-slate-700"
+                                      className={`h-14 w-14 rounded-full border-2 object-cover ${recordIconOutcomeClass}`}
                                     />
                                   ) : (
-                                    <div className="h-12 w-12 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                    <div className="h-14 w-14 rounded-full bg-slate-200 dark:bg-slate-800" />
                                   )}
                                   <div className="min-w-0">
-                                    <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
-                                    <div className="mt-1 text-base font-semibold text-slate-900 dark:text-slate-100">
+                                    <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</div>
+                                    <div className={`mt-1 text-2xl font-black leading-none ${recordResultClass}`}>
                                       {formatStatValue(stat.value as number)}
                                     </div>
+                                    <div className="mt-1 truncate text-xs text-slate-600 dark:text-slate-400">{champ?.name ?? 'Unknown champion'}</div>
                                   </div>
                                 </div>
                               )
@@ -1549,99 +1776,89 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                         No champion data available.
                       </div>
                     ) : (
-                      <div className="space-y-3">
-                        <div className={`rounded-2xl border px-4 py-3 ${championTotalsMismatch ? 'border-amber-300 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900'}`}>
-                          <div className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-                            <div>
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Total Games</div>
-                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.totalGames}</div>
+                      <div className="space-y-4">
+                        <section className={`rounded-2xl border p-4 ${championTotalsMismatch ? 'border-amber-400/60 bg-amber-50/70 dark:border-amber-500/40 dark:bg-amber-500/10' : 'border-slate-200 bg-slate-50/90 dark:border-slate-800 dark:bg-slate-900/80'}`}>
+                          <div className="mb-3 flex items-center justify-between gap-3">
+                            <h3 className="text-sm font-bold tracking-wide text-slate-900 dark:text-slate-100">Champion Overview</h3>
+                            {championTotalsMismatch && (
+                              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                                Sync warning
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <div className="rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 dark:border-slate-700/80 dark:bg-slate-950/60">
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Games</div>
+                              <div className="mt-1 text-lg font-black tabular-nums text-slate-900 dark:text-slate-100">{championTotals.totalGames}</div>
                             </div>
-                            <div>
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">W-L</div>
-                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.wins}W {championTotals.losses}L</div>
+                            <div className="rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 dark:border-slate-700/80 dark:bg-slate-950/60">
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Record</div>
+                              <div className="mt-1 text-lg font-black tabular-nums text-slate-900 dark:text-slate-100">{championTotals.wins}W {championTotals.losses}L</div>
                             </div>
-                            <div>
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Overall KDA</div>
-                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.kda.toFixed(2)}</div>
-                            </div>
-                            <div>
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg CS</div>
-                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">{championTotals.avgCs.toFixed(1)}</div>
-                            </div>
-                            <div>
-                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Match Record</div>
-                              <div className="text-base font-bold tabular-nums text-slate-900 dark:text-slate-100">
-                                {championTotals.wins}W {championTotals.losses}L
+                            <div className="rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 dark:border-slate-700/80 dark:bg-slate-950/60">
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Winrate</div>
+                              <div className={`mt-1 text-lg font-black tabular-nums ${getWinrateColor(championTotals.totalGames ? (championTotals.wins / championTotals.totalGames) * 100 : 0)}`}>
+                                {championTotals.totalGames ? Math.round((championTotals.wins / championTotals.totalGames) * 100) : 0}%
                               </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-200/80 bg-white/80 px-3 py-2 dark:border-slate-700/80 dark:bg-slate-950/60">
+                              <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Avg KDA / CS</div>
+                              <div className="mt-1 text-lg font-black tabular-nums text-slate-900 dark:text-slate-100">{championTotals.kda.toFixed(2)} / {championTotals.avgCs.toFixed(1)}</div>
                             </div>
                           </div>
                           {championTotalsMismatch && (
-                            <div className="mt-2 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                            <p className="mt-3 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
                               Champion rollup mismatch detected in current match dataset.
-                            </div>
+                            </p>
                           )}
-                        </div>
+                        </section>
 
-                        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                          <div className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 border-b border-slate-200 bg-slate-50 px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:border-slate-800 dark:bg-slate-950">
+                        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white/90 shadow-sm dark:border-slate-800 dark:bg-slate-900/90">
+                          <div className="grid grid-cols-[minmax(300px,1fr)_150px_70px_70px_70px] items-center gap-3 border-b border-slate-200 bg-slate-50/90 px-5 py-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
                             <div>Champion</div>
+                            <div className="text-center">Record</div>
+                            <div className="text-right tabular-nums">WR</div>
                             <div className="text-right tabular-nums">KDA</div>
                             <div className="text-right tabular-nums">CS</div>
-                            <div className="text-right tabular-nums">Games</div>
                           </div>
                           <div className="divide-y divide-slate-200 dark:divide-slate-800">
                             {championSnapshot.map((champ) => {
                               const losses = Math.max(0, champ.games - champ.wins)
                               const winPct = champ.games ? (champ.wins / champ.games) * 100 : 0
+                              const champBorder = winPct >= 50 ? 'border-emerald-400/70 dark:border-emerald-400/60' : 'border-rose-400/70 dark:border-rose-400/60'
                               return (
-                                <div key={champ.championId} className="grid grid-cols-[minmax(360px,1fr)_72px_72px_72px] items-center gap-4 px-5 py-3 text-[13px] text-slate-700 dark:text-slate-200">
-                                  <div className="flex items-center gap-3 min-w-0">
+                                <div key={champ.championId} className="grid grid-cols-[minmax(300px,1fr)_150px_70px_70px_70px] items-center gap-3 px-5 py-3 text-[13px] text-slate-700 dark:text-slate-200">
+                                  <div className="flex min-w-0 items-center gap-3">
                                     {champ.icon ? (
-                                      <img loading="lazy" decoding="async" src={champ.icon} alt="" className="h-12 w-12 rounded-lg border border-slate-200 dark:border-slate-700" />
+                                      <img loading="lazy" decoding="async" src={champ.icon} alt="" className={`h-12 w-12 rounded-full border-2 object-cover ${champBorder}`} />
                                     ) : (
-                                      <div className="h-12 w-12 rounded-lg bg-slate-200 dark:bg-slate-800" />
+                                      <div className="h-12 w-12 rounded-full border-2 border-slate-300 bg-slate-200 dark:border-slate-700 dark:bg-slate-800" />
                                     )}
-                                    <div className="grid min-w-0 flex-1 items-center gap-3" style={{ gridTemplateColumns: '160px 240px 44px' }}>
-                                      <div className="truncate font-semibold text-slate-900 dark:text-slate-100">{champ.name}</div>
-                                      <div className="flex h-6 overflow-hidden rounded-full border border-slate-200 text-[11px] font-semibold tabular-nums dark:border-slate-700">
-                                        {winPct === 100 ? (
-                                          <span className="flex w-full items-center justify-center bg-blue-400 px-2 text-white">
-                                            {champ.wins}W
-                                          </span>
-                                        ) : winPct === 0 ? (
-                                          <span className="flex w-full items-center justify-center bg-rose-400 px-2 text-white">
-                                            {losses}L
-                                          </span>
-                                        ) : (
-                                          <>
-                                            <span
-                                              className="flex items-center justify-center bg-blue-400 px-2 text-white"
-                                              style={{ width: `${winPct}%` }}
-                                            >
-                                              {champ.wins}W
-                                            </span>
-                                            <span
-                                              className="flex items-center justify-center bg-rose-400 px-2 text-white"
-                                              style={{ width: `${100 - winPct}%` }}
-                                            >
-                                              {losses}L
-                                            </span>
-                                          </>
-                                        )}
-                                      </div>
-                                      <span className={`text-[12px] font-semibold tabular-nums ${getWinrateColor(champ.winrate)}`}>
-                                        {champ.winrate}%
-                                      </span>
+                                    <div className="min-w-0">
+                                      <div className="truncate text-sm font-bold text-slate-900 dark:text-slate-100">{champ.name}</div>
+                                      <div className="text-[11px] text-slate-500 dark:text-slate-400 tabular-nums">{champ.games} games</div>
                                     </div>
                                   </div>
+                                  <div className="flex h-6 overflow-hidden rounded-full border border-slate-200 text-[11px] font-semibold tabular-nums dark:border-slate-700">
+                                    {winPct === 100 ? (
+                                      <span className="flex w-full items-center justify-center bg-emerald-500 px-2 text-white">{champ.wins}W</span>
+                                    ) : winPct === 0 ? (
+                                      <span className="flex w-full items-center justify-center bg-rose-500 px-2 text-white">{losses}L</span>
+                                    ) : (
+                                      <>
+                                        <span className="flex items-center justify-center bg-emerald-500 px-2 text-white" style={{ width: `${winPct}%` }}>{champ.wins}W</span>
+                                        <span className="flex items-center justify-center bg-rose-500 px-2 text-white" style={{ width: `${100 - winPct}%` }}>{losses}L</span>
+                                      </>
+                                    )}
+                                  </div>
+                                  <div className={`text-right text-sm tabular-nums ${getWinrateColor(champ.winrate)}`}>{champ.winrate}%</div>
                                   <div className={`text-right tabular-nums ${getKdaColor(champ.kda)}`}>{champ.kda.toFixed(2)}</div>
-                                  <div className="text-right text-slate-500 dark:text-slate-400 tabular-nums">{champ.avgCs.toFixed(1)}</div>
-                                  <div className="text-right font-semibold text-slate-900 dark:text-slate-100 tabular-nums">{champ.games}</div>
+                                  <div className="text-right tabular-nums text-slate-500 dark:text-slate-400">{champ.avgCs.toFixed(1)}</div>
                                 </div>
                               )
                             })}
                           </div>
-                        </div>
+                        </section>
                       </div>
                     )}
                   </div>
