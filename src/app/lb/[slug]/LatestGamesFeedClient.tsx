@@ -479,7 +479,25 @@ export default function LatestGamesFeedClient({
         if (!res.ok) return
         const payload = (await res.json()) as { games?: Game[] }
         if (!cancelled && Array.isArray(payload.games)) {
-          setGames(payload.games)
+          setGames((prevGames) => {
+            const previousByKey = new Map(prevGames.map((g) => [`${g.matchId}:${g.puuid}`, g]))
+            return payload.games!.map((nextGame) => {
+              const prev = previousByKey.get(`${nextGame.matchId}:${nextGame.puuid}`)
+              if (!prev) return nextGame
+
+              const shouldKeepPreviousLp =
+                (nextGame.lpChange === null || nextGame.lpChange === undefined) &&
+                typeof prev.lpChange === 'number'
+
+              return shouldKeepPreviousLp
+                ? {
+                    ...nextGame,
+                    lpChange: prev.lpChange,
+                    lpNote: nextGame.lpNote ?? prev.lpNote ?? null,
+                  }
+                : nextGame
+            })
+          })
         }
       } catch {
         // non-blocking feed refresh
