@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useMemo, memo, useCallback, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
 import dynamic from 'next/dynamic'
 import { championIconUrl } from '@/lib/champions'
 import { formatMatchDuration, getKdaColor } from '@/lib/formatters'
@@ -13,7 +12,7 @@ const MatchDetailsModal = dynamic(() => import('./MatchDetailsModal'), {
 })
 
 const LIVE_TIME_INTERVAL_MS = 60_000
-const FEED_REFRESH_INTERVAL_MS = 60_000
+const FEED_REFRESH_INTERVAL_MS = 30_000
 const liveTimeListeners = new Set<(now: number) => void>()
 let liveTimeIntervalId: number | null = null
 
@@ -42,10 +41,9 @@ function subscribeLiveTime(listener: (now: number) => void) {
 }
 
 function useLiveTime() {
-  const [now, setNow] = useState<number | null>(null)
+  const [now, setNow] = useState<number>(() => Date.now())
 
   useEffect(() => {
-    setNow(Date.now())
     return subscribeLiveTime(setNow)
   }, [])
 
@@ -186,7 +184,7 @@ const GameItem = memo(({
   const handleHover = useCallback(() => onHover(game.matchId), [onHover, game.matchId])
 
   const normalizedEndTs = normalizeEndTs(game.endTs ?? null)
-  const when = normalizedEndTs && now !== null ? timeAgo(normalizedEndTs, now) : '—'
+  const when = normalizedEndTs ? timeAgo(normalizedEndTs, now) : '—'
   const name = player ? displayRiotId(player) : 'Unknown'
   
   const isRemake = game.endType === 'REMAKE'
@@ -407,31 +405,37 @@ const GameItem = memo(({
 GameItem.displayName = 'GameItem'
 
 export default function LatestGamesFeedClient({
-  games,
+  lbId,
+  ddVersion,
+  initialGames,
   playersByPuuid,
   champMap,
-  ddVersion,
   rankByPuuid,
   playerIconsByPuuid,
   participantsByMatch,
   preloadedMatchData = {},
 }: {
-  games: Game[]
+  lbId: string
+  ddVersion: string
+  initialGames: Game[]
   playersByPuuid: Record<string, Player>
   champMap: Record<number, Champion>
-  ddVersion: string
   rankByPuuid: Record<string, RankData | null>
   playerIconsByPuuid: Record<string, number | null>
   participantsByMatch: Record<string, MatchParticipant[]>
   preloadedMatchData?: Record<string, PreloadedMatchData>
 }) {
-  const router = useRouter()
+  const [games, setGames] = useState<Game[]>(initialGames)
   const [selectedGame, setSelectedGame] = useState<Game | null>(null)
-  const [isInitializing, setIsInitializing] = useState(games.length === 0)
+  const [isInitializing, setIsInitializing] = useState(initialGames.length === 0)
   const { prefetchMatch, getPrefetchedData } = useMatchPrefetch()
   const prefetchedMatches = useRef<Set<string>>(new Set())
   const participantsByMatchRef = useRef(participantsByMatch)
   const initRefreshTimeoutRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    setGames(initialGames)
+  }, [initialGames])
 
   useEffect(() => {
     participantsByMatchRef.current = participantsByMatch
@@ -462,18 +466,37 @@ export default function LatestGamesFeedClient({
     }
   }, [games.length])
 
-  // Keep feed fresh in production without manual refresh
+  // Keep latest activity fresh without refreshing the full leaderboard page.
   useEffect(() => {
+    let cancelled = false
+
+    const refreshGames = async () => {
+      try {
+        const res = await fetch(
+          `/api/leaderboards/${encodeURIComponent(lbId)}/latest-games?ddVersion=${encodeURIComponent(ddVersion)}`,
+          { cache: 'no-store' }
+        )
+        if (!res.ok) return
+        const payload = (await res.json()) as { games?: Game[] }
+        if (!cancelled && Array.isArray(payload.games)) {
+          setGames(payload.games)
+        }
+      } catch {
+        // non-blocking feed refresh
+      }
+    }
+
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
-        router.refresh()
+        void refreshGames()
       }
     }, FEED_REFRESH_INTERVAL_MS)
 
     return () => {
+      cancelled = true
       window.clearInterval(interval)
     }
-  }, [router])
+  }, [lbId, ddVersion])
 
   // Prefetch on hover only; avoid eager network work on initial page load
 
@@ -500,7 +523,9 @@ export default function LatestGamesFeedClient({
       const profileIconSrc = profileIconId
         ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${profileIconId}.png`
         : null
-      const hasMatchDetails = (participantsByMatch[g.matchId] ?? []).length > 0
+      // Polling updates `games`, but not `participantsByMatch`; if we gate clickability on
+      // participants presence, newly-polled matches render but become unclickable.
+      const hasMatchDetails = Boolean(g.matchId)
 
       return {
         game: g,

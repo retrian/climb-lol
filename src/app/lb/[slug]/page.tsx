@@ -7,17 +7,14 @@ import { getLatestDdragonVersion } from '@/lib/riot/getLatestDdragonVersion'
 import { getSeasonStartIso } from '@/lib/riot/season'
 import { compareRanks } from '@/lib/rankSort'
 import { createServiceClient } from '@/lib/supabase/service'
-import LatestGamesFeedClient from './LatestGamesFeedClient'
 import PlayerMatchHistoryClient from './PlayerMatchHistoryClient'
 import LeaderboardTabs from '@/components/LeaderboardTabs'
+import LatestActivityServer from '@/app/lb/[slug]/LatestActivityServer'
+import MoversServer from '@/app/lb/[slug]/MoversServer'
 
 export const revalidate = 30
 const PAGE_CACHE_TTL_SECONDS = revalidate
 const DEFAULT_DDRAGON_VERSION = '15.24.1'
-const MOVER_QUEUE_ID = 420
-const MOVER_ACTIVITY_FALLBACK_RATIO = 0.1
-const MOVER_ACTIVITY_FALLBACK_MIN = 1
-const ACTIVE_MOVER_QUERY_TIMEOUT_MS = 1500
 
 // --- Types ---
 
@@ -53,34 +50,6 @@ interface PlayerRankSnapshot {
   fetched_at: string | null
 }
 
-interface Game {
-  matchId: string
-  puuid: string
-  championId: number
-  win: boolean
-  k: number
-  d: number
-  a: number
-  cs: number
-  endTs?: number
-  durationS?: number
-  queueId?: number
-  lpChange?: number | null
-  lpNote?: string | null
-  endType?: 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL'
-}
-
-interface MatchParticipant {
-  matchId: string
-  puuid: string
-  championId: number
-  kills: number
-  deaths: number
-  assists: number
-  cs: number
-  win: boolean
-}
-
 // Database Response Types
 interface RankCutoffRaw {
   queue_type: string
@@ -88,80 +57,10 @@ interface RankCutoffRaw {
   cutoff_lp: number
 }
 
-interface LatestMatchRaw {
-  match_id: string
-  fetched_at: string
-  game_end_ts: number | null
-}
-
-interface LatestGameRpcRaw {
-  match_id: string
-  puuid: string
-  champion_id: number
-  win: boolean
-  kills: number | null
-  deaths: number | null
-  assists: number | null
-  cs: number | null
-  game_end_ts: number | null
-  queue_id: number | null
-  lp_change?: number | null
-  lp_delta?: number | null
-  lp_diff?: number | null
-  lp_note?: string | null
-  note?: string | null
-  game_duration_s?: number | null
-  gameDuration?: number | null
-  game_ended_in_early_surrender?: boolean | null
-  gameEndedInEarlySurrender?: boolean | null
-  game_ended_in_surrender?: boolean | null
-  gameEndedInSurrender?: boolean | null
-}
-
-interface LpEventRaw {
-  match_id: string
-  puuid: string
-  lp_delta: number | null
-  note: string | null
-}
-
-interface LpEventDeltaRaw {
-  puuid: string
-  lp_delta: number | null
-}
-
-interface MatchParticipantRaw {
-  match_id: string
-  puuid: string
-  champion_id: number
-  kills: number
-  deaths: number
-  assists: number
-  cs: number
-  win: boolean
-}
-
-interface PlayerBasicRaw {
-  puuid: string
-  game_name: string | null
-  tag_line: string | null
-}
-
 interface TopChampionRaw {
   puuid: string
   champion_id: number | null
   games: number | null
-}
-
-interface MoverDeltaRaw {
-  puuid: string
-  lp_delta: number | null
-  start_tier?: string | null
-  start_rank?: string | null
-  start_lp?: number | null
-  end_tier?: string | null
-  end_rank?: string | null
-  end_lp?: number | null
 }
 
 interface LeaderboardRaw {
@@ -177,18 +76,6 @@ interface LeaderboardRaw {
 
 interface LeaderboardPageData {
   champMap: Record<number, { id: string; name: string }>
-  playersByPuuidRecord: Record<string, Player>
-  rankByPuuidRecord: Record<string, PlayerRankSnapshot | null>
-  participantsByMatchRecord: Record<string, MatchParticipant[]>
-  playerIconsByPuuidRecord: Record<string, number | null>
-  preloadedMatchDataRecord: Record<
-    string,
-    {
-      match: unknown
-      timeline: unknown
-      accounts: Record<string, unknown>
-    }
-  >
   playerCards: Array<{
     player: Player
     index: number
@@ -196,12 +83,7 @@ interface LeaderboardPageData {
     stateData: PlayerRiotState | null
     topChamps: Array<{ champion_id: number; games: number }>
   }>
-  latestGames: Game[]
   cutoffs: Array<{ label: string; lp: number; icon: string }>
-  dailyTopGain: [string, number] | null
-  resolvedTopLoss: [string, number] | null
-  weeklyTopGain: [string, number] | null
-  resolvedWeeklyTopLoss: [string, number] | null
   lastUpdatedIso: string | null
 }
 
@@ -214,16 +96,6 @@ interface TeamHeaderCardProps {
   bannerUrl: string | null
   cutoffs?: Array<{ label: string; lp: number; icon: string }>
   lastUpdated?: string | null
-}
-
-interface MoverCardProps {
-  puuid: string
-  lpDelta: number
-  timeframeLabel: string
-  borderTone: 'emerald' | 'rose' | 'amber'
-  playersByPuuid: Record<string, Player>
-  playerIconsByPuuid: Record<string, number | null>
-  ddVersion: string
 }
 
 // --- Helpers ---
@@ -282,215 +154,6 @@ async function safeDb<T>(
   }
 }
 
-async function withTimeout<T>(
-  promise: Promise<T>,
-  fallback: T,
-  timeoutMs: number,
-  label: string
-): Promise<T> {
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-  try {
-    const timeoutPromise = new Promise<T>((resolve) => {
-      timeoutHandle = setTimeout(() => {
-        console.warn('[lb] timed out query path; using fallback', { label, timeoutMs })
-        resolve(fallback)
-      }, timeoutMs)
-    })
-
-    return await Promise.race([promise, timeoutPromise])
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle)
-  }
-}
-
-function computeEndType({
-  gameEndedInEarlySurrender,
-  gameEndedInSurrender,
-  gameDurationS,
-  lpChange,
-}: {
-  gameEndedInEarlySurrender?: boolean | null
-  gameEndedInSurrender?: boolean | null
-  gameDurationS?: number
-  lpChange?: number | null
-}): 'REMAKE' | 'EARLY_SURRENDER' | 'SURRENDER' | 'NORMAL' {
-  const normalizedLpChange = typeof lpChange === 'number' && Number.isFinite(lpChange) ? lpChange : null
-
-  if (gameEndedInEarlySurrender === true) {
-    if (typeof gameDurationS === 'number') {
-      return gameDurationS <= 210 ? 'REMAKE' : 'EARLY_SURRENDER'
-    }
-    if (normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
-    return 'REMAKE'
-  }
-
-  if (gameEndedInSurrender === true) return 'SURRENDER'
-
-  if (typeof gameDurationS === 'number') {
-    if (gameDurationS <= 210 && (normalizedLpChange === null || normalizedLpChange === 0)) return 'REMAKE'
-    if (gameDurationS <= 300 && normalizedLpChange !== null && normalizedLpChange < 0) return 'EARLY_SURRENDER'
-  }
-
-  return 'NORMAL'
-}
-
-function makeLpKey(matchId: string, puuid: string): string {
-  return `${matchId}-${puuid}`
-}
-
-function shouldFallbackMoverActivityGate({
-  activeCount,
-  trackedCount,
-  lbId,
-  timeframe,
-}: {
-  activeCount: number
-  trackedCount: number
-  lbId: string
-  timeframe: 'daily' | 'weekly'
-}): boolean {
-  if (trackedCount <= 0) return true
-
-  const minimumExpectedActive = Math.max(
-    MOVER_ACTIVITY_FALLBACK_MIN,
-    Math.ceil(trackedCount * MOVER_ACTIVITY_FALLBACK_RATIO)
-  )
-
-  const shouldFallback = activeCount < minimumExpectedActive
-
-  if (shouldFallback) {
-    console.warn('[lb-movers] activity gate fallback engaged', {
-      lbId,
-      timeframe,
-      activeCount,
-      trackedCount,
-      activeRatio: Number((activeCount / trackedCount).toFixed(3)),
-      minimumExpectedActive,
-      ratioFloor: MOVER_ACTIVITY_FALLBACK_RATIO,
-      queueId: MOVER_QUEUE_ID,
-    })
-  }
-
-  return shouldFallback
-}
-
-function countDistinctMoverPuuids(rows: MoverDeltaRaw[]): number {
-  const puuids = new Set<string>()
-  for (const row of rows) {
-    if (row.puuid) puuids.add(row.puuid)
-  }
-  return puuids.size
-}
-
-const LADDER_TIER_ORDER = [
-  'IRON', 'BRONZE', 'SILVER', 'GOLD', 'PLATINUM',
-  'EMERALD', 'DIAMOND', 'MASTER', 'GRANDMASTER', 'CHALLENGER',
-] as const
-
-const LADDER_DIV_ORDER = ['IV', 'III', 'II', 'I'] as const
-
-function baseMasterLadderValue(): number {
-  const diamondIndex = LADDER_TIER_ORDER.indexOf('DIAMOND')
-  return diamondIndex * 400 + 3 * 100 + 100
-}
-
-function toLadderLp(tier: string | null, division: string | null, lp: number | null): number {
-  const t = (tier ?? '').toUpperCase()
-  const d = (division ?? '').toUpperCase()
-  const safeLp = Math.max(0, lp ?? 0)
-
-  const tierIndex = LADDER_TIER_ORDER.indexOf(t as typeof LADDER_TIER_ORDER[number])
-  if (tierIndex === -1) return safeLp
-
-  const divIndex = LADDER_DIV_ORDER.indexOf(d as typeof LADDER_DIV_ORDER[number])
-
-  if (tierIndex <= LADDER_TIER_ORDER.indexOf('DIAMOND')) {
-    const base = tierIndex * 400
-    const divOffset = divIndex === -1 ? 0 : divIndex * 100
-    return base + divOffset + safeLp
-  }
-
-  return baseMasterLadderValue() + safeLp
-}
-
-function LpChangePill({ lpChange }: { lpChange: number }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide tabular-nums ${
-        lpChange === 0
-          ? 'text-slate-500 bg-slate-100 dark:text-slate-300 dark:bg-slate-700/50'
-          : lpChange > 0
-          ? 'text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-500/20'
-          : 'text-rose-700 bg-rose-50 dark:text-rose-200 dark:bg-rose-500/20'
-      }`}
-    >
-      {lpChange === 0 ? (
-        '— 0 LP'
-      ) : (
-        <>
-          <svg className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-            {lpChange > 0 ? <path d="M10 4l6 8H4l6-8z" /> : <path d="M10 16l-6-8h12l-6 8z" />}
-          </svg>
-          {Math.abs(lpChange)} LP
-        </>
-      )}
-    </span>
-  )
-}
-
-function MoverCard({
-  puuid,
-  lpDelta,
-  timeframeLabel,
-  borderTone,
-  playersByPuuid,
-  playerIconsByPuuid,
-  ddVersion,
-}: MoverCardProps) {
-  const player = playersByPuuid[puuid]
-  const iconId = playerIconsByPuuid[puuid]
-  const iconSrc = iconId ? `https://ddragon.leagueoflegends.com/cdn/${ddVersion}/img/profileicon/${iconId}.png` : null
-  const displayId = player ? (player.game_name ?? 'Unknown').trim() : 'Unknown Player'
-
-  const borderClass =
-    borderTone === 'emerald'
-      ? 'border-l-emerald-400 border-emerald-100 dark:border-emerald-500/40'
-      : borderTone === 'rose'
-      ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
-      : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
-
-  return (
-    <a
-      href="#"
-      data-open-pmh={puuid}
-      className={`block rounded-xl border-l-4 border-y border-r bg-white p-3 shadow-sm transition-all duration-200 hover:shadow-lg hover:scale-[1.01] dark:bg-slate-900 ${borderClass}`}
-    >
-      <div className="group w-full text-left">
-        <div className="flex items-center gap-3">
-          {iconSrc ? (
-            <div className="relative h-11 w-11 shrink-0">
-              <img src={iconSrc} alt="" width={44} height={44} loading="lazy" className="h-full w-full rounded-lg bg-slate-100 object-cover border-2 border-slate-200 shadow-sm transition-transform duration-200 group-hover:scale-110 dark:border-slate-700 dark:bg-slate-800" />
-            </div>
-          ) : null}
-
-          <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
-              <span className="min-w-0 flex-1 truncate text-xs font-bold text-slate-900 dark:text-slate-100">
-                <span className="truncate">{displayId}</span>
-              </span>
-              <span className="shrink-0 text-[10px] text-slate-400 font-medium dark:text-slate-500">{timeframeLabel}</span>
-            </div>
-            <div className="mt-1 flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate text-[11px] text-slate-600 font-medium dark:text-slate-300" />
-              <LpChangePill lpChange={lpDelta} />
-            </div>
-          </div>
-        </div>
-      </div>
-    </a>
-  )
-}
-
 const getLeaderboardBySlug = cache(async (slug: string): Promise<LeaderboardRaw | null> => {
   const supabase = await createClient()
   const { data } = await supabase
@@ -507,76 +170,36 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
   async (): Promise<LeaderboardPageData> => {
     const supabase = createServiceClient()
 
-    const [
-      champMap,
-      playersRaw,
-      cutsRaw,
-      latestRaw
-    ] = await Promise.all([
+    const [champMap, playersRaw, cutsRaw] = await Promise.all([
       getChampionMap(ddVersion).catch(() => ({})),
-      safeDb(supabase
-        .from('leaderboard_players')
-        .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
-        .eq('leaderboard_id', lbId)
-        .order('sort_order', { ascending: true })
-        .limit(50), [] as Player[], 'leaderboard_players'
+      safeDb(
+        supabase
+          .from('leaderboard_players')
+          .select('id, puuid, game_name, tag_line, role, twitch_url, twitter_url, sort_order')
+          .eq('leaderboard_id', lbId)
+          .order('sort_order', { ascending: true })
+          .limit(50),
+        [] as Player[],
+        'leaderboard_players'
       ),
-      safeDb(supabase
-        .from('rank_cutoffs')
-        .select('queue_type, tier, cutoff_lp')
-        .in('tier', ['GRANDMASTER', 'CHALLENGER']), [] as RankCutoffRaw[], 'rank_cutoffs'
-      ),
-      safeDb(supabase.rpc('get_leaderboard_latest_games', { lb_id: lbId, lim: 10 }), [] as LatestGameRpcRaw[], 'get_leaderboard_latest_games')
+      safeDb(
+        supabase
+          .from('rank_cutoffs')
+          .select('queue_type, tier, cutoff_lp')
+          .in('tier', ['GRANDMASTER', 'CHALLENGER']),
+        [] as RankCutoffRaw[],
+        'rank_cutoffs'
+      )
     ])
 
     const players: Player[] = playersRaw
     const top50Puuids = players.map((p) => p.puuid).filter(Boolean)
-    const top50Set = new Set(top50Puuids)
-
-    const latestMatchIds: string[] = []
-    const seenMatchIds = new Set<string>()
-    const gamePuuids = new Set<string>()
-
-    if (latestRaw) {
-      for (const row of latestRaw) {
-        if (row.match_id && !seenMatchIds.has(row.match_id)) {
-          seenMatchIds.add(row.match_id)
-          latestMatchIds.push(row.match_id)
-        }
-        if (row.puuid) gamePuuids.add(row.puuid)
-      }
-    }
-
-    const missingPuuids = Array.from(gamePuuids).filter(p => !top50Set.has(p))
-    const allRelevantPuuids = Array.from(new Set([...top50Puuids, ...Array.from(gamePuuids)]))
+    const allRelevantPuuids = top50Puuids
 
     const seasonStartIso = getSeasonStartIso({ ddVersion })
     const seasonStartMsLatest = new Date(seasonStartIso).getTime()
 
-    const moversTimeZone = process.env.MOVERS_TIMEZONE ?? 'America/Chicago'
-    const now = new Date()
-    const zonedNow = new Date(now.toLocaleString('en-US', { timeZone: moversTimeZone }))
-    const todayStart = new Date(zonedNow)
-    todayStart.setHours(0, 0, 0, 0)
-    const todayStartTs = todayStart.getTime()
-
-    const weekStart = new Date(zonedNow)
-    weekStart.setDate(weekStart.getDate() - 7)
-    const weekStartTs = weekStart.getTime()
-
-    const [
-      statesRaw,
-      ranksRaw,
-      topChampsRaw,
-      missingPlayersRaw,
-      latestMatchesRaw,
-      lpEventsRaw,
-      matchParticipantsRaw,
-      dailyMoverRowsActive,
-      weeklyMoverRowsActive,
-      dailyLpEventRows,
-      weeklyLpEventRows,
-    ] = await Promise.all([
+    const [statesRaw, ranksRaw, topChampsRaw] = await Promise.all([
       allRelevantPuuids.length > 0
         ? safeDb(supabase.from('player_riot_state').select('*').in('puuid', allRelevantPuuids), [] as PlayerRiotState[], 'player_riot_state')
         : ([] as PlayerRiotState[]),
@@ -601,89 +224,7 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
         [] as TopChampionRaw[],
         'player_top_champions'
       ) : [],
-      missingPuuids.length > 0 ? safeDb(supabase.from('players').select('puuid, game_name, tag_line').in('puuid', missingPuuids), [] as PlayerBasicRaw[], 'missing_players') : [],
-      latestMatchIds.length > 0 ? safeDb(supabase.from('matches').select('match_id, fetched_at, game_end_ts').in('match_id', latestMatchIds).gte('fetched_at', seasonStartIso).gte('game_end_ts', seasonStartMsLatest), [] as LatestMatchRaw[], 'latest_matches') : [],
-      latestMatchIds.length > 0 && allRelevantPuuids.length > 0
-        ? safeDb(supabase.from('player_lp_events').select('match_id, puuid, lp_delta, note').in('match_id', latestMatchIds).in('puuid', allRelevantPuuids), [] as LpEventRaw[], 'player_lp_events')
-        : ([] as LpEventRaw[]),
-      latestMatchIds.length > 0
-        ? safeDb(supabase.from('match_participants').select('match_id, puuid, champion_id, kills, deaths, assists, cs, win').in('match_id', latestMatchIds), [] as MatchParticipantRaw[], 'match_participants_latest')
-        : ([] as MatchParticipantRaw[]),
-      allRelevantPuuids.length > 0
-        ? withTimeout(
-            safeDb(
-              supabase.rpc('get_leaderboard_mover_deltas_v2', {
-                lb_id: lbId,
-                start_at: new Date(todayStartTs).toISOString(),
-                queue_filter: MOVER_QUEUE_ID,
-                require_recent_activity: true,
-              }),
-              [] as MoverDeltaRaw[],
-              'movers_daily_active'
-            ),
-            [] as MoverDeltaRaw[],
-            ACTIVE_MOVER_QUERY_TIMEOUT_MS,
-            'movers_daily_active'
-          )
-        : ([] as MoverDeltaRaw[]),
-      allRelevantPuuids.length > 0
-        ? withTimeout(
-            safeDb(
-              supabase.rpc('get_leaderboard_mover_deltas_v2', {
-                lb_id: lbId,
-                start_at: new Date(weekStartTs).toISOString(),
-                queue_filter: MOVER_QUEUE_ID,
-                require_recent_activity: true,
-              }),
-              [] as MoverDeltaRaw[],
-              'movers_weekly_active'
-            ),
-            [] as MoverDeltaRaw[],
-            ACTIVE_MOVER_QUERY_TIMEOUT_MS,
-            'movers_weekly_active'
-          )
-        : ([] as MoverDeltaRaw[]),
-      allRelevantPuuids.length > 0
-        ? safeDb(
-            supabase
-              .from('player_lp_events')
-              .select('puuid, lp_delta')
-              .in('puuid', allRelevantPuuids)
-              .eq('queue_type', 'RANKED_SOLO_5x5')
-              .gte('recorded_at', new Date(todayStartTs).toISOString()),
-            [] as LpEventDeltaRaw[],
-            'daily_lp_events_window'
-          )
-        : ([] as LpEventDeltaRaw[]),
-      allRelevantPuuids.length > 0
-        ? safeDb(
-            supabase
-              .from('player_lp_events')
-              .select('puuid, lp_delta')
-              .in('puuid', allRelevantPuuids)
-              .eq('queue_type', 'RANKED_SOLO_5x5')
-              .gte('recorded_at', new Date(weekStartTs).toISOString()),
-            [] as LpEventDeltaRaw[],
-            'weekly_lp_events_window'
-          )
-        : ([] as LpEventDeltaRaw[]),
     ])
-
-    const allPlayersMap = new Map<string, Player | Partial<Player>>()
-    players.forEach(p => allPlayersMap.set(p.puuid, p))
-
-    missingPlayersRaw.forEach((p) => {
-      if (!allPlayersMap.has(p.puuid)) {
-        allPlayersMap.set(p.puuid, {
-          ...p,
-          id: p.puuid,
-          role: null,
-          twitch_url: null,
-          twitter_url: null,
-          sort_order: 999
-        })
-      }
-    })
 
     const stateBy = new Map<string, PlayerRiotState>()
     let lastUpdatedIso: string | null = null
@@ -744,110 +285,6 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       { key: 'RANKED_SOLO_5x5::GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
     ].map((i) => ({ label: i.label, lp: cutoffsMap.get(i.key) as number, icon: i.icon })).filter((x) => x.lp !== undefined)
 
-    const allowedMatchIds = new Set(latestMatchesRaw.map((row) => row.match_id))
-    const latestMatchEndById = new Map(latestMatchesRaw.map((row) => [row.match_id, row.game_end_ts]))
-    const filteredLatestRaw = (latestRaw ?? []).filter((row: LatestGameRpcRaw) => {
-      if (row.queue_id !== MOVER_QUEUE_ID) return false
-
-      // Prefer strict DB-backed filtering, but do not hide fresh RPC rows when
-      // the `matches` table is behind ingestion.
-      if (allowedMatchIds.has(row.match_id)) return true
-
-      // If RPC has a timestamp, keep the seasonal guard.
-      const fallbackEndTs = row.game_end_ts ?? latestMatchEndById.get(row.match_id) ?? null
-      if (typeof fallbackEndTs === 'number') {
-        return fallbackEndTs >= seasonStartMsLatest
-      }
-
-      // No timestamp available yet: still keep it so Latest Activity does not
-      // miss just-finished games.
-      return true
-    })
-
-    const lpByMatchAndPlayer = new Map<string, { delta: number; note: string | null }>()
-    for (const row of lpEventsRaw) {
-      if (row.match_id && row.puuid && typeof row.lp_delta === 'number') {
-        lpByMatchAndPlayer.set(makeLpKey(row.match_id, row.puuid), { delta: row.lp_delta, note: row.note ?? null })
-      }
-    }
-
-    const latestGames: Game[] = filteredLatestRaw.map((row: LatestGameRpcRaw) => {
-      const lpEvent = lpByMatchAndPlayer.get(makeLpKey(row.match_id, row.puuid))
-      const lpChange = row.lp_change ?? row.lp_delta ?? row.lp_diff ?? lpEvent?.delta ?? null
-      const durationS = row.game_duration_s ?? row.gameDuration ?? undefined
-      const fallbackEndTs = latestMatchEndById.get(row.match_id) ?? null
-
-      return {
-        matchId: row.match_id,
-        puuid: row.puuid,
-        championId: row.champion_id,
-        win: row.win,
-        k: row.kills ?? 0,
-        d: row.deaths ?? 0,
-        a: row.assists ?? 0,
-        cs: row.cs ?? 0,
-        endTs: row.game_end_ts ?? fallbackEndTs ?? undefined,
-        durationS,
-        queueId: row.queue_id ?? undefined,
-        lpChange,
-        lpNote: row.lp_note ?? row.note ?? lpEvent?.note ?? null,
-        endType: computeEndType({
-          gameEndedInEarlySurrender: row.game_ended_in_early_surrender ?? row.gameEndedInEarlySurrender,
-          gameEndedInSurrender: row.game_ended_in_surrender ?? row.gameEndedInSurrender,
-          gameDurationS: durationS,
-          lpChange,
-        }),
-      }
-    })
-
-    const participantsByMatch = new Map<string, MatchParticipant[]>()
-    for (const row of matchParticipantsRaw) {
-      if (!row.match_id || !row.puuid) continue
-      const entry: MatchParticipant = {
-        matchId: row.match_id,
-        puuid: row.puuid,
-        championId: row.champion_id ?? 0,
-        kills: row.kills ?? 0,
-        deaths: row.deaths ?? 0,
-        assists: row.assists ?? 0,
-        cs: row.cs ?? 0,
-        win: row.win ?? false,
-      }
-      const list = participantsByMatch.get(entry.matchId)
-      if (list) list.push(entry)
-      else participantsByMatch.set(entry.matchId, [entry])
-    }
-
-    const playersByPuuidRecord = Object.fromEntries(allPlayersMap.entries()) as Record<string, Player>
-    const rankByPuuidRecord = Object.fromEntries(rankBy.entries()) as Record<string, PlayerRankSnapshot | null>
-    const participantsByMatchRecord = Object.fromEntries(participantsByMatch.entries())
-    const playerIconsByPuuidRecord = Object.fromEntries(
-      Array.from(stateBy.entries()).map(([puuid, state]) => [puuid, state.profile_icon_id ?? null])
-    ) as Record<string, number | null>
-
-    const shouldFallbackDailyActivityGate = shouldFallbackMoverActivityGate({
-      activeCount: countDistinctMoverPuuids(dailyMoverRowsActive),
-      trackedCount: allRelevantPuuids.length,
-      lbId,
-      timeframe: 'daily',
-    })
-    const shouldFallbackWeeklyActivityGate = shouldFallbackMoverActivityGate({
-      activeCount: countDistinctMoverPuuids(weeklyMoverRowsActive),
-      trackedCount: allRelevantPuuids.length,
-      lbId,
-      timeframe: 'weekly',
-    })
-
-    // TODO: Implement server-side preloading for match detail payloads and hydrate this record.
-    const preloadedMatchDataRecord: Record<
-      string,
-      {
-        match: unknown
-        timeline: unknown
-        accounts: Record<string, unknown>
-      }
-    > = {}
-
     const playerCards = playersSorted.map((player, idx) => ({
       player,
       index: idx + 1,
@@ -856,115 +293,10 @@ const getLeaderboardPageDataCached = (lbId: string, ddVersion: string) =>
       topChamps: champsBy.get(player.puuid) ?? [],
     }))
 
-    const dailyMoverRows = shouldFallbackDailyActivityGate
-      ? await safeDb(
-          supabase.rpc('get_leaderboard_mover_deltas_v2', {
-            lb_id: lbId,
-            start_at: new Date(todayStartTs).toISOString(),
-            queue_filter: MOVER_QUEUE_ID,
-            require_recent_activity: false,
-          }),
-          [] as MoverDeltaRaw[],
-          'movers_daily_fallback'
-        )
-      : dailyMoverRowsActive
-
-    const dailyDeltaMap = new Map<string, number>()
-    for (const row of dailyLpEventRows) {
-      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
-      dailyDeltaMap.set(row.puuid, (dailyDeltaMap.get(row.puuid) ?? 0) + row.lp_delta)
-    }
-
-    const dailyMoverDeltaMap = new Map<string, number>()
-    for (const row of dailyMoverRows) {
-      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
-      const ladderDelta =
-        row.end_tier != null && row.start_tier != null
-          ? toLadderLp(row.end_tier, row.end_rank ?? null, row.end_lp ?? null)
-            - toLadderLp(row.start_tier, row.start_rank ?? null, row.start_lp ?? null)
-          : row.lp_delta
-      dailyMoverDeltaMap.set(row.puuid, ladderDelta)
-    }
-
-    for (const [puuid, moverDelta] of dailyMoverDeltaMap.entries()) {
-      const eventDelta = dailyDeltaMap.get(puuid)
-      if (eventDelta === undefined || Math.abs(moverDelta) > Math.abs(eventDelta)) {
-        dailyDeltaMap.set(puuid, moverDelta)
-      }
-    }
-    const dailyLpByPuuid = dailyDeltaMap
-    const dailyLpEntries = Array.from(dailyLpByPuuid.entries())
-    const dailyTopGainCandidate = dailyLpEntries.length
-      ? dailyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
-      : null
-    const dailyTopGain = dailyTopGainCandidate && dailyTopGainCandidate[1] > 0
-      ? dailyTopGainCandidate
-      : null
-    const dailyTopLoss = dailyLpEntries.length
-      ? dailyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
-      : null
-    const resolvedTopLoss = dailyTopLoss && dailyTopLoss[1] < 0 ? dailyTopLoss : null
-
-    const weeklyMoverRows = shouldFallbackWeeklyActivityGate
-      ? await safeDb(
-          supabase.rpc('get_leaderboard_mover_deltas_v2', {
-            lb_id: lbId,
-            start_at: new Date(weekStartTs).toISOString(),
-            queue_filter: MOVER_QUEUE_ID,
-            require_recent_activity: false,
-          }),
-          [] as MoverDeltaRaw[],
-          'movers_weekly_fallback'
-        )
-      : weeklyMoverRowsActive
-
-    const weeklyDeltaMap = new Map<string, number>()
-    for (const row of weeklyLpEventRows) {
-      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
-      weeklyDeltaMap.set(row.puuid, (weeklyDeltaMap.get(row.puuid) ?? 0) + row.lp_delta)
-    }
-
-    const weeklyMoverDeltaMap = new Map<string, number>()
-    for (const row of weeklyMoverRows) {
-      if (!row.puuid || typeof row.lp_delta !== 'number' || !Number.isFinite(row.lp_delta)) continue
-      const ladderDelta =
-        row.end_tier != null && row.start_tier != null
-          ? toLadderLp(row.end_tier, row.end_rank ?? null, row.end_lp ?? null)
-            - toLadderLp(row.start_tier, row.start_rank ?? null, row.start_lp ?? null)
-          : row.lp_delta
-      weeklyMoverDeltaMap.set(row.puuid, ladderDelta)
-    }
-
-    for (const [puuid, moverDelta] of weeklyMoverDeltaMap.entries()) {
-      const eventDelta = weeklyDeltaMap.get(puuid)
-      if (eventDelta === undefined || Math.abs(moverDelta) > Math.abs(eventDelta)) {
-        weeklyDeltaMap.set(puuid, moverDelta)
-      }
-    }
-    const weeklyLpByPuuid = weeklyDeltaMap
-    const weeklyLpEntries = Array.from(weeklyLpByPuuid.entries())
-    const weeklyTopGain = weeklyLpEntries.length
-      ? weeklyLpEntries.reduce((best, curr) => (curr[1] > best[1] ? curr : best))
-      : null
-    const weeklyTopLoss = weeklyLpEntries.length
-      ? weeklyLpEntries.reduce((best, curr) => (curr[1] < best[1] ? curr : best))
-      : null
-    const resolvedWeeklyTopLoss = weeklyTopLoss && weeklyTopLoss[1] < 0 ? weeklyTopLoss : null
-
     return {
       champMap,
-      playersByPuuidRecord,
-      rankByPuuidRecord,
-      participantsByMatchRecord,
-      playerIconsByPuuidRecord,
-      preloadedMatchDataRecord,
       playerCards,
-      latestGames,
       cutoffs,
-      dailyTopGain,
-      resolvedTopLoss,
-      weeklyTopGain,
-      resolvedWeeklyTopLoss,
       lastUpdatedIso,
     }
   },
@@ -1070,37 +402,14 @@ async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: 
 
   const {
     champMap,
-    playersByPuuidRecord,
-    rankByPuuidRecord,
-    participantsByMatchRecord,
-    playerIconsByPuuidRecord,
-    preloadedMatchDataRecord,
     playerCards,
-    latestGames,
-    dailyTopGain,
-    resolvedTopLoss,
-    weeklyTopGain,
-    resolvedWeeklyTopLoss,
   } = data
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[280px_minmax(0,820px)_280px] gap-8 lg:gap-10 items-start justify-center">
-      <aside className="lg:sticky lg:top-6 order-2 lg:order-1">
-        <div className="flex items-center gap-2 mb-6">
-          <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
-          <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
-        </div>
-        <LatestGamesFeedClient
-          games={latestGames}
-          playersByPuuid={playersByPuuidRecord}
-          champMap={champMap}
-          ddVersion={ddVersion}
-          rankByPuuid={rankByPuuidRecord}
-          playerIconsByPuuid={playerIconsByPuuidRecord}
-          participantsByMatch={participantsByMatchRecord}
-          preloadedMatchData={preloadedMatchDataRecord}
-        />
-      </aside>
+      <Suspense fallback={<LatestActivitySkeleton />}>
+        <LatestActivityServer lbId={lbId} ddVersion={ddVersion} />
+      </Suspense>
 
       <div className="order-1 lg:order-2 space-y-8 lg:space-y-10">
         <div className="max-w-[820px] mx-auto">
@@ -1108,91 +417,30 @@ async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: 
         </div>
       </div>
 
-      <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
-        <div className="flex items-center gap-2 mb-6">
-          <div className="h-1 w-8 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 rounded-full shadow-sm" />
-          <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">LP Movers</h3>
-        </div>
-        <div className="space-y-4">
-          <div>
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Daily Movers</div>
-          </div>
-          {dailyTopGain ? (() => {
-            const lpDelta = Math.round(dailyTopGain[1])
-            return (
-              <MoverCard
-                puuid={dailyTopGain[0]}
-                lpDelta={lpDelta}
-                timeframeLabel="24 hours"
-                borderTone="emerald"
-                playersByPuuid={playersByPuuidRecord}
-                playerIconsByPuuid={playerIconsByPuuidRecord}
-                ddVersion={ddVersion}
-              />
-            )
-          })() : (
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-              No one has gained any LP today yet.
-            </div>
-          )}
-
-          {resolvedTopLoss ? (() => {
-            const isLoss = resolvedTopLoss[1] < 0
-            const lpDelta = Math.round(resolvedTopLoss[1])
-            return (
-              <MoverCard
-                puuid={resolvedTopLoss[0]}
-                lpDelta={lpDelta}
-                timeframeLabel="24 hours"
-                borderTone={isLoss ? 'rose' : 'amber'}
-                playersByPuuid={playersByPuuidRecord}
-                playerIconsByPuuid={playerIconsByPuuidRecord}
-                ddVersion={ddVersion}
-              />
-            )
-          })() : null}
-
-          <div className="pt-2">
-            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Weekly Movers</div>
-          </div>
-
-          {weeklyTopGain ? (() => {
-            const lpDelta = Math.round(weeklyTopGain[1])
-            return (
-              <MoverCard
-                puuid={weeklyTopGain[0]}
-                lpDelta={lpDelta}
-                timeframeLabel="7 days"
-                borderTone="emerald"
-                playersByPuuid={playersByPuuidRecord}
-                playerIconsByPuuid={playerIconsByPuuidRecord}
-                ddVersion={ddVersion}
-              />
-            )
-          })() : (
-            <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
-              No weekly LP changes yet.
-            </div>
-          )}
-
-          {resolvedWeeklyTopLoss ? (() => {
-            const isLoss = resolvedWeeklyTopLoss[1] < 0
-            const lpDelta = Math.round(resolvedWeeklyTopLoss[1])
-            return (
-              <MoverCard
-                puuid={resolvedWeeklyTopLoss[0]}
-                lpDelta={lpDelta}
-                timeframeLabel="7 days"
-                borderTone={isLoss ? 'rose' : 'amber'}
-                playersByPuuid={playersByPuuidRecord}
-                playerIconsByPuuid={playerIconsByPuuidRecord}
-                ddVersion={ddVersion}
-              />
-            )
-          })() : null}
-        </div>
-      </aside>
+      <Suspense fallback={<MoversSkeleton />}>
+        <MoversServer lbId={lbId} ddVersion={ddVersion} />
+      </Suspense>
     </div>
+  )
+}
+
+function LatestActivitySkeleton() {
+  return (
+    <aside className="lg:sticky lg:top-6 order-2 lg:order-1">
+      <div className="flex items-center gap-2 mb-6">
+        <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
+        <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
+      </div>
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 h-64 animate-pulse dark:border-slate-800 dark:bg-slate-900" />
+    </aside>
+  )
+}
+
+function MoversSkeleton() {
+  return (
+    <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 h-64 animate-pulse dark:border-slate-800 dark:bg-slate-900" />
+    </aside>
   )
 }
 
