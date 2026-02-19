@@ -7,7 +7,6 @@ const HISTORY_PAGE_SIZE = 1000
 const GRAPH_PUBLIC_S_MAXAGE_SECONDS = 300
 const GRAPH_PUBLIC_STALE_WHILE_REVALIDATE_SECONDS = 1800
 const GRAPH_SAMPLE_TARGET_POINTS = 150
-const RECENT_HISTORY_MAX_PAGES = 20
 
 const TIER_ORDER = [
   'IRON',
@@ -117,51 +116,6 @@ function sampleLpRows(rows: LpHistoryRow[], maxPoints: number) {
     .map((idx) => rows[idx])
 }
 
-async function fetchRecentLpHistoryForPlayer(
-  dataClient: ReturnType<typeof createServiceClient>,
-  puuid: string,
-  limit: number,
-  seasonStartIso?: string
-): Promise<LpHistoryRow[]> {
-  const targetGames = Math.max(1, Math.floor(limit))
-  const latestByGame = new Map<number, LpHistoryRow>()
-
-  for (let page = 0; page < RECENT_HISTORY_MAX_PAGES; page += 1) {
-    const from = page * HISTORY_PAGE_SIZE
-    const to = from + HISTORY_PAGE_SIZE - 1
-
-    let query = dataClient
-      .from('player_lp_history')
-      .select('puuid, tier, rank, lp, wins, losses, fetched_at')
-      .eq('puuid', puuid)
-      .eq('queue_type', 'RANKED_SOLO_5x5')
-      .order('fetched_at', { ascending: false })
-      .range(from, to)
-
-    if (seasonStartIso) {
-      query = query.gte('fetched_at', seasonStartIso)
-    }
-
-    const { data } = await query
-    const pageRows = (data ?? []) as LpHistoryRow[]
-    if (pageRows.length === 0) break
-
-    // Ordered newest -> oldest, so first seen per game is the latest snapshot for that game.
-    for (const row of pageRows) {
-      const totalGames = (row.wins ?? 0) + (row.losses ?? 0)
-      if (!Number.isFinite(totalGames) || totalGames < 0) continue
-      if (!latestByGame.has(totalGames)) latestByGame.set(totalGames, row)
-    }
-
-    if (latestByGame.size >= targetGames || pageRows.length < HISTORY_PAGE_SIZE) break
-  }
-
-  return Array.from(latestByGame.entries())
-    .sort((a, b) => a[0] - b[0])
-    .slice(-targetGames)
-    .map(([, row]) => row)
-}
-
 async function fetchRecentLpEventsForPlayer(
   dataClient: ReturnType<typeof createServiceClient>,
   puuid: string,
@@ -182,25 +136,25 @@ async function fetchRecentLpEventsForPlayer(
 
   const { data } = await query
   const rawRows = ((data ?? []) as LpEventGraphRow[]).reverse()
-  const matchIds = Array.from(new Set(rawRows.map((row) => row.match_id).filter((id): id is string => Boolean(id))))
+  const matchIds = Array.from(new Set(rawRows.map((r) => r.match_id).filter((id): id is string => Boolean(id))))
 
-  let rankByMatchPuuid = new Map<string, { tier: string | null; rank: string | null }>()
-  if (matchIds.length > 0) {
-    const { data: rankRows } = await dataClient
-      .from('match_participants')
-      .select('match_id, puuid, rank_tier, rank_division')
-      .in('match_id', matchIds)
-      .eq('puuid', puuid)
+  const rankRowsData = matchIds.length > 0
+    ? await dataClient
+        .from('match_participants')
+        .select('match_id, puuid, rank_tier, rank_division')
+        .in('match_id', matchIds)
+        .eq('puuid', puuid)
+        .then((res) => (res.data ?? []) as MatchParticipantRankRow[])
+    : [] as MatchParticipantRankRow[]
 
-    rankByMatchPuuid = new Map(
-      ((rankRows ?? []) as MatchParticipantRankRow[]).map((row) => [
-        `${row.match_id}:${row.puuid}`,
-        { tier: row.rank_tier ?? null, rank: row.rank_division ?? null },
-      ])
-    )
-  }
+  const rankByMatchPuuid = new Map(
+    rankRowsData.map((row) => [
+      `${row.match_id}:${row.puuid}`,
+      { tier: row.rank_tier ?? null, rank: row.rank_division ?? null },
+    ])
+  )
 
-  const rows = rawRows.map((row) => {
+  return rawRows.map((row) => {
     const rankKey = row.match_id ? `${row.match_id}:${row.puuid}` : ''
     const rankInfo = rankKey ? rankByMatchPuuid.get(rankKey) : null
     return {
@@ -213,8 +167,6 @@ async function fetchRecentLpEventsForPlayer(
       fetched_at: row.fetched_at,
     }
   })
-
-  return rows
 }
 
 async function fetchPage(
@@ -317,18 +269,22 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     let points: LpHistoryRow[] = []
 
     if (limit !== null) {
-      const seasonRows = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit, seasonStartIso)
-      const allRows = seasonRows.length > 0 ? seasonRows : await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit)
-      points = allRows
+      points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit, seasonStartIso)
 
       if (points.length === 0) {
-        // Fallback path for edge-cases where history is unavailable.
-        points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit, seasonStartIso)
+        points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit)
       }
     } else {
       const seasonRows = await fetchLpHistoryForPlayer(dataClient, puuid, seasonStartIso)
       const fullRows = seasonRows.length > 0 ? seasonRows : await fetchLpHistoryForPlayer(dataClient, puuid)
-      points = includeFullHistory ? fullRows : sampleLpRows(fullRows, GRAPH_SAMPLE_TARGET_POINTS)
+      const eventFallbackRows = fullRows.length > 0
+        ? fullRows
+        : await fetchRecentLpEventsForPlayer(dataClient, puuid, 1000, seasonStartIso)
+      const baseRows = eventFallbackRows.length > 0
+        ? eventFallbackRows
+        : await fetchRecentLpEventsForPlayer(dataClient, puuid, 1000)
+
+      points = includeFullHistory ? baseRows : sampleLpRows(baseRows, GRAPH_SAMPLE_TARGET_POINTS)
     }
 
     const res = NextResponse.json({ points })
