@@ -504,6 +504,9 @@ export default function LatestGamesFeedClient({
       }
     }
 
+    // Run once immediately on mount so users don't wait for the first interval tick.
+    void refreshGames()
+
     const interval = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void refreshGames()
