@@ -1,5 +1,6 @@
 import { unstable_cache } from 'next/cache'
 import { createServiceClient } from '@/lib/supabase/service'
+import { moversTag } from '@/lib/leaderboard/cacheTags'
 
 const MOVERS_CACHE_TTL_SECONDS = 90
 
@@ -143,6 +144,6 @@ export const getMoversDataCached = (lbId: string) =>
   unstable_cache(
     () => fetchMoversData(lbId),
     ['lb-movers-v5', lbId],
-    { revalidate: MOVERS_CACHE_TTL_SECONDS }
+    { revalidate: MOVERS_CACHE_TTL_SECONDS, tags: [moversTag(lbId)] }
   )()
 

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getRiotApiKey } from '@/lib/riot/getRiotApiKey'
 import { riotFetchWithRetry } from '@/lib/riot/riotFetchWithRetry'
 import { createServiceClient } from '@/lib/supabase/service'
+import { revalidateLeaderboardCachesForPuuids } from '@/lib/leaderboard/cacheTags'
 
 const ROUTING_BY_PLATFORM: Record<string, string> = {
   NA1: 'americas',
@@ -134,7 +135,10 @@ async function upsertMatchParticipants(matchId: string, match: any) {
 
   if (error) {
     console.warn('[Match Cache] participants upsert error', error.message)
+    return
   }
+
+  await revalidateLeaderboardCachesForPuuids(upserts.map((row) => row.puuid))
 }
 
 async function upsertMatchMeta(match: any) {

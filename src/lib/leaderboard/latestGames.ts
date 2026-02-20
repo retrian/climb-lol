@@ -2,6 +2,7 @@ import { unstable_cache } from 'next/cache'
 import { getChampionMap } from '@/lib/champions'
 import { getSeasonStartIso } from '@/lib/riot/season'
 import { createServiceClient } from '@/lib/supabase/service'
+import { latestActivityTag } from '@/lib/leaderboard/cacheTags'
 
 const PAGE_CACHE_TTL_SECONDS = 30
 const MOVER_QUEUE_ID = 420
@@ -408,7 +409,7 @@ export const getLatestActivityDataCached = (lbId: string, ddVersion: string) =>
   unstable_cache(
     () => fetchLatestActivityData(lbId, ddVersion),
     ['lb-latest-activity-v1', lbId, ddVersion],
-    { revalidate: PAGE_CACHE_TTL_SECONDS }
+    { revalidate: PAGE_CACHE_TTL_SECONDS, tags: [latestActivityTag(lbId)] }
   )()
 
 export const getLatestGamesCached = async (lbId: string, ddVersion: string) => {

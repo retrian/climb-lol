@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { resolvePuuid } from '@/lib/riot/resolvePuuid'
+import { revalidateLeaderboardCachesForPuuids } from '@/lib/leaderboard/cacheTags'
 
 type RepairBody = {
   gameName?: string
@@ -175,6 +176,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ puuid: 
     }
 
     await migratePuuid(oldPuuid, newPuuid)
+    await revalidateLeaderboardCachesForPuuids([oldPuuid, newPuuid])
 
     return NextResponse.json({
       updated: true,

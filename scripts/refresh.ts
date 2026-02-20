@@ -10,6 +10,8 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const rawRiotApiKey = process.env.RIOT_API_KEY
 const RANKED_SEASON_START = process.env.RANKED_SEASON_START
 const ENABLE_SEASON_RESET = String(process.env.ENABLE_SEASON_RESET ?? '').toLowerCase() === 'true'
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.trim() ?? ''
+const INTERNAL_REVALIDATE_SECRET = process.env.INTERNAL_REVALIDATE_SECRET?.trim() ?? ''
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !rawRiotApiKey) {
   throw new Error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / RIOT_API_KEY')
@@ -173,6 +175,36 @@ async function upsertRiotState(puuid: string, patch: Record<string, any>) {
     { onConflict: 'puuid' }
   )
   if (error) throw error
+}
+
+async function triggerLeaderboardCacheRevalidate(lbIds: string[]) {
+  if (!APP_URL || !INTERNAL_REVALIDATE_SECRET || lbIds.length === 0) return
+
+  const uniqueLbIds = Array.from(new Set(lbIds.filter(Boolean)))
+  if (uniqueLbIds.length === 0) return
+
+  const endpoint = `${APP_URL.replace(/\/$/, '')}/api/internal/revalidate`
+
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-internal-secret': INTERNAL_REVALIDATE_SECRET,
+      },
+      body: JSON.stringify({ lbIds: uniqueLbIds }),
+    })
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      console.warn('[revalidate] endpoint returned non-ok', { status: res.status, body: text.slice(0, 200) })
+      return
+    }
+
+    console.log('[revalidate] triggered for leaderboards:', uniqueLbIds.length)
+  } catch (error) {
+    console.warn('[revalidate] trigger failed (non-fatal)', error)
+  }
 }
 
 async function migratePuuid(oldPuuid: string, newPuuid: string) {
@@ -1199,11 +1231,12 @@ async function main() {
 
   const { data: lbs, error: lbErr } = await supabase
     .from('leaderboard_players')
-    .select('puuid, leaderboards(goal_mode, race_start_at, race_end_at, lp_goal, rank_goal_tier, goal_completed_at)')
+    .select('puuid, leaderboard_id, leaderboards(goal_mode, race_start_at, race_end_at, lp_goal, rank_goal_tier, goal_completed_at)')
   if (lbErr) throw lbErr
 
   const now = Date.now()
   const activePuuids = new Set<string>()
+  const activeLbIds = new Set<string>()
 
   for (const row of lbs ?? []) {
     const puuid = String((row as any).puuid ?? '').trim()
@@ -1222,6 +1255,8 @@ async function main() {
     }
 
     activePuuids.add(puuid)
+    const lbId = String((row as any).leaderboard_id ?? '').trim()
+    if (lbId) activeLbIds.add(lbId)
   }
 
   const puuids = [...activePuuids]
@@ -1316,6 +1351,7 @@ async function main() {
   }
 
   await finalizeLeaderboardGoalsIfNeeded()
+  await triggerLeaderboardCacheRevalidate(Array.from(activeLbIds))
 
   console.log('Done.', { cycles })
 }
