@@ -20,6 +20,8 @@ type LpPoint = {
   tier: string | null
   rank: string | null
   lp: number | null
+  lp_delta?: number | null
+  lp_note?: string | null
   wins: number | null
   losses: number | null
   fetched_at: string
@@ -32,6 +34,7 @@ type RankCutoffs = {
 
 type NormalizedPoint = LpPoint & {
   lpValue: number
+  lpDelta: number | null
   ladderValue: number
   ts: number
   totalGames: number
@@ -137,6 +140,51 @@ function ladderLpWithCutoffs(point: Pick<LpPoint, "tier" | "rank" | "lp">) {
   return baseMasterLadder() + lp
 }
 
+function stepDivision(
+  tier: string | null,
+  rank: string | null,
+  direction: 1 | -1
+): { tier: string | null; rank: string | null } {
+  const normalizedTier = (tier ?? "").toUpperCase()
+  const normalizedRank = (rank ?? "").toUpperCase()
+  const tierIndex = TIER_ORDER.indexOf(normalizedTier as (typeof TIER_ORDER)[number])
+  const divIndex = DIV_ORDER.indexOf(normalizedRank as (typeof DIV_ORDER)[number])
+
+  if (tierIndex === -1 || divIndex === -1) return { tier, rank }
+
+  const diamondIndex = TIER_ORDER.indexOf("DIAMOND")
+
+  if (direction === 1) {
+    if (divIndex < DIV_ORDER.length - 1) {
+      return { tier: TIER_ORDER[tierIndex], rank: DIV_ORDER[divIndex + 1] }
+    }
+    if (tierIndex < diamondIndex) {
+      return { tier: TIER_ORDER[tierIndex + 1], rank: "IV" }
+    }
+    return { tier: TIER_ORDER[tierIndex], rank: DIV_ORDER[divIndex] }
+  }
+
+  if (divIndex > 0) {
+    return { tier: TIER_ORDER[tierIndex], rank: DIV_ORDER[divIndex - 1] }
+  }
+  if (tierIndex > 0) {
+    return { tier: TIER_ORDER[tierIndex - 1], rank: "I" }
+  }
+
+  return { tier: TIER_ORDER[tierIndex], rank: DIV_ORDER[divIndex] }
+}
+
+function resolvePostMatchRank(
+  preTier: string | null,
+  preRank: string | null,
+  lpNote: string | null | undefined
+) {
+  const note = (lpNote ?? "").toUpperCase()
+  if (note === "PROMOTED") return stepDivision(preTier, preRank, 1)
+  if (note === "DEMOTED") return stepDivision(preTier, preRank, -1)
+  return { tier: preTier, rank: preRank }
+}
+
 // --- Color system (tier hue + division intensity) ---
 const TIER_COLORS: Record<string, string> = {
   IRON: "#6B7280", // slate/steel
@@ -201,6 +249,10 @@ function colorForTickLabel(label: string) {
 }
 
 function computeDisplayedLpDelta(cur: NormalizedPoint, prev: NormalizedPoint) {
+  if (typeof cur.lpDelta === "number" && Number.isFinite(cur.lpDelta)) {
+    return cur.lpDelta
+  }
+
   // Use full ladder value delta so division and tier transitions are always correct
   // (e.g. D3 84 -> D2 4 = +20, not -80).
   const ladderDelta = cur.ladderValue - prev.ladderValue
@@ -484,23 +536,76 @@ export default function LeaderboardGraphClient({
 
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
     const sourcePoints = showAll && fullPoints ? fullPoints : recentPoints
-    return sourcePoints
+    const parsed = sourcePoints
       .map((p) => {
         const ts = new Date(p.fetched_at).getTime()
         if (Number.isNaN(ts)) return null
-        const tier = p.tier ?? selectedPlayerRankFallback.tier
-        const rank = p.rank ?? (p.tier ? p.rank : selectedPlayerRankFallback.rank)
         return {
           ...p,
-          tier,
-          rank,
-          lpValue: Math.max(0, p.lp ?? 0),
-          ladderValue: ladderLpWithCutoffs({ tier, rank, lp: p.lp }),
           ts,
-          totalGames: (p.wins ?? 0) + (p.losses ?? 0),
+          hasExplicitPreRank: Boolean(p.tier && p.rank),
         }
       })
-      .filter((p): p is NormalizedPoint => p !== null)
+      .filter((p): p is (LpPoint & { ts: number; hasExplicitPreRank: boolean }) => p !== null)
+      .sort((a, b) => a.ts - b.ts)
+
+    // Step 1: resolve each point to a best-effort PRE-match rank snapshot.
+    // We fill missing snapshots from nearby points to avoid jumping to current rank.
+    const prevKnown: Array<{ tier: string | null; rank: string | null } | null> = []
+    let lastKnown: { tier: string | null; rank: string | null } | null = null
+    for (let i = 0; i < parsed.length; i += 1) {
+      const cur = parsed[i]
+      if (cur.tier) lastKnown = { tier: cur.tier, rank: cur.rank ?? null }
+      prevKnown[i] = lastKnown
+    }
+
+    const nextKnown: Array<{ tier: string | null; rank: string | null } | null> = new Array(parsed.length).fill(null)
+    let upcomingKnown: { tier: string | null; rank: string | null } | null = null
+    for (let i = parsed.length - 1; i >= 0; i -= 1) {
+      const cur = parsed[i]
+      if (cur.tier) upcomingKnown = { tier: cur.tier, rank: cur.rank ?? null }
+      nextKnown[i] = upcomingKnown
+    }
+
+    const preMatchResolved = parsed.map((p, idx) => {
+      const prev = prevKnown[idx]
+      const next = nextKnown[idx]
+      const inferredTier = p.tier ?? prev?.tier ?? next?.tier ?? selectedPlayerRankFallback.tier
+      const inferredRank = p.rank ?? prev?.rank ?? next?.rank ?? (p.tier ? p.rank : selectedPlayerRankFallback.rank)
+
+      return {
+        ...p,
+        preTier: inferredTier,
+        preRank: inferredRank,
+        lpValue: Math.max(0, p.lp ?? 0),
+        lpDelta: typeof p.lp_delta === "number" && Number.isFinite(p.lp_delta) ? p.lp_delta : null,
+        totalGames: (p.wins ?? 0) + (p.losses ?? 0),
+      }
+    })
+
+    // Step 2: convert PRE-match snapshot to POST-match display rank.
+    // Prefer next game's PRE rank when games are consecutive (most reliable source).
+    // Fall back to lp_note transition logic when next PRE rank is unavailable.
+    return preMatchResolved.map((p, idx) => {
+      const next = preMatchResolved[idx + 1]
+      const hasConsecutiveNext =
+        Boolean(next) &&
+        next.totalGames === p.totalGames + 1 &&
+        next.hasExplicitPreRank
+
+      const resolved = hasConsecutiveNext
+        ? { tier: next!.preTier, rank: next!.preRank }
+        : resolvePostMatchRank(p.preTier, p.preRank, p.lp_note)
+
+      const tier = resolved.tier
+      const rank = resolved.rank
+      return {
+        ...p,
+        tier,
+        rank,
+        ladderValue: ladderLpWithCutoffs({ tier, rank, lp: p.lp }),
+      }
+    })
   }, [fullPoints, recentPoints, selectedPlayerRankFallback.rank, selectedPlayerRankFallback.tier, showAll])
 
   const rawFiltered = useMemo(() => {

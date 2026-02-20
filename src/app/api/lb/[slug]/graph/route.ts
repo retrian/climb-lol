@@ -28,6 +28,8 @@ type LpHistoryRow = {
   tier: string | null
   rank: string | null
   lp: number | null
+  lp_delta?: number | null
+  lp_note?: string | null
   wins: number | null
   losses: number | null
   fetched_at: string
@@ -37,6 +39,8 @@ type LpEventGraphRow = {
   match_id: string | null
   puuid: string
   lp: number | null
+  lp_delta: number | null
+  note: string | null
   wins: number | null
   losses: number | null
   fetched_at: string
@@ -124,7 +128,7 @@ async function fetchRecentLpEventsForPlayer(
 ): Promise<LpHistoryRow[]> {
   let query = dataClient
     .from('player_lp_events')
-    .select('match_id, puuid, lp:lp_after, wins:wins_after, losses:losses_after, fetched_at:recorded_at')
+    .select('match_id, puuid, lp:lp_after, lp_delta, note, wins:wins_after, losses:losses_after, fetched_at:recorded_at')
     .eq('puuid', puuid)
     .eq('queue_type', 'RANKED_SOLO_5x5')
     .order('recorded_at', { ascending: false })
@@ -162,6 +166,8 @@ async function fetchRecentLpEventsForPlayer(
       tier: rankInfo?.tier ?? null,
       rank: rankInfo?.rank ?? null,
       lp: row.lp,
+      lp_delta: row.lp_delta,
+      lp_note: row.note,
       wins: row.wins,
       losses: row.losses,
       fetched_at: row.fetched_at,
