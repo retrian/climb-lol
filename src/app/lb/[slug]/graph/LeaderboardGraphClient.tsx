@@ -150,7 +150,23 @@ function stepDivision(
   const tierIndex = TIER_ORDER.indexOf(normalizedTier as (typeof TIER_ORDER)[number])
   const divIndex = DIV_ORDER.indexOf(normalizedRank as (typeof DIV_ORDER)[number])
 
-  if (tierIndex === -1 || divIndex === -1) return { tier, rank }
+  if (tierIndex === -1) return { tier, rank }
+
+  // Apex tiers do not use divisions in Riot display rank.
+  // Handle explicit up/down movement across MASTER/GM/CHALL and MASTER<->DIAMOND I.
+  if (normalizedTier === "MASTER" || normalizedTier === "GRANDMASTER" || normalizedTier === "CHALLENGER") {
+    if (direction === 1) {
+      if (normalizedTier === "MASTER") return { tier: "GRANDMASTER", rank: null }
+      if (normalizedTier === "GRANDMASTER") return { tier: "CHALLENGER", rank: null }
+      return { tier: "CHALLENGER", rank: null }
+    }
+
+    if (normalizedTier === "CHALLENGER") return { tier: "GRANDMASTER", rank: null }
+    if (normalizedTier === "GRANDMASTER") return { tier: "MASTER", rank: null }
+    return { tier: "DIAMOND", rank: "I" }
+  }
+
+  if (divIndex === -1) return { tier, rank }
 
   const diamondIndex = TIER_ORDER.indexOf("DIAMOND")
 
@@ -161,7 +177,8 @@ function stepDivision(
     if (tierIndex < diamondIndex) {
       return { tier: TIER_ORDER[tierIndex + 1], rank: "IV" }
     }
-    return { tier: TIER_ORDER[tierIndex], rank: DIV_ORDER[divIndex] }
+    // DIAMOND I -> MASTER
+    return { tier: "MASTER", rank: null }
   }
 
   if (divIndex > 0) {
@@ -465,11 +482,12 @@ export default function LeaderboardGraphClient({
       }
     }
 
-    const cacheKey = `${effectiveSelectedPuuid}:recent:${RECENT_QUERY_VERSION}`
+    const cacheKey = `${effectiveSelectedPuuid}:full`
     const cached = prefetchCacheRef.current.get(cacheKey)
     if (cached) {
       queueMicrotask(() => {
         if (cancelled) return
+        setFullPoints(cached)
         setRecentPoints(cached)
         setIsLoadingHistory(false)
       })
@@ -484,13 +502,15 @@ export default function LeaderboardGraphClient({
       setIsLoadingHistory(true)
     })
 
-    fetchPlayerHistory(effectiveSelectedPuuid, "recent")
+    fetchPlayerHistory(effectiveSelectedPuuid, "full")
       .then((points) => {
         if (cancelled) return
+        setFullPoints(points)
         setRecentPoints(points)
       })
       .catch(() => {
         if (cancelled) return
+        setFullPoints([])
         setRecentPoints([])
       })
       .finally(() => {
@@ -506,9 +526,9 @@ export default function LeaderboardGraphClient({
   const prefetchPlayerHistory = useCallback(
     (puuid: string) => {
       if (!puuid) return
-      const key = `${puuid}:recent:${RECENT_QUERY_VERSION}`
+      const key = `${puuid}:full`
       if (prefetchCacheRef.current.has(key) || inflightRef.current.has(key)) return
-      void fetchPlayerHistory(puuid, "recent")
+      void fetchPlayerHistory(puuid, "full")
     },
     [fetchPlayerHistory]
   )
@@ -630,7 +650,21 @@ export default function LeaderboardGraphClient({
   }, [normalizedPoints])
 
   const filteredWithLp = useMemo(() => rawFiltered.filter((p) => p.lp !== null && p.lp !== undefined), [rawFiltered])
-  const filteredPoints = filteredWithLp
+  const filteredPoints = useMemo(() => {
+    if (showAll) return filteredWithLp
+
+    // Use the same normalized dataset as show-all, then trim to the latest 30 game numbers.
+    const selected: NormalizedPoint[] = []
+    const seenGames = new Set<number>()
+    for (let i = filteredWithLp.length - 1; i >= 0; i -= 1) {
+      const p = filteredWithLp[i]
+      if (seenGames.has(p.totalGames)) continue
+      seenGames.add(p.totalGames)
+      selected.push(p)
+      if (seenGames.size >= RECENT_HISTORY_LIMIT) break
+    }
+    return selected.reverse()
+  }, [filteredWithLp, showAll])
 
   const chart = useMemo(() => {
     if (filteredPoints.length === 0) return null

@@ -175,6 +175,28 @@ async function fetchRecentLpEventsForPlayer(
   })
 }
 
+async function fetchRecentLpHistoryForPlayer(
+  dataClient: ReturnType<typeof createServiceClient>,
+  puuid: string,
+  limit: number,
+  seasonStartIso?: string
+): Promise<LpHistoryRow[]> {
+  let query = dataClient
+    .from('player_lp_history')
+    .select('puuid, tier, rank, lp, wins, losses, fetched_at')
+    .eq('puuid', puuid)
+    .eq('queue_type', 'RANKED_SOLO_5x5')
+    .order('fetched_at', { ascending: false })
+    .limit(limit)
+
+  if (seasonStartIso) {
+    query = query.gte('fetched_at', seasonStartIso)
+  }
+
+  const { data } = await query
+  return ((data ?? []) as LpHistoryRow[]).reverse()
+}
+
 async function fetchPage(
   dataClient: ReturnType<typeof createServiceClient>,
   puuid: string,
@@ -275,7 +297,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     let points: LpHistoryRow[] = []
 
     if (limit !== null) {
-      points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit, seasonStartIso)
+      // Keep 30-game mode consistent with show-all by using the same history source first.
+      points = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit, seasonStartIso)
+
+      if (points.length === 0) {
+        points = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit)
+      }
 
       if (points.length === 0) {
         points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit)
