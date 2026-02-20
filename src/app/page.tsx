@@ -83,7 +83,8 @@ export default async function HomePage() {
                         alt=""
                         className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
                       />
-                      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/70 via-slate-950/30 to-transparent" />
+                      <div className="absolute inset-0 bg-gradient-to-br from-white/28 via-white/14 to-white/4 dark:from-slate-950/42 dark:via-slate-950/22 dark:to-slate-900/12" />
+                      <div className="absolute inset-0 bg-gradient-to-t from-white/36 via-white/8 to-transparent dark:from-slate-950/42 dark:via-slate-950/14 dark:to-transparent" />
                     </>
                   ) : (
                     <div className="h-full w-full bg-gradient-to-br from-slate-700 via-slate-800 to-slate-900" />
