@@ -56,10 +56,10 @@ function MoverCard({
 
   const borderClass =
     borderTone === 'emerald'
-      ? 'border-l-emerald-400 border-emerald-100 dark:border-emerald-500/40'
+      ? 'border-slate-200 dark:border-slate-800 border-l-emerald-400 dark:border-l-emerald-500/70'
       : borderTone === 'rose'
-        ? 'border-l-rose-400 border-rose-100 dark:border-rose-500/40'
-        : 'border-l-amber-400 border-amber-100 dark:border-amber-500/40'
+        ? 'border-slate-200 dark:border-slate-800 border-l-rose-400 dark:border-l-rose-500/70'
+        : 'border-slate-200 dark:border-slate-800 border-l-amber-400 dark:border-l-amber-500/70'
 
   return (
     <a
@@ -94,18 +94,65 @@ function MoverCard({
   )
 }
 
-export default async function MoversServer({ lbId, ddVersion }: { lbId: string; ddVersion: string }) {
+export default async function MoversServer({
+  lbId,
+  ddVersion,
+  cutoffs,
+}: {
+  lbId: string
+  ddVersion: string
+  cutoffs: Array<{ label: string; lp: number; icon: string }>
+}) {
   const data = await getMoversDataCached(lbId)
+
+  const orderedCutoffs = [
+    cutoffs.find((c) => c.label.toLowerCase() === 'challenger'),
+    cutoffs.find((c) => c.label.toLowerCase() === 'grandmaster'),
+  ].filter((c): c is { label: string; lp: number; icon: string } => Boolean(c))
 
   return (
     <aside className="hidden lg:block lg:sticky lg:top-6 order-3">
-      <div className="flex items-center gap-2 mb-6">
-        <div className="h-1 w-8 bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 rounded-full shadow-sm" />
-        <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">LP Movers</h3>
-      </div>
       <div className="space-y-4">
         <div>
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Cutoffs</div>
+          <div className="mt-2 h-px w-full bg-slate-200 dark:bg-slate-800" />
+        </div>
+
+        {orderedCutoffs.length > 0 ? (
+          orderedCutoffs.map((cutoff) => {
+            const isChallenger = cutoff.label.toLowerCase() === 'challenger'
+            const isGrandmaster = cutoff.label.toLowerCase() === 'grandmaster'
+            const cutoffBorderClass = isChallenger
+              ? 'border-l-4 border-l-amber-400 border-amber-100 dark:border-amber-500/40'
+              : isGrandmaster
+                ? 'border-l-4 border-l-rose-400 border-rose-100 dark:border-rose-500/40'
+                : 'border border-slate-200 dark:border-slate-800'
+
+            return (
+              <div
+                key={cutoff.label}
+                className={`rounded-2xl bg-white px-4 py-3 shadow-sm dark:bg-slate-900 ${cutoffBorderClass}`}
+              >
+              <div className="flex items-center gap-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={cutoff.icon} alt={cutoff.label} width={28} height={28} className="h-7 w-7 object-contain" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">{cutoff.label}</div>
+                  <div className="text-sm font-black text-slate-900 dark:text-slate-100">{cutoff.lp} LP</div>
+                </div>
+              </div>
+              </div>
+            )
+          })
+        ) : (
+          <div className="rounded-2xl border border-slate-200 bg-white px-4 py-4 text-xs font-semibold text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300">
+            No cutoff data available.
+          </div>
+        )}
+
+        <div>
           <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Daily Movers</div>
+          <div className="mt-2 h-px w-full bg-slate-200 dark:bg-slate-800" />
         </div>
         {data.dailyTopGain ? (() => {
           const lpDelta = Math.round(data.dailyTopGain[1])
@@ -144,6 +191,7 @@ export default async function MoversServer({ lbId, ddVersion }: { lbId: string; 
 
         <div className="pt-2">
           <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Weekly Movers</div>
+          <div className="mt-2 h-px w-full bg-slate-200 dark:bg-slate-800" />
         </div>
 
         {data.weeklyTopGain ? (() => {
@@ -180,6 +228,7 @@ export default async function MoversServer({ lbId, ddVersion }: { lbId: string; 
             />
           )
         })() : null}
+
       </div>
     </aside>
   )

@@ -12,9 +12,9 @@ export default async function LatestActivityServer({
 
   return (
     <aside className="lg:sticky lg:top-6 order-2 lg:order-1">
-      <div className="flex items-center gap-2 mb-6">
-        <div className="h-1 w-8 bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 rounded-full shadow-sm" />
-        <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest Activity</h3>
+      <div className="mb-6">
+        <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Latest Activity</div>
+        <div className="mt-2 h-px w-full bg-slate-200 dark:bg-slate-800" />
       </div>
       <LatestGamesFeedClient
         lbId={lbId}

@@ -222,11 +222,11 @@ const GameItem = memo(({
   
   const resultBorderClasses = (() => {
     if (isRemake) {
-      return 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-600/60 dark:hover:border-slate-500/80'
+      return 'border-l-slate-300 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700'
     }
     return game.win
-      ? 'border-l-emerald-400 border-y border-r border-emerald-100 hover:border-emerald-200 dark:border-emerald-500/40 dark:hover:border-emerald-400/60'
-      : 'border-l-rose-400 border-y border-r border-rose-100 hover:border-rose-200 dark:border-rose-500/40 dark:hover:border-rose-400/60'
+      ? 'border-l-emerald-400 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700 dark:border-l-emerald-500/70'
+      : 'border-l-rose-400 border-y border-r border-slate-200 hover:border-slate-300 dark:border-slate-800 dark:hover:border-slate-700 dark:border-l-rose-500/70'
   })()
 
   const lpBadge = lpChange !== null ? (

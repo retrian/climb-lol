@@ -403,6 +403,7 @@ async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: 
   const {
     champMap,
     playerCards,
+    cutoffs,
   } = data
 
   return (
@@ -418,7 +419,7 @@ async function LeaderboardBody({ lbId, slug, ddVersion }: { lbId: string; slug: 
       </div>
 
       <Suspense fallback={<MoversSkeleton />}>
-        <MoversServer lbId={lbId} ddVersion={ddVersion} />
+        <MoversServer lbId={lbId} ddVersion={ddVersion} cutoffs={cutoffs} />
       </Suspense>
     </div>
   )

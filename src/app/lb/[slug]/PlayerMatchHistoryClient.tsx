@@ -1384,11 +1384,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
     <>
       {top3.length > 0 && (
         <div>
-          <div className="flex items-center gap-2 mb-6">
-            <div className="h-1 w-8 bg-gradient-to-r from-amber-400 to-amber-600 rounded-full" />
-            <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Top Players</h2>
-          </div>
-          <div className={`grid grid-cols-1 sm:grid-cols-3 gap-6 items-end ${isCompact ? 'max-w-[720px] mx-auto' : ''}`}>
+          <div className={`mt-10 grid grid-cols-1 sm:grid-cols-3 gap-6 items-end ${isCompact ? 'max-w-[720px] mx-auto' : ''}`}>
             {top3.map((card, idx) => {
               const actualRank = idx + 1
               const orderClass = actualRank === 1 ? 'sm:order-2' : actualRank === 2 ? 'sm:order-1' : 'sm:order-3'
@@ -1403,11 +1399,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
       )}
 
       {rest.length > 0 && (
-        <div className={isCompact ? 'max-w-[720px] mx-auto space-y-3' : 'space-y-3'}>
-          <div className="flex items-center gap-2 mb-4 mt-8">
-            <div className="h-1 w-6 bg-gradient-to-r from-slate-400 to-slate-600 rounded-full" />
-            <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Runnerups</h2>
-          </div>
+        <div className={isCompact ? 'max-w-[720px] mx-auto space-y-3 mt-16' : 'space-y-3 mt-16'}>
           {rest.map(card => <RunnerupRow key={card.player.id} card={card} ddVersion={ddVersion} onOpen={handleOpen} champMap={champMap} />)}
         </div>
       )}
