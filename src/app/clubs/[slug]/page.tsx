@@ -1,163 +1,31 @@
 import Link from 'next/link'
-import { revalidatePath } from 'next/cache'
-import { notFound, redirect } from 'next/navigation'
+import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { resolvePuuid } from '@/lib/riot/resolvePuuid'
-import { buildClubSlug, CLUB_SLUG_PART_MAX, normalizeSlugPart, parseClubSlug, validateSlugPart } from '@/lib/clubSlug'
-import HighlightsSubmitClient from '@/app/clubs/[slug]/HighlightsSubmitClient'
-
-const CLUB_BANNER_BUCKET = 'club-banners'
-const TABS = ['home', 'members', 'leaderboards', 'highlights'] as const
-type ClubTab = (typeof TABS)[number]
-
-type Visibility = 'PUBLIC' | 'UNLISTED' | 'PRIVATE'
-const VISIBILITY: Visibility[] = ['PUBLIC', 'UNLISTED', 'PRIVATE']
-
-function resolveTab(value?: string | null): ClubTab {
-  if (!value) return 'home'
-  return (TABS as readonly string[]).includes(value) ? (value as ClubTab) : 'home'
-}
-
-function clubUrl(slug: string, opts: { tab?: ClubTab; ok?: string; err?: string } = {}) {
-  const params = new URLSearchParams()
-  if (opts.tab && opts.tab !== 'home') params.set('tab', opts.tab)
-  if (opts.ok) params.set('club_ok', opts.ok)
-  if (opts.err) params.set('club_err', opts.err)
-  const qs = params.toString()
-  return `/clubs/${slug}${qs ? `?${qs}` : ''}`
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return null
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return null
-  return d.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  })
-}
-
-function parseRiotId(input: string): { gameName: string; tagLine: string } {
-  const trimmed = input.trim()
-  const parts = trimmed.split('#')
-  if (parts.length !== 2 || !parts[0]?.trim() || !parts[1]?.trim()) {
-    throw new Error('Riot ID must be in the format gameName#tagLine')
-  }
-  return { gameName: parts[0].trim(), tagLine: parts[1].trim() }
-}
-
-function extFromType(type: string) {
-  if (type === 'image/png') return 'png'
-  if (type === 'image/webp') return 'webp'
-  if (type === 'image/jpeg') return 'jpg'
-  return null
-}
-
-function cacheBuster() {
-  return Date.now().toString()
-}
-
-function errorMessage(err: unknown, fallback: string) {
-  return err instanceof Error ? err.message : fallback
-}
-
-type ClubRow = {
-  id: string
-  name: string
-  slug: string
-  description: string | null
-  visibility: string | null
-  created_at: string | null
-  updated_at: string | null
-  owner_user_id: string | null
-  banner_url: string | null
-}
-
-type MemberRow = {
-  id: string
-  user_id: string | null
-  role: string | null
-  joined_at: string | null
-  player_puuid: string | null
-  game_name: string | null
-  tag_line: string | null
-  profile_icon_id?: number | null
-}
-
-type ClubLeaderboardRow = {
-  id: string
-  leaderboard_id: string
-  created_at: string | null
-  added_by_user_id: string | null
-}
-
-type HighlightRow = {
-  id: string
-  club_id: string
-  user_id: string | null
-  url: string
-  duration_seconds: number | null
-  created_at: string | null
-}
-
-type LeaderboardRow = {
-  id: string
-  name: string
-  slug: string
-  leaderboard_code: number
-  description: string | null
-  updated_at: string | null
-  banner_url: string | null
-  visibility: string | null
-}
-
-type ClubShowdownRow = {
-  id: string
-  requester_club_id: string
-  target_club_id: string
-  status: string | null
-  created_at: string | null
-}
-
-type ClubNameRow = {
-  id: string
-  name: string
-}
-
-type AttachedLeaderboard = {
-  linkId: string
-  addedAt: string | null
-  leaderboard: LeaderboardRow | null
-}
-
-type SupabaseClient = Awaited<ReturnType<typeof createClient>>
-
-async function getOwnedClub(client: SupabaseClient, slug: string, userId: string) {
-  return client
-    .from('clubs')
-    .select('id, slug')
-    .eq('slug', slug)
-    .eq('owner_user_id', userId)
-    .maybeSingle()
-}
-
-function MemberBadge({ role }: { role?: string | null }) {
-  if (!role) return null
-  const normalized = role.toUpperCase()
-  const isOwner = normalized === 'OWNER'
-  const isAdmin = normalized === 'ADMIN'
-  const styles = isOwner
-    ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300'
-    : isAdmin
-      ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300'
-      : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
-  return (
-    <span className={`rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide ${styles}`}>
-      {role}
-    </span>
-  )
-}
+import {
+  addHighlight,
+  addMember,
+  attachLeaderboard,
+  deleteHighlight,
+  detachLeaderboard,
+  removeMember,
+} from './actions'
+import AlertBanner from './components/AlertBanner'
+import ClubHeader from './components/ClubHeader'
+import HighlightsTab from './tabs/HighlightsTab'
+import HomeTab from './tabs/HomeTab'
+import LeaderboardsTab from './tabs/LeaderboardsTab'
+import MembersTab from './tabs/MembersTab'
+import type {
+  AttachedLeaderboard,
+  ClubLeaderboardRow,
+  ClubNameRow,
+  ClubRow,
+  ClubShowdownRow,
+  HighlightRow,
+  LeaderboardRow,
+  MemberRow,
+} from './types'
+import { resolveTab } from './utils'
 
 export default async function ClubDetailPage({
   params,
@@ -183,9 +51,6 @@ export default async function ClubDetailPage({
     supabase.from('profiles').select('user_id, username'),
   ])
 
-  const user = auth.user
-  const ownerId = user?.id ?? null
-
   if (clubError) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
@@ -204,10 +69,10 @@ export default async function ClubDetailPage({
 
   const club = clubRaw as ClubRow | null
   if (!club) notFound()
-  const clubSafe = club
 
+  const user = auth.user
+  const ownerId = user?.id ?? null
   const canManage = !!ownerId && club.owner_user_id === ownerId
-  const slugParts = parseClubSlug(club.slug)
 
   const [membersRes, linksRes, userLeaderboardsRes, highlightsRes, showdownsRes] = await Promise.all([
     supabase
@@ -248,18 +113,13 @@ export default async function ClubDetailPage({
     ? await supabase.from('player_riot_state').select('puuid, profile_icon_id').in('puuid', memberPuuids)
     : { data: [] as Array<{ puuid: string; profile_icon_id: number | null }> }
 
-  const riotStateByPuuid = new Map(
-    (riotStateRaw ?? []).map((row) => [row.puuid, row.profile_icon_id])
-  )
-
-  const profilesByUserId = new Map(
-    (profilesRaw ?? []).map((row: { user_id: string; username: string }) => [row.user_id, row.username])
-  )
+  const riotStateByPuuid = new Map((riotStateRaw ?? []).map((row) => [row.puuid, row.profile_icon_id]))
+  const profilesByUserId = new Map((profilesRaw ?? []).map((row: { user_id: string; username: string }) => [row.user_id, row.username]))
 
   const links = (linksRes.data ?? []) as ClubLeaderboardRow[]
   const linksError = linksRes.error
-
   const leaderboardIds = links.map((link) => link.leaderboard_id)
+
   const leaderboardsRes = leaderboardIds.length
     ? await supabase
         .from('leaderboards')
@@ -284,9 +144,7 @@ export default async function ClubDetailPage({
 
   const showdowns = (showdownsRes.data ?? []) as ClubShowdownRow[]
   const showdownsError = showdownsRes.error
-  const showdownClubIds = Array.from(
-    new Set(showdowns.flatMap((showdown) => [showdown.requester_club_id, showdown.target_club_id]))
-  )
+  const showdownClubIds = Array.from(new Set(showdowns.flatMap((showdown) => [showdown.requester_club_id, showdown.target_club_id])))
   const showdownClubsRes = showdownClubIds.length
     ? await supabase.from('clubs').select('id, name').in('id', showdownClubIds)
     : { data: [] as ClubNameRow[], error: null }
@@ -294,7 +152,6 @@ export default async function ClubDetailPage({
 
   const memberCount = members.length
   const leaderboardCount = attachedLeaderboards.filter((item) => item.leaderboard).length
-  const updatedLabel = formatDate(club.updated_at ?? club.created_at)
   const latestMembers = [...members]
     .sort((a, b) => {
       const aTs = a.joined_at ? new Date(a.joined_at).getTime() : 0
@@ -305,256 +162,6 @@ export default async function ClubDetailPage({
 
   const canPostHighlight = !!user && (club.owner_user_id === user.id || members.some((member) => member.user_id === user.id))
 
-
-async function addMember(formData: FormData) {
-  'use server'
-
-    const riotIdRaw = String(formData.get('riot_id') ?? '').trim()
-    if (!riotIdRaw) redirect(clubUrl(slug, { tab: 'members', err: 'Enter a Riot ID like gameName#tagLine' }))
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-  const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-  if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Only the club owner can manage members' }))
-
-  const { count: membershipCount } = await supabase
-    .from('club_members')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', user.id)
-
-  if ((membershipCount ?? 0) >= 3) {
-    redirect(clubUrl(slug, { tab: 'members', err: 'Member club limit reached (3 max).' }))
-  }
-
-    let gameName = ''
-    let tagLine = ''
-    try {
-      const parsed = parseRiotId(riotIdRaw)
-      gameName = parsed.gameName
-      tagLine = parsed.tagLine
-    } catch (err) {
-      redirect(clubUrl(slug, { tab: 'members', err: errorMessage(err, 'Invalid Riot ID') }))
-    }
-
-    let puuid = ''
-    try {
-      puuid = await resolvePuuid(gameName, tagLine)
-    } catch (err) {
-      redirect(clubUrl(slug, { tab: 'members', err: errorMessage(err, 'Riot lookup failed') }))
-    }
-
-    const { data: existing } = await supabase
-      .from('club_members')
-      .select('id')
-      .eq('club_id', ownedClub.id)
-      .eq('player_puuid', puuid)
-      .maybeSingle()
-
-    if (existing?.id) {
-      redirect(clubUrl(slug, { tab: 'members', err: 'That Riot ID is already a member' }))
-    }
-
-  const { error } = await supabase.from('club_members').insert({
-    club_id: ownedClub.id,
-    role: 'MEMBER',
-    player_puuid: puuid,
-    game_name: gameName,
-      tag_line: tagLine,
-      user_id: null,
-    })
-
-    if (error) {
-      redirect(clubUrl(slug, { tab: 'members', err: error.message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath(`/clubs/${slug}`)
-    redirect(clubUrl(slug, { tab: 'members', ok: `Added ${gameName}#${tagLine}` }))
-  }
-
-  async function removeMember(formData: FormData) {
-    'use server'
-
-    const memberId = String(formData.get('member_id') ?? '').trim()
-    if (!memberId) redirect(clubUrl(slug, { tab: 'members', err: 'Missing member to remove' }))
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Only the club owner can manage members' }))
-
-    const { data: member } = await supabase
-      .from('club_members')
-      .select('id, role')
-      .eq('id', memberId)
-      .eq('club_id', ownedClub.id)
-      .maybeSingle()
-
-    if (!member?.id) redirect(clubUrl(slug, { tab: 'members', err: 'Member not found' }))
-    if (member.role?.toUpperCase() === 'OWNER') {
-      redirect(clubUrl(slug, { tab: 'members', err: 'Owner memberships cannot be removed' }))
-    }
-
-    const { error } = await supabase.from('club_members').delete().eq('id', memberId).eq('club_id', ownedClub.id)
-
-    if (error) {
-      redirect(clubUrl(slug, { tab: 'members', err: error.message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath(`/clubs/${slug}`)
-    redirect(clubUrl(slug, { tab: 'members', ok: 'Member removed' }))
-  }
-
-  async function attachLeaderboard(formData: FormData) {
-    'use server'
-
-    const leaderboardId = String(formData.get('leaderboard_id') ?? '').trim()
-    if (!leaderboardId) {
-      redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Select a leaderboard' }))
-    }
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Only the club owner can attach leaderboards' }))
-
-    const { data: leaderboard, error: leaderboardError } = await supabase
-      .from('leaderboards')
-      .select('id, slug')
-      .eq('id', leaderboardId)
-      .eq('user_id', user.id)
-      .maybeSingle()
-
-    if (leaderboardError || !leaderboard?.id) {
-      redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Leaderboard not found in your account' }))
-    }
-
-    const { data: existing } = await supabase
-      .from('club_leaderboards')
-      .select('id')
-      .eq('club_id', ownedClub.id)
-      .eq('leaderboard_id', leaderboard.id)
-      .maybeSingle()
-
-    if (existing?.id) {
-      redirect(clubUrl(slug, { tab: 'leaderboards', ok: 'Leaderboard already attached' }))
-    }
-
-    const { error } = await supabase.from('club_leaderboards').insert({
-      club_id: ownedClub.id,
-      leaderboard_id: leaderboard.id,
-      added_by_user_id: user.id,
-    })
-
-    if (error) {
-      redirect(clubUrl(slug, { tab: 'leaderboards', err: error.message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath(`/clubs/${slug}`)
-    redirect(clubUrl(slug, { tab: 'leaderboards', ok: 'Leaderboard attached' }))
-  }
-
-  async function detachLeaderboard(formData: FormData) {
-    'use server'
-
-    const linkId = String(formData.get('link_id') ?? '').trim()
-    if (!linkId) {
-      redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Missing attached leaderboard' }))
-    }
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    const { data: ownedClub } = await getOwnedClub(supabase, slug, user.id)
-    if (!ownedClub?.id) redirect(clubUrl(slug, { tab: 'leaderboards', err: 'Only the club owner can manage leaderboards' }))
-
-    const { error } = await supabase.from('club_leaderboards').delete().eq('id', linkId).eq('club_id', ownedClub.id)
-
-    if (error) {
-      redirect(clubUrl(slug, { tab: 'leaderboards', err: error.message }))
-    }
-
-    revalidatePath('/clubs')
-    revalidatePath(`/clubs/${slug}`)
-    redirect(clubUrl(slug, { tab: 'leaderboards', ok: 'Leaderboard removed' }))
-  }
-
-  async function addHighlight(formData: FormData) {
-    'use server'
-
-    const urlRaw = String(formData.get('video_url') ?? '').trim()
-    const resolvedUrl = String(formData.get('resolved_url') ?? '').trim()
-    const durationRaw = String(formData.get('duration_seconds') ?? '').trim()
-
-    if (!urlRaw) {
-      redirect(clubUrl(slug, { tab: 'highlights', err: 'Add a video link first.' }))
-    }
-
-    const finalUrl = resolvedUrl || urlRaw
-
-    let durationSeconds = Number(durationRaw)
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      redirect(clubUrl(slug, { tab: 'highlights', err: 'Unable to read video length. Use a direct video link.' }))
-    }
-
-    durationSeconds = Math.round(durationSeconds)
-    if (durationSeconds > 30) {
-      redirect(clubUrl(slug, { tab: 'highlights', err: 'Video must be 30 seconds or less.' }))
-    }
-
-    try {
-      // eslint-disable-next-line no-new
-      new URL(finalUrl)
-    } catch {
-      redirect(clubUrl(slug, { tab: 'highlights', err: 'Invalid video URL.' }))
-    }
-
-    const supabase = await createClient()
-    const { data: auth } = await supabase.auth.getUser()
-    const user = auth.user
-    if (!user) redirect('/sign-in')
-
-    if (clubSafe.owner_user_id !== user.id) {
-      const { data: member } = await supabase
-        .from('club_members')
-        .select('id')
-        .eq('club_id', clubSafe.id)
-        .eq('user_id', user.id)
-        .maybeSingle()
-
-      if (!member?.id) {
-        redirect(clubUrl(slug, { tab: 'highlights', err: 'Only club members can post highlights.' }))
-      }
-    }
-
-    const { error } = await supabase.from('club_highlights').insert({
-      club_id: clubSafe.id,
-      user_id: user.id,
-      url: finalUrl,
-      duration_seconds: durationSeconds,
-    })
-
-    if (error) {
-      redirect(clubUrl(slug, { tab: 'highlights', err: error.message }))
-    }
-
-    revalidatePath(`/clubs/${slug}`)
-    redirect(clubUrl(slug, { tab: 'highlights', ok: 'Highlight added.' }))
-  }
-
   const hasMemberError = !!memberError
   const hasLeaderboardError = !!linksError || !!leaderboardsRes.error
   const hasAttachError = !!userLeaderboardsError
@@ -562,518 +169,72 @@ async function addMember(formData: FormData) {
   const hasShowdownError = !!showdownsError
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
-      <div className="mx-auto max-w-5xl px-4 py-10 lg:py-16">
-        <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white/90 shadow-sm dark:border-slate-800 dark:bg-slate-900/80">
-          {club.banner_url ? (
-            <div className="h-44 w-full overflow-hidden bg-slate-100 dark:bg-slate-800">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={club.banner_url} alt="" className="h-full w-full object-cover" />
-            </div>
-          ) : (
-            <div className="h-32 w-full bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700" />
-          )}
-
-          <div className="p-6 lg:p-8">
-            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <div className="flex flex-wrap items-center gap-3">
-                  <h1 className="text-3xl font-black tracking-tight text-slate-900 dark:text-slate-100 lg:text-4xl">
-                    {club.name}
-                  </h1>
-                  <span className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white dark:bg-slate-100 dark:text-slate-900">
-                    {club.visibility ?? 'PUBLIC'}
-                  </span>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                    {club.slug}
-                  </span>
-                </div>
-                {club.description && (
-                  <p className="mt-3 max-w-2xl text-base text-slate-600 dark:text-slate-300">{club.description}</p>
-                )}
-                <div className="mt-4 flex flex-wrap items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
-                  {updatedLabel && <span>Updated {updatedLabel}</span>}
-                  <span>{memberCount} member{memberCount === 1 ? '' : 's'}</span>
-                  <span>{leaderboardCount} leaderboard{leaderboardCount === 1 ? '' : 's'}</span>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <Link
-                  href="/clubs"
-                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
-                >
-                  ← Back to clubs
-                </Link>
-                {canManage ? (
-                  <Link
-                    href="/dashboard/club"
-                    className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                  >
-                    Manage in dashboard
-                  </Link>
-                ) : (
-                  <span className="inline-flex items-center justify-center rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                    Club owner manages settings
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-8 flex flex-wrap gap-2">
-              {TABS.map((tab) => {
-                const isActive = tab === activeTab
-                return (
-                  <Link
-                    key={tab}
-                    href={clubUrl(club.slug, { tab })}
-                    className={`rounded-xl px-4 py-2 text-sm font-semibold capitalize transition ${
-                      isActive
-                        ? 'bg-slate-900 text-white shadow-sm dark:bg-white dark:text-slate-900'
-                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white'
-                    }`}
-                  >
-                    {tab}
-                  </Link>
-                )
-              })}
-            </div>
-          </div>
-        </div>
+    <main className="lb-less-rounded min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+      <div className="mx-auto w-full space-y-8 px-6 py-8 lg:px-10 lg:py-12">
+        <ClubHeader club={club} activeTab={activeTab} canManage={canManage} />
 
         {(clubOk || clubErr || hasMemberError || hasLeaderboardError || hasAttachError || hasHighlightsError || hasShowdownError) && (
           <div className="mt-6 space-y-3">
-            {clubOk && (
-              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300">
-                {clubOk}
-              </div>
-            )}
-            {clubErr && (
-              <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-medium text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
-                {clubErr}
-              </div>
-            )}
-            {hasMemberError && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                Member data is unavailable right now. {memberError?.message}
-              </div>
-            )}
+            {clubOk && <AlertBanner tone="success">{clubOk}</AlertBanner>}
+            {clubErr && <AlertBanner tone="error">{clubErr}</AlertBanner>}
+            {hasMemberError && <AlertBanner tone="warning">Member data is unavailable right now. {memberError?.message}</AlertBanner>}
             {hasLeaderboardError && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                Attached leaderboards could not be loaded. {linksError?.message ?? leaderboardsRes.error?.message}
-              </div>
+              <AlertBanner tone="warning">Attached leaderboards could not be loaded. {linksError?.message ?? leaderboardsRes.error?.message}</AlertBanner>
             )}
-            {hasAttachError && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                Your leaderboards are not available to attach. {userLeaderboardsError?.message}
-              </div>
-            )}
-            {hasHighlightsError && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                Highlights could not be loaded. {highlightsError?.message}
-              </div>
-            )}
-            {hasShowdownError && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                Showdown log could not be loaded. {showdownsError?.message}
-              </div>
-            )}
+            {hasAttachError && <AlertBanner tone="warning">Your leaderboards are not available to attach. {userLeaderboardsError?.message}</AlertBanner>}
+            {hasHighlightsError && <AlertBanner tone="warning">Highlights could not be loaded. {highlightsError?.message}</AlertBanner>}
+            {hasShowdownError && <AlertBanner tone="warning">Showdown log could not be loaded. {showdownsError?.message}</AlertBanner>}
           </div>
         )}
 
         {activeTab === 'home' && (
-          <section className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12 lg:gap-10">
-            <aside className="order-2 lg:order-1 lg:col-span-4 lg:sticky lg:top-6">
-              <div className="flex items-center gap-2">
-                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600 shadow-sm" />
-                <h3 className="text-xs font-black uppercase tracking-widest text-slate-600 dark:text-slate-300">Latest members joined</h3>
-              </div>
-              <div className="mt-4 space-y-3">
-                {latestMembers.length === 0 ? (
-                  <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-10 text-center dark:border-slate-700 dark:bg-slate-900">
-                    <p className="text-sm font-semibold text-slate-600 dark:text-slate-200">No members yet</p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Add Riot IDs to start the roster.</p>
-                  </div>
-                ) : (
-                  latestMembers.map((member) => {
-                    const riotId = member.game_name && member.tag_line ? `${member.game_name}#${member.tag_line}` : null
-                    const profileIconId = member.player_puuid ? riotStateByPuuid.get(member.player_puuid) ?? null : null
-                    const iconUrl = profileIconId
-                      ? `https://ddragon.leagueoflegends.com/cdn/${process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'}/img/profileicon/${profileIconId}.png`
-                      : null
-                    const joinedLabel = formatDate(member.joined_at)
-                    const profileName = member.user_id ? profilesByUserId.get(member.user_id) : null
-                    const displayName = riotId ?? profileName ?? (member.user_id ? 'Owner' : 'Member')
-
-                    return (
-                      <div
-                        key={member.id}
-                        className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-                      >
-                        {iconUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={iconUrl}
-                            alt=""
-                            className="h-10 w-10 rounded-xl border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                          />
-                        ) : (
-                          <div className="h-10 w-10 rounded-xl border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                        )}
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{displayName}</p>
-                          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Joined {joinedLabel ?? 'Unknown'}
-                          </p>
-                        </div>
-                      </div>
-                    )
-                  })
-                )}
-              </div>
-            </aside>
-
-            <div className="order-1 space-y-6 lg:order-2 lg:col-span-8">
-              <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club home</h2>
-                <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                  This is the public landing page for the club. Share your identity, link your favorite competitions, and keep your roster in sync.
-                </p>
-                <div className="mt-6 grid gap-4 sm:grid-cols-2">
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Members</p>
-                    <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">{memberCount}</p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Riot IDs on the roster</p>
-                  </div>
-                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Leaderboards</p>
-                    <p className="mt-2 text-3xl font-black text-slate-900 dark:text-slate-100">{leaderboardCount}</p>
-                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">Attached competitions</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">Showdown log</h3>
-                  <Link
-                    href="/showdown"
-                    className="text-xs font-semibold text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200"
-                  >
-                    View all
-                  </Link>
-                </div>
-                <div className="mt-4 space-y-3">
-                  {showdowns.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-300">
-                      No showdowns yet.
-                    </div>
-                  ) : (
-                    showdowns.map((showdown) => {
-                      const opponentClubId = showdown.requester_club_id === club.id ? showdown.target_club_id : showdown.requester_club_id
-                      const opponentName = showdownClubsById.get(opponentClubId) ?? 'Opponent club'
-                      const createdLabel = formatDate(showdown.created_at)
-
-                      return (
-                        <div
-                          key={showdown.id}
-                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-800 dark:bg-slate-950"
-                        >
-                          <div>
-                            <p className="font-semibold text-slate-800 dark:text-slate-100">{opponentName}</p>
-                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                              {showdown.status ?? 'PENDING'} • {createdLabel ?? 'Recently'}
-                            </p>
-                          </div>
-                          <Link
-                            href={`/showdown/${showdown.id}`}
-                            className="inline-flex items-center justify-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
-                          >
-                            View
-                          </Link>
-                        </div>
-                      )
-                    })
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+          <HomeTab
+            clubId={club.id}
+            latestMembers={latestMembers}
+            memberCount={memberCount}
+            leaderboardCount={leaderboardCount}
+            riotStateByPuuid={riotStateByPuuid}
+            profilesByUserId={profilesByUserId}
+            showdowns={showdowns}
+            showdownClubsById={showdownClubsById}
+          />
         )}
 
         {activeTab === 'members' && (
-          <section className="mt-8 space-y-4">
-            {canManage && (
-              <form action={addMember} className="rounded-2xl border-2 border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                  <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">Add a Riot ID</h2>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                    Owner-managed roster
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  Riot SSO approvals will come later. For now, add members manually by Riot ID.
-                </p>
-                <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
-                  <input
-                    name="riot_id"
-                    placeholder="gameName#tagLine"
-                    required
-                    autoFocus={activeTab === 'members'}
-                    className="rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-slate-900 placeholder:text-slate-400 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 transition-all duration-200 shadow-sm dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-                  />
-                  <button
-                    type="submit"
-                    className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-all duration-200 hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                  >
-                    Add member
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {members.length === 0 ? (
-              <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-16 text-center dark:border-slate-700 dark:bg-slate-900">
-                <p className="text-base font-bold text-slate-600 dark:text-slate-200">No members yet</p>
-                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Add Riot IDs to build the roster.</p>
-              </div>
-            ) : (
-              members.map((member, idx) => {
-                const riotId = member.game_name && member.tag_line ? `${member.game_name}#${member.tag_line}` : null
-                const profileIconId = member.player_puuid ? riotStateByPuuid.get(member.player_puuid) ?? null : null
-                const iconUrl = profileIconId
-                  ? `https://ddragon.leagueoflegends.com/cdn/${process.env.NEXT_PUBLIC_DDRAGON_VERSION || '15.24.1'}/img/profileicon/${profileIconId}.png`
-                  : null
-                const joinedLabel = formatDate(member.joined_at)
-                const profileName = member.user_id ? profilesByUserId.get(member.user_id) : null
-                const displayName = riotId ?? profileName ?? (member.user_id ? 'Owner' : 'Member')
-                const isOwnerMember = member.role?.toUpperCase() === 'OWNER'
-
-                return (
-                  <div
-                    key={member.id}
-                    className="flex flex-col gap-3 rounded-2xl border-2 border-slate-200 bg-white p-5 shadow-sm transition dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0 flex items-center gap-3">
-                      {iconUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={iconUrl}
-                          alt=""
-                          className="h-10 w-10 rounded-xl border border-slate-200 bg-slate-100 object-cover dark:border-slate-700 dark:bg-slate-800"
-                        />
-                      ) : (
-                        <div className="h-10 w-10 rounded-xl border border-dashed border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800" />
-                      )}
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-semibold text-slate-500 dark:text-slate-400">#{idx + 1}</span>
-                          <h3 className="truncate text-base font-bold text-slate-900 dark:text-slate-100">{displayName}</h3>
-                          <MemberBadge role={member.role} />
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                          {riotId && <span>Riot ID</span>}
-                          {joinedLabel && <span>Joined {joinedLabel}</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    {canManage && !isOwnerMember && (
-                      <form action={removeMember}>
-                        <input type="hidden" name="member_id" value={member.id} />
-                        <button
-                          type="submit"
-                          className="inline-flex items-center justify-center rounded-xl border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-600 transition hover:border-rose-300 hover:text-rose-700 dark:border-rose-500/40 dark:text-rose-300 dark:hover:border-rose-400"
-                        >
-                          Remove
-                        </button>
-                      </form>
-                    )}
-                  </div>
-                )
-              })
-            )}
-          </section>
+          <MembersTab
+            slug={slug}
+            canManage={canManage}
+            members={members}
+            riotStateByPuuid={riotStateByPuuid}
+            profilesByUserId={profilesByUserId}
+            addMemberAction={addMember}
+            removeMemberAction={removeMember}
+          />
         )}
 
         {activeTab === 'leaderboards' && (
-          <section className="mt-8 space-y-6">
-            <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Attached leaderboards</h2>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                    Attach competitions from the owner account to represent the club.
-                  </p>
-                </div>
-                {canManage && (
-                  <form action={attachLeaderboard} className="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl">
-                    <select
-                      name="leaderboard_id"
-                      className="w-full rounded-xl border-2 border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-800 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                      defaultValue=""
-                    >
-                      <option value="" disabled>
-                        {attachableLeaderboards.length > 0 ? 'Select one of your leaderboards…' : 'No available leaderboards'}
-                      </option>
-                      {attachableLeaderboards.map((lb) => (
-                        <option key={lb.id} value={lb.id}>
-                          {lb.name}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="submit"
-                      className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
-                      disabled={attachableLeaderboards.length === 0}
-                    >
-                      Attach
-                    </button>
-                  </form>
-                )}
-              </div>
-              {!canManage && (
-                <p className="mt-4 rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-300">
-                  The club owner decides which leaderboards are attached here.
-                </p>
-              )}
-            </div>
-
-            <div className="space-y-3">
-              {attachedLeaderboards.length === 0 ? (
-                <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-16 text-center dark:border-slate-700 dark:bg-slate-900">
-                  <p className="text-base font-bold text-slate-600 dark:text-slate-200">No leaderboards attached</p>
-                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Attach one to showcase the club’s progress.</p>
-                </div>
-              ) : (
-                attachedLeaderboards.map((item) => {
-                  const lb = item.leaderboard
-                  const updatedAt = formatDate(lb?.updated_at)
-                  const addedAt = formatDate(item.addedAt)
-
-                  return (
-                    <div
-                      key={item.linkId}
-                      className="group overflow-hidden rounded-2xl border-2 border-slate-200 bg-white shadow-sm transition hover:border-slate-300 hover:shadow-lg dark:border-slate-800 dark:bg-slate-900 dark:hover:border-slate-700"
-                    >
-                      {lb?.banner_url && (
-                        <div className="h-28 w-full overflow-hidden bg-slate-100 dark:bg-slate-800">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={lb.banner_url} alt="" className="h-full w-full object-cover" />
-                        </div>
-                      )}
-                      <div className="flex flex-col gap-4 p-5 lg:flex-row lg:items-start lg:justify-between">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-lg font-bold text-slate-900 dark:text-slate-100">{lb?.name ?? 'Unknown leaderboard'}</h3>
-                            {lb?.visibility && (
-                              <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-800 dark:text-slate-300">
-                                {lb.visibility}
-                              </span>
-                            )}
-                          </div>
-                          {lb?.description && (
-                            <p className="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{lb.description}</p>
-                          )}
-                          <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                            {updatedAt && <span>Updated {updatedAt}</span>}
-                            {addedAt && <span>Attached {addedAt}</span>}
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col gap-2">
-                          {lb?.slug && (
-                            <Link
-                              href={`/leaderboards/${lb.leaderboard_code}`}
-                              className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-                            >
-                              Open leaderboard
-                            </Link>
-                          )}
-                          {canManage && (
-                            <form action={detachLeaderboard}>
-                              <input type="hidden" name="link_id" value={item.linkId} />
-                              <button
-                                type="submit"
-                                className="inline-flex w-full items-center justify-center rounded-xl border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-600 transition hover:border-rose-300 hover:text-rose-700 dark:border-rose-500/40 dark:text-rose-300 dark:hover:border-rose-400"
-                              >
-                                Remove
-                              </button>
-                            </form>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </section>
+          <LeaderboardsTab
+            slug={slug}
+            canManage={canManage}
+            attachableLeaderboards={attachableLeaderboards}
+            attachedLeaderboards={attachedLeaderboards}
+            attachLeaderboardAction={attachLeaderboard}
+            detachLeaderboardAction={detachLeaderboard}
+          />
         )}
 
         {activeTab === 'highlights' && (
-          <section className="mt-8 space-y-6">
-            <div className="rounded-2xl border-2 border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Club highlights</h2>
-                  <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">Post a video link (30s max) to share your best moments.</p>
-                </div>
-                {!user && (
-                  <Link
-                    href="/sign-in"
-                    className="inline-flex items-center justify-center rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
-                  >
-                    Sign in to post
-                  </Link>
-                )}
-              </div>
-              {user && (
-                <div className="mt-4">
-                  <HighlightsSubmitClient action={addHighlight} canPost={canPostHighlight} />
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              {highlights.length === 0 ? (
-                <div className="rounded-2xl border-2 border-dashed border-slate-200 bg-white py-16 text-center dark:border-slate-700 dark:bg-slate-900">
-                  <p className="text-base font-bold text-slate-600 dark:text-slate-200">No highlights yet</p>
-                  <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Be the first to post a clip.</p>
-                </div>
-              ) : (
-                highlights.map((highlight) => {
-                  const createdLabel = formatDate(highlight.created_at)
-                  const username = highlight.user_id ? profilesByUserId.get(highlight.user_id) : null
-
-                  return (
-                    <div
-                      key={highlight.id}
-                      className="overflow-hidden rounded-2xl border-2 border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900"
-                    >
-                      <div className="p-5">
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                          <span className="font-semibold text-slate-800 dark:text-slate-100">{username ?? 'Member'}</span>
-                          {createdLabel && <span>Posted {createdLabel}</span>}
-                          {highlight.duration_seconds && <span>{highlight.duration_seconds}s</span>}
-                        </div>
-                      </div>
-                      <div className="border-t border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/60">
-                        <video controls preload="metadata" className="w-full rounded-xl bg-black">
-                          <source src={highlight.url} />
-                        </video>
-                        <div className="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                          <a href={highlight.url} target="_blank" rel="noreferrer" className="font-semibold text-blue-600 hover:text-blue-500 dark:text-blue-300 dark:hover:text-blue-200">
-                            Open video link
-                          </a>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </section>
+          <HighlightsTab
+            slug={slug}
+            userId={user?.id ?? null}
+            canPostHighlight={canPostHighlight}
+            highlights={highlights}
+            members={members}
+            profilesByUserId={profilesByUserId}
+            riotStateByPuuid={riotStateByPuuid}
+            addHighlightAction={addHighlight}
+            deleteHighlightAction={deleteHighlight}
+          />
         )}
       </div>
     </main>

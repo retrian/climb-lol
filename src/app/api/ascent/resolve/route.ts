@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 
 const WATCH_HOST = 'app.tryascent.gg'
 const WATCH_PATH = '/watch'
-const VIDEO_BASE = 'https://ascent-video-streaming-worker.cliffsiderecover.workers.dev/video'
+const CLIPS_PREFIX = '/clips/'
+const GO_BASE = 'https://api.ascent.cliffside.gg/go'
 
 type ResolvePayload = {
   url?: string
@@ -11,9 +12,19 @@ type ResolvePayload = {
 function getVideoId(input: string): string | null {
   try {
     const parsed = new URL(input)
-    if (parsed.host !== WATCH_HOST || parsed.pathname !== WATCH_PATH) return null
-    const id = parsed.searchParams.get('v')
-    return id && id.trim().length > 0 ? id.trim() : null
+    if (parsed.host !== WATCH_HOST) return null
+
+    if (parsed.pathname === WATCH_PATH) {
+      const id = parsed.searchParams.get('v')
+      return id && id.trim().length > 0 ? id.trim() : null
+    }
+
+    if (parsed.pathname.startsWith(CLIPS_PREFIX)) {
+      const clipId = parsed.pathname.slice(CLIPS_PREFIX.length).split('/')[0]?.trim()
+      return clipId && clipId.length > 0 ? clipId : null
+    }
+
+    return null
   } catch {
     return null
   }
@@ -28,7 +39,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Invalid Ascent link.' }, { status: 400 })
     }
 
-    const response = await fetch(`${VIDEO_BASE}?id=${encodeURIComponent(videoId)}`, {
+    const response = await fetch(`${GO_BASE}/${encodeURIComponent(videoId)}/video`, {
       method: 'GET',
       redirect: 'follow',
       headers: {

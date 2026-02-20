@@ -242,41 +242,35 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <body className="flex min-h-screen flex-col bg-background text-foreground">
         {/* Modern navbar with better spacing and hierarchy */}
         <header className="sticky top-0 z-40 border-b border-gray-200/80 bg-white/80 backdrop-blur-md supports-[backdrop-filter]:bg-white/70 dark:border-slate-800/80 dark:bg-slate-950/80 supports-[backdrop-filter]:dark:bg-slate-950/70">
-          <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-3">
+          <nav className="mx-auto grid w-full max-w-6xl grid-cols-[1fr_auto_1fr] items-center px-4 py-3">
             {/* Logo */}
-            <Link 
+            <Link
               href="/" 
-              className="text-xl font-black tracking-tighter text-gray-900 transition-colors hover:text-gray-700 dark:text-slate-100 dark:hover:text-slate-300"
+              className="justify-self-start text-xl font-black tracking-tighter text-gray-900 transition-colors hover:text-gray-700 dark:text-slate-100 dark:hover:text-slate-300"
             >
               CWF.LOL
             </Link>
 
             {/* Desktop Navigation Links */}
-            <div className="hidden items-center gap-1 md:flex">
+            <div className="hidden items-center gap-1 justify-self-center md:flex">
               <Link
                 className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                 href="/"
               >
                 Home
               </Link>
-              <Link
-                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                href="/showdown"
+              <span
+                aria-disabled="true"
+                className="cursor-not-allowed rounded-lg px-3 py-2 text-sm font-medium text-gray-400 dark:text-slate-500"
               >
                 Showdown
-              </Link>
-              <Link
-                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                href="/tournaments"
+              </span>
+              <span
+                aria-disabled="true"
+                className="cursor-not-allowed rounded-lg px-3 py-2 text-sm font-medium text-gray-400 dark:text-slate-500"
               >
                 Tournaments
-              </Link>
-              <Link
-                className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                href="/challenges"
-              >
-                Challenges
-              </Link>
+              </span>
               <Link
                 className="rounded-lg px-3 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                 href="/clubs"
@@ -292,7 +286,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             </div>
 
             {/* Right side actions */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center justify-self-end gap-2">
               <ThemeToggle />
               <MailboxPopoverClient
                 invites={mailboxInvites}
@@ -314,24 +308,18 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               >
                 Home
               </Link>
-              <Link
-                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                href="/showdown"
+              <span
+                aria-disabled="true"
+                className="cursor-not-allowed rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-400 dark:text-slate-500"
               >
                 Showdown
-              </Link>
-              <Link
-                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                href="/tournaments"
+              </span>
+              <span
+                aria-disabled="true"
+                className="cursor-not-allowed rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-400 dark:text-slate-500"
               >
                 Tournaments
-              </Link>
-              <Link
-                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
-                href="/challenges"
-              >
-                Challenges
-              </Link>
+              </span>
               <Link
                 className="rounded-md px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-all hover:bg-gray-100 hover:text-gray-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                 href="/clubs"

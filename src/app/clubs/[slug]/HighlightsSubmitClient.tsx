@@ -5,9 +5,10 @@ import { useCallback, useState, useTransition } from 'react'
 type Props = {
   action: (formData: FormData) => void
   canPost: boolean
+  slug: string
 }
 
-export default function HighlightsSubmitClient({ action, canPost }: Props) {
+export default function HighlightsSubmitClient({ action, canPost, slug }: Props) {
   const [duration, setDuration] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
@@ -75,44 +76,55 @@ export default function HighlightsSubmitClient({ action, canPost }: Props) {
         }
         startTransition(() => action(formData))
       }}
-      className="grid gap-3"
+      className="border-y border-slate-200/80 px-3 py-3 dark:border-slate-800/90 sm:px-4"
     >
-      <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
-        <input
-          name="video_url"
-          placeholder="Paste a direct video URL"
-          required
-          disabled={!canPost || isPending || isResolving}
-          className="rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-400/10 disabled:cursor-not-allowed disabled:opacity-70 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500"
-          onChange={(event) => {
-            setError(null)
-            setDuration(null)
-            setResolvedUrl(null)
-            const value = event.target.value.trim()
-            if (!value) return
+      <input type="hidden" name="slug" value={slug} />
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-full bg-slate-200 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+          CL
+        </div>
+        <div className="min-w-0 flex-1">
+          <input
+            name="video_url"
+            placeholder="What’s happening?"
+            required
+            disabled={!canPost || isPending || isResolving}
+            className="w-full bg-transparent py-1 text-xl text-slate-900 placeholder:text-slate-500 outline-none disabled:cursor-not-allowed disabled:opacity-70 dark:text-slate-100 dark:placeholder:text-slate-500"
+            onChange={(event) => {
+              setError(null)
+              setDuration(null)
+              setResolvedUrl(null)
+              const value = event.target.value.trim()
+              if (!value) return
 
-            if (value.includes('app.tryascent.gg/watch')) {
-              void resolveShortLink(value)
-              return
-            }
+              if (value.includes('app.tryascent.gg/watch') || value.includes('app.tryascent.gg/clips/')) {
+                void resolveShortLink(value)
+                return
+              }
 
-            loadDuration(value)
-          }}
-        />
-        <input type="hidden" name="resolved_url" value={resolvedUrl ?? ''} />
+              loadDuration(value)
+            }}
+          />
+        </div>
+      </div>
+
+      <input type="hidden" name="resolved_url" value={resolvedUrl ?? ''} />
+
+      <div className="mt-2 flex items-center justify-between gap-3 pl-[52px]">
+        <div className="min-w-0 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
+          <span>Max 30s</span>
+          <span>{duration ? `Length: ${duration}s` : 'Length: —'}</span>
+          {resolvedUrl && <span>Resolved link ready.</span>}
+          {!canPost && <span>Only club members can post highlights.</span>}
+          {error && <span className="font-semibold text-rose-600 dark:text-rose-300">{error}</span>}
+        </div>
         <button
           type="submit"
           disabled={!canPost || isPending || isResolving}
-          className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+          className="inline-flex shrink-0 items-center justify-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
         >
-          {isResolving ? 'Resolving…' : isPending ? 'Posting…' : 'Post highlight'}
+          {isResolving ? 'Resolving…' : isPending ? 'Posting…' : 'Post'}
         </button>
-      </div>
-      <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-        <span>{duration ? `Length: ${duration}s` : 'Length: —'}</span>
-        {resolvedUrl && <span>Resolved link ready.</span>}
-        {!canPost && <span>Only club members can post highlights.</span>}
-        {error && <span className="font-semibold text-rose-600 dark:text-rose-300">{error}</span>}
       </div>
     </form>
   )

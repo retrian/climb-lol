@@ -69,6 +69,13 @@ export function AuthButtons({ signedIn, username }: { signedIn: boolean; usernam
           role="menu"
           className="absolute right-0 z-50 mt-2 min-w-full overflow-hidden rounded-none border border-gray-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-950"
         >
+          <span
+            role="menuitem"
+            aria-disabled="true"
+            className="flex w-full cursor-not-allowed items-center px-4 py-2 text-left text-sm font-medium text-gray-400 dark:text-slate-500"
+          >
+            Challenges
+          </span>
           <button
             role="menuitem"
             onClick={() => {

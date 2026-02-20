@@ -68,7 +68,7 @@ export function MailboxPopoverClient({
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-700 shadow-sm transition hover:border-gray-300 hover:text-gray-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-500"
+        className="relative inline-flex h-[38px] w-[38px] items-center justify-center rounded-none text-gray-700 transition hover:bg-slate-100 hover:text-gray-900 dark:text-slate-200 dark:hover:bg-slate-800"
         aria-label="Open mailbox"
       >
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.6">
