@@ -470,7 +470,7 @@ export default async function LeaderboardDetail({
   }
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <main className="lb-less-rounded min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto w-full px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
         <div className="mx-auto w-full max-w-[1460px]">
           <TeamHeaderCard
