@@ -249,13 +249,29 @@ function colorForTickLabel(label: string) {
 }
 
 function computeDisplayedLpDelta(cur: NormalizedPoint, prev: NormalizedPoint) {
+  const ladderDelta = cur.ladderValue - prev.ladderValue
+  const tierChanged = (cur.tier ?? "").toUpperCase() !== (prev.tier ?? "").toUpperCase()
+  const divisionChanged = (cur.rank ?? "").toUpperCase() !== (prev.rank ?? "").toUpperCase()
+  const note = (cur.lp_note ?? "").toUpperCase()
+  const hasBoundaryNote = note === "PROMOTED" || note === "DEMOTED"
+
+  // Always trust ladder math when crossing boundaries, because event lp_delta can be
+  // stored on a different scale around promotions/demotions.
+  if (Number.isFinite(ladderDelta) && (tierChanged || divisionChanged || hasBoundaryNote)) {
+    return ladderDelta
+  }
+
   if (typeof cur.lpDelta === "number" && Number.isFinite(cur.lpDelta)) {
+    // Guard against inconsistent event deltas; if it disagrees heavily with ladder movement,
+    // prefer ladder movement for display.
+    if (Number.isFinite(ladderDelta) && Math.abs(cur.lpDelta - ladderDelta) >= 20) {
+      return ladderDelta
+    }
     return cur.lpDelta
   }
 
-  // Use full ladder value delta so division and tier transitions are always correct
+  // Use full ladder value delta so division/tier transitions are always correct
   // (e.g. D3 84 -> D2 4 = +20, not -80).
-  const ladderDelta = cur.ladderValue - prev.ladderValue
   if (Number.isFinite(ladderDelta)) return ladderDelta
   return cur.lpValue - prev.lpValue
 }
@@ -549,8 +565,10 @@ export default function LeaderboardGraphClient({
       .filter((p): p is (LpPoint & { ts: number; hasExplicitPreRank: boolean }) => p !== null)
       .sort((a, b) => a.ts - b.ts)
 
-    // Step 1: resolve each point to a best-effort PRE-match rank snapshot.
-    // We fill missing snapshots from nearby points to avoid jumping to current rank.
+    // Resolve each point to a best-effort rank snapshot for display.
+    // Data from both recent events and full history is effectively post-match state,
+    // so we should not shift to the next game's rank (that can create +100 LP spikes
+    // around promotion boundaries in show-all mode).
     const prevKnown: Array<{ tier: string | null; rank: string | null } | null> = []
     let lastKnown: { tier: string | null; rank: string | null } | null = null
     for (let i = 0; i < parsed.length; i += 1) {
@@ -567,43 +585,21 @@ export default function LeaderboardGraphClient({
       nextKnown[i] = upcomingKnown
     }
 
-    const preMatchResolved = parsed.map((p, idx) => {
+    return parsed.map((p, idx) => {
       const prev = prevKnown[idx]
       const next = nextKnown[idx]
       const inferredTier = p.tier ?? prev?.tier ?? next?.tier ?? selectedPlayerRankFallback.tier
       const inferredRank = p.rank ?? prev?.rank ?? next?.rank ?? (p.tier ? p.rank : selectedPlayerRankFallback.rank)
+      const resolved = resolvePostMatchRank(inferredTier, inferredRank, p.lp_note)
 
       return {
         ...p,
-        preTier: inferredTier,
-        preRank: inferredRank,
+        tier: resolved.tier,
+        rank: resolved.rank,
         lpValue: Math.max(0, p.lp ?? 0),
         lpDelta: typeof p.lp_delta === "number" && Number.isFinite(p.lp_delta) ? p.lp_delta : null,
         totalGames: (p.wins ?? 0) + (p.losses ?? 0),
-      }
-    })
-
-    // Step 2: convert PRE-match snapshot to POST-match display rank.
-    // Prefer next game's PRE rank when games are consecutive (most reliable source).
-    // Fall back to lp_note transition logic when next PRE rank is unavailable.
-    return preMatchResolved.map((p, idx) => {
-      const next = preMatchResolved[idx + 1]
-      const hasConsecutiveNext =
-        Boolean(next) &&
-        next.totalGames === p.totalGames + 1 &&
-        next.hasExplicitPreRank
-
-      const resolved = hasConsecutiveNext
-        ? { tier: next!.preTier, rank: next!.preRank }
-        : resolvePostMatchRank(p.preTier, p.preRank, p.lp_note)
-
-      const tier = resolved.tier
-      const rank = resolved.rank
-      return {
-        ...p,
-        tier,
-        rank,
-        ladderValue: ladderLpWithCutoffs({ tier, rank, lp: p.lp }),
+        ladderValue: ladderLpWithCutoffs({ tier: resolved.tier, rank: resolved.rank, lp: p.lp }),
       }
     })
   }, [fullPoints, recentPoints, selectedPlayerRankFallback.rank, selectedPlayerRankFallback.tier, showAll])
@@ -686,12 +682,6 @@ export default function LeaderboardGraphClient({
       lowY: Math.max(gmY, challY),
     }
   }, [chart, cutoffs])
-
-  const gmOffset = useMemo(() => {
-    if (!cutoffPositions) return 0.5
-    const pct = (cutoffPositions.gmY - PADDING.top) / INNER_HEIGHT
-    return clamp(pct, 0, 1)
-  }, [cutoffPositions])
 
   const ladderTicks = useMemo(() => {
     if (!chart) return []
@@ -838,10 +828,8 @@ export default function LeaderboardGraphClient({
       const last = plotPoints[plotPoints.length - 1]
 
       const fillGradient = ctx.createLinearGradient(0, PADDING.top, 0, baseY)
-      fillGradient.addColorStop(0, "rgba(167, 139, 250, 0.28)")
-      fillGradient.addColorStop(gmOffset, "rgba(167, 139, 250, 0.22)")
-      fillGradient.addColorStop(gmOffset, "rgba(56, 189, 248, 0.16)")
-      fillGradient.addColorStop(1, "rgba(14, 165, 233, 0.14)")
+      fillGradient.addColorStop(0, "rgba(255, 255, 255, 0.14)")
+      fillGradient.addColorStop(1, "rgba(255, 255, 255, 0.06)")
 
       ctx.beginPath()
       ctx.moveTo(first.x, first.y)
@@ -872,7 +860,7 @@ export default function LeaderboardGraphClient({
 
     const raf = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(raf)
-  }, [chart, colorForLinePoint, gmOffset, plotPoints, useDenseMode])
+  }, [chart, colorForLinePoint, plotPoints, useDenseMode])
 
   const handleChartHover = (e: React.MouseEvent<SVGSVGElement>) => {
     if (plotPoints.length === 0) return
@@ -1164,10 +1152,8 @@ export default function LeaderboardGraphClient({
                   </clipPath>
                 ) : null}
                 <linearGradient id={`plot-fill-${clipId}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#a78bfa" stopOpacity={0.28} />
-                  <stop offset={`${gmOffset * 100}%`} stopColor="#a78bfa" stopOpacity={0.22} />
-                  <stop offset={`${gmOffset * 100}%`} stopColor="#38bdf8" stopOpacity={0.16} />
-                  <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.14} />
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity={0.14} />
+                  <stop offset="100%" stopColor="#ffffff" stopOpacity={0.06} />
                 </linearGradient>
               </defs>
               <g clipPath={`url(#plot-clip-${clipId})`}>
