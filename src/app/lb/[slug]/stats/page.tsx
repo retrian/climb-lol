@@ -143,6 +143,7 @@ function TeamHeaderCard({
   activeTab,
   cutoffs,
   bannerUrl,
+  lastUpdated = null,
 }: {
   name: string
   description?: string | null
@@ -151,13 +152,23 @@ function TeamHeaderCard({
   activeTab: 'overview' | 'graph' | 'stats'
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
+  lastUpdated?: string | null
 }) {
+  const formattedLastUpdated = lastUpdated
+    ? new Date(lastUpdated).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : null
+
   return (
     <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200 shadow-lg dark:border-slate-800 dark:bg-slate-900">
       {bannerUrl ? (
         <div className="absolute inset-0">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
+          <img src={bannerUrl} alt="" width={1920} height={480} fetchPriority="high" loading="eager" className="h-full w-full object-cover" />
           <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-white/45 to-white/25 dark:from-slate-950/80 dark:via-slate-950/55 dark:to-slate-900/35" />
           <div className="absolute inset-0 bg-gradient-to-t from-white/75 via-white/25 to-transparent dark:from-slate-950/80 dark:via-slate-950/40 dark:to-transparent" />
         </div>
@@ -175,6 +186,11 @@ function TeamHeaderCard({
           </div>
           <h1 className="text-4xl lg:text-5xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-slate-900 via-slate-800 to-slate-600 mb-4 pb-2 pt-2 dark:from-white dark:via-slate-200 dark:to-slate-400">{name}</h1>
           {description && <p className="text-base lg:text-lg text-slate-600 leading-relaxed max-w-2xl font-medium dark:text-slate-300">{description}</p>}
+          {formattedLastUpdated ? (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Updated {formattedLastUpdated}
+            </p>
+          ) : null}
         </div>
 
         {cutoffs.length > 0 && (
@@ -207,7 +223,7 @@ export default async function LeaderboardStatsPage({
     getLatestDdragonVersion(),
     supabase
       .from('leaderboards')
-      .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description')
+      .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description, updated_at')
       .eq('slug', slug)
       .maybeSingle(),
   ])
@@ -263,7 +279,7 @@ export default async function LeaderboardStatsPage({
 
   if (puuids.length === 0) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+      <main className="lb-less-rounded min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
         <div className="mx-auto w-full max-w-[1460px] px-6 py-10 space-y-8">
           <TeamHeaderCard
             name={lb.name}
@@ -271,7 +287,7 @@ export default async function LeaderboardStatsPage({
             leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="stats"
-            cutoffs={cutoffsDisplay}
+            cutoffs={[]}
             bannerUrl={lb.banner_url}
           />
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
@@ -777,7 +793,7 @@ export default async function LeaderboardStatsPage({
 
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
+    <main className="lb-less-rounded min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900">
       <div className="mx-auto w-full max-w-none px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
         <div className="mx-auto w-full max-w-[1460px]">
           <TeamHeaderCard
@@ -786,7 +802,7 @@ export default async function LeaderboardStatsPage({
             leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="stats"
-            cutoffs={cutoffsDisplay}
+            cutoffs={[]}
             bannerUrl={lb.banner_url}
           />
         </div>

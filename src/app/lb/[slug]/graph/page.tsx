@@ -67,6 +67,7 @@ function TeamHeaderCard({
   activeTab,
   cutoffs,
   bannerUrl,
+  lastUpdated = null,
 }: {
   name: string
   description?: string | null
@@ -75,13 +76,23 @@ function TeamHeaderCard({
   activeTab: 'overview' | 'graph' | 'stats'
   cutoffs: Array<{ label: string; lp: number; icon: string }>
   bannerUrl: string | null
+  lastUpdated?: string | null
 }) {
+  const formattedLastUpdated = lastUpdated
+    ? new Date(lastUpdated).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : null
+
   return (
     <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-lg dark:border-slate-800 dark:bg-slate-900">
         {bannerUrl ? (
           <div className="absolute inset-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={bannerUrl} alt="" className="h-full w-full object-cover" />
+            <img src={bannerUrl} alt="" width={1920} height={480} fetchPriority="high" loading="eager" className="h-full w-full object-cover" />
             <div className="absolute inset-0 bg-gradient-to-br from-white/70 via-white/45 to-white/25 dark:from-slate-950/80 dark:via-slate-950/55 dark:to-slate-900/35" />
             <div className="absolute inset-0 bg-gradient-to-t from-white/75 via-white/25 to-transparent dark:from-slate-950/80 dark:via-slate-950/40 dark:to-transparent" />
           </div>
@@ -106,6 +117,11 @@ function TeamHeaderCard({
               {description}
             </p>
           )}
+          {formattedLastUpdated ? (
+            <p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+              Updated {formattedLastUpdated}
+            </p>
+          ) : null}
         </div>
 
 
@@ -155,7 +171,7 @@ export default async function LeaderboardGraphPage({
 
   const { data: lb } = await supabase
     .from('leaderboards')
-    .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description')
+    .select('id, user_id, name, slug, leaderboard_code, visibility, banner_url, description, updated_at')
     .eq('slug', slug)
     .maybeSingle()
 
@@ -236,7 +252,7 @@ export default async function LeaderboardGraphPage({
 
   if (puuids.length === 0) {
     return (
-      <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 text-slate-900 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 dark:text-slate-100">
+      <main className="lb-less-rounded min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 text-slate-900 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 dark:text-slate-100">
         <div className="mx-auto w-full max-w-[1460px] px-6 py-12 space-y-6">
           <TeamHeaderCard
             name={lb.name}
@@ -244,7 +260,7 @@ export default async function LeaderboardGraphPage({
             leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="graph"
-            cutoffs={cutoffsDisplay}
+            cutoffs={[]}
             bannerUrl={lb.banner_url}
           />
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-center text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
@@ -327,7 +343,7 @@ export default async function LeaderboardGraphPage({
 
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 text-slate-900 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 dark:text-slate-100">
+    <main className="lb-less-rounded min-h-screen bg-gradient-to-br from-slate-50 via-white to-slate-50 text-slate-900 dark:from-slate-950 dark:via-slate-950 dark:to-slate-900 dark:text-slate-100">
       <div className="mx-auto w-full max-w-none px-6 py-8 lg:px-10 lg:py-12 space-y-10 lg:space-y-12">
         <div className="mx-auto w-full max-w-[1460px]">
           <TeamHeaderCard
@@ -336,7 +352,7 @@ export default async function LeaderboardGraphPage({
             leaderboardCode={lb.leaderboard_code}
             visibility={lb.visibility}
             activeTab="graph"
-            cutoffs={cutoffsDisplay}
+            cutoffs={[]}
             bannerUrl={lb.banner_url}
           />
         </div>

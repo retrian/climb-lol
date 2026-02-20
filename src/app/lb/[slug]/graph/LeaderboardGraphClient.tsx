@@ -1029,9 +1029,9 @@ export default function LeaderboardGraphClient({
     <div className="rounded-2xl border border-slate-200 bg-white shadow-lg overflow-hidden dark:border-slate-800/80 dark:bg-slate-900/80 dark:shadow-[0_30px_80px_-40px_rgba(0,0,0,0.75)]">
       <div className="grid grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)]">
         <aside className="p-4 lg:border-r border-slate-200 dark:border-slate-800/80">
-          <div className="mb-4 flex items-center gap-2">
-            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-blue-400 via-blue-500 to-blue-600" />
-            <h2 className="text-xs font-black uppercase tracking-widest text-slate-500 dark:text-slate-400">Leaderboard</h2>
+          <div className="mb-4">
+            <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Leaderboard</h2>
+            <div className="mt-2 h-px w-full bg-slate-200 dark:bg-slate-800" />
           </div>
           <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70">
             {players.map((player, idx) => {
