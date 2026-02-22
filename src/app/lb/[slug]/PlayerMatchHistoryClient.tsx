@@ -1576,7 +1576,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                 {activeTab === 'matches' && (
                   <div
                     data-match-list
-                    className="flex h-[calc(90vh-240px)] flex-col gap-1 overflow-y-auto px-6 py-5 overscroll-contain md:gap-2"
+                    className="leaderboard-scroll flex h-[calc(90vh-240px)] flex-col gap-1 overflow-y-auto px-6 py-5 overscroll-contain md:gap-2"
                     style={{ contentVisibility: 'auto', containIntrinsicSize: '1200px' }}
                   >
                     {(loadingMatches || !imagesReady) ? (
@@ -1642,7 +1642,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                   </div>
                 )}
                 {activeTab === 'stats' && (
-                  <div className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-6 space-y-6">
+                  <div className="leaderboard-scroll h-[calc(90vh-240px)] overflow-y-auto px-6 py-6 space-y-6">
                     {loadingMatches ? (
                       <StatGridSkeleton />
                     ) : !statsSnapshot ? (
@@ -1760,7 +1760,7 @@ export default function PlayerMatchHistoryClient({ playerCards, champMap, ddVers
                   </div>
                 )}
                 {activeTab === 'champions' && (
-                  <div className="h-[calc(90vh-240px)] overflow-y-auto px-6 py-6">
+                  <div className="leaderboard-scroll h-[calc(90vh-240px)] overflow-y-auto px-6 py-6">
                     {loadingMatches ? (
                       <StatGridSkeleton />
                     ) : !championSnapshot.length ? (
