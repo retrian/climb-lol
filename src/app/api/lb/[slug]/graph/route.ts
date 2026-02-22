@@ -316,15 +316,26 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     let points: LpHistoryRow[] = []
 
     if (limit !== null) {
-      // Keep 30-game mode consistent with show-all by using the same history source first.
-      points = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit, seasonStartIso)
+      // Recent mode should represent actual played games.
+      // Prefer per-game LP events first (season scoped), then all-time events.
+      points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit, seasonStartIso)
 
-      if (points.length === 0) {
-        points = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit)
+      if (points.length < limit) {
+        const allTimeEvents = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit)
+        if (allTimeEvents.length > points.length) {
+          points = allTimeEvents
+        }
       }
 
+      // Fallback for players missing event rows.
       if (points.length === 0) {
-        points = await fetchRecentLpEventsForPlayer(dataClient, puuid, limit)
+        points = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit, seasonStartIso)
+      }
+      if (points.length < limit) {
+        const allTimeHistory = await fetchRecentLpHistoryForPlayer(dataClient, puuid, limit)
+        if (allTimeHistory.length > points.length) {
+          points = allTimeHistory
+        }
       }
     } else {
       const seasonRows = await fetchLpHistoryForPlayer(dataClient, puuid, seasonStartIso)

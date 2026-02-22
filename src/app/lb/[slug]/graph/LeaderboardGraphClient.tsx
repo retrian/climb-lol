@@ -60,6 +60,7 @@ const RECENT_HISTORY_LIMIT = 30
 const DENSE_MODE_THRESHOLD = 50
 const RECENT_QUERY_VERSION = "recent_v2"
 const REALTIME_REFRESH_MS = 5000
+const OVERLAY_COLORS = ["#a78bfa", "#22d3ee", "#34d399", "#f59e0b", "#f472b6", "#60a5fa", "#f87171"] as const
 
 const TIER_ORDER = [
   "IRON",
@@ -201,6 +202,93 @@ function resolvePostMatchRank(
   if (note === "PROMOTED") return stepDivision(preTier, preRank, 1)
   if (note === "DEMOTED") return stepDivision(preTier, preRank, -1)
   return { tier: preTier, rank: preRank }
+}
+
+function normalizeHistoryPoints(
+  sourcePoints: LpPoint[],
+  fallbackRank: { tier: string | null; rank: string | null }
+): NormalizedPoint[] {
+  const parsed = sourcePoints
+    .map((p) => {
+      const ts = new Date(p.fetched_at).getTime()
+      if (Number.isNaN(ts)) return null
+      return { ...p, ts }
+    })
+    .filter((p): p is LpPoint & { ts: number } => p !== null)
+    .sort((a, b) => a.ts - b.ts)
+
+  const prevKnown: Array<{ tier: string | null; rank: string | null } | null> = []
+  let lastKnown: { tier: string | null; rank: string | null } | null = null
+  for (let i = 0; i < parsed.length; i += 1) {
+    const cur = parsed[i]
+    if (cur.tier) lastKnown = { tier: cur.tier, rank: cur.rank ?? null }
+    prevKnown[i] = lastKnown
+  }
+
+  const nextKnown: Array<{ tier: string | null; rank: string | null } | null> = new Array(parsed.length).fill(null)
+  let upcomingKnown: { tier: string | null; rank: string | null } | null = null
+  for (let i = parsed.length - 1; i >= 0; i -= 1) {
+    const cur = parsed[i]
+    if (cur.tier) upcomingKnown = { tier: cur.tier, rank: cur.rank ?? null }
+    nextKnown[i] = upcomingKnown
+  }
+
+  return parsed.map((p, idx) => {
+    const prev = prevKnown[idx]
+    const next = nextKnown[idx]
+    const inferredTier = p.tier ?? prev?.tier ?? next?.tier ?? fallbackRank.tier
+    const inferredRank = p.rank ?? prev?.rank ?? next?.rank ?? (p.tier ? p.rank : fallbackRank.rank)
+    const resolved = resolvePostMatchRank(inferredTier, inferredRank, p.lp_note)
+
+    return {
+      ...p,
+      tier: resolved.tier,
+      rank: resolved.rank,
+      lpValue: Math.max(0, p.lp ?? 0),
+      lpDelta: typeof p.lp_delta === "number" && Number.isFinite(p.lp_delta) ? p.lp_delta : null,
+      totalGames: (p.wins ?? 0) + (p.losses ?? 0),
+      ladderValue: ladderLpWithCutoffs({ tier: resolved.tier, rank: resolved.rank, lp: p.lp }),
+    }
+  })
+}
+
+function compressChangedPoints(points: NormalizedPoint[]) {
+  const sorted = [...points].sort((a, b) => a.ts - b.ts)
+  const processed: NormalizedPoint[] = []
+  let lastPoint: NormalizedPoint | null = null
+
+  for (const pt of sorted) {
+    if (!lastPoint) {
+      processed.push(pt)
+      lastPoint = pt
+      continue
+    }
+
+    const gamesChanged = pt.totalGames > lastPoint.totalGames
+    const ladderChanged = pt.ladderValue !== lastPoint.ladderValue
+    const lpChanged = pt.lp !== lastPoint.lp
+
+    if (gamesChanged || ladderChanged || lpChanged) {
+      processed.push(pt)
+      lastPoint = pt
+    }
+  }
+
+  return processed
+}
+
+function takeRecentPoints(points: NormalizedPoint[]) {
+  const withLp = points.filter((p) => p.lp !== null && p.lp !== undefined)
+  const selected: NormalizedPoint[] = []
+  const seenGames = new Set<number>()
+  for (let i = withLp.length - 1; i >= 0; i -= 1) {
+    const p = withLp[i]
+    if (seenGames.has(p.totalGames)) continue
+    seenGames.add(p.totalGames)
+    selected.push(p)
+    if (seenGames.size >= RECENT_HISTORY_LIMIT) break
+  }
+  return selected.reverse()
 }
 
 // --- Color system (tier hue + division intensity) ---
@@ -420,6 +508,9 @@ export default function LeaderboardGraphClient({
   const [isLoadingHistory, setIsLoadingHistory] = useState(true)
   const [isLoadingFullHistory, setIsLoadingFullHistory] = useState(false)
   const [showAll, setShowAll] = useState(false)
+  const [overlayMode, setOverlayMode] = useState(false)
+  const [overlaySelectedPuuids, setOverlaySelectedPuuids] = useState<string[]>(players[0]?.puuid ? [players[0].puuid] : [])
+  const [overlayRecentByPuuid, setOverlayRecentByPuuid] = useState<Record<string, LpPoint[]>>({})
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
   const [plotButtonStyle, setPlotButtonStyle] = useState<React.CSSProperties | null>(null)
@@ -432,7 +523,12 @@ export default function LeaderboardGraphClient({
   const prefetchCacheRef = useRef<Map<string, LpPoint[]>>(new Map())
   const inflightRef = useRef<Map<string, Promise<LpPoint[]>>>(new Map())
 
-  const effectiveSelectedPuuid = selectedPuuid || players[0]?.puuid || ""
+  const effectiveSelectedPuuid =
+    overlayMode && overlaySelectedPuuids.length > 0
+      ? overlaySelectedPuuids.includes(selectedPuuid)
+        ? selectedPuuid
+        : overlaySelectedPuuids[0]
+      : selectedPuuid || players[0]?.puuid || ""
 
   const fetchPlayerHistory = useCallback(
     async (puuid: string, mode: "recent" | "full", options?: { force?: boolean }): Promise<LpPoint[]> => {
@@ -534,6 +630,20 @@ export default function LeaderboardGraphClient({
 
     let cancelled = false
     const refreshNow = () => {
+      if (overlayMode) {
+        overlaySelectedPuuids.forEach((puuid) => {
+          void fetchPlayerHistory(puuid, "recent", { force: true })
+            .then((points) => {
+              if (cancelled) return
+              setOverlayRecentByPuuid((prev) => ({ ...prev, [puuid]: points }))
+            })
+            .catch(() => {
+              // Keep last successful render on transient polling failures.
+            })
+        })
+        return
+      }
+
       void fetchPlayerHistory(effectiveSelectedPuuid, "full", { force: true })
         .then((points) => {
           if (cancelled) return
@@ -562,7 +672,20 @@ export default function LeaderboardGraphClient({
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisibility)
     }
-  }, [effectiveSelectedPuuid, fetchPlayerHistory])
+  }, [effectiveSelectedPuuid, fetchPlayerHistory, overlayMode, overlaySelectedPuuids])
+
+  useEffect(() => {
+    if (!overlayMode) return
+    overlaySelectedPuuids.forEach((puuid) => {
+      void fetchPlayerHistory(puuid, "recent")
+        .then((points) => {
+          setOverlayRecentByPuuid((prev) => ({ ...prev, [puuid]: points }))
+        })
+        .catch(() => {
+          // noop
+        })
+    })
+  }, [fetchPlayerHistory, overlayMode, overlaySelectedPuuids])
 
   const prefetchPlayerHistory = useCallback(
     (puuid: string) => {
@@ -601,6 +724,33 @@ export default function LeaderboardGraphClient({
     setIsLoadingFullHistory(false)
   }, [])
 
+  const handleToggleOverlayMode = useCallback(() => {
+    setOverlayMode((prev) => {
+      const next = !prev
+      if (next) {
+        setShowAll(false)
+        setOverlaySelectedPuuids((curr) => {
+          const fallback = selectedPuuid || players[0]?.puuid || ""
+          if (!fallback) return curr
+          return curr.length > 0 ? curr : [fallback]
+        })
+      }
+      return next
+    })
+  }, [players, selectedPuuid])
+
+  const handleToggleOverlayPlayer = useCallback((puuid: string) => {
+    setOverlaySelectedPuuids((prev) => {
+      if (prev.includes(puuid)) {
+        if (prev.length === 1) return prev
+        const next = prev.filter((id) => id !== puuid)
+        if (selectedPuuid === puuid) setSelectedPuuid(next[0] ?? puuid)
+        return next
+      }
+      return [...prev, puuid]
+    })
+  }, [selectedPuuid])
+
 
   const playersByPuuid = useMemo(() => new Map(players.map((p) => [p.puuid, p])), [players])
   const selectedPlayerRankFallback = useMemo(() => {
@@ -613,109 +763,50 @@ export default function LeaderboardGraphClient({
 
   const normalizedPoints = useMemo<NormalizedPoint[]>(() => {
     const sourcePoints = showAll && fullPoints ? fullPoints : recentPoints
-    const parsed = sourcePoints
-      .map((p) => {
-        const ts = new Date(p.fetched_at).getTime()
-        if (Number.isNaN(ts)) return null
-        return {
-          ...p,
-          ts,
-          hasExplicitPreRank: Boolean(p.tier && p.rank),
-        }
-      })
-      .filter((p): p is (LpPoint & { ts: number; hasExplicitPreRank: boolean }) => p !== null)
-      .sort((a, b) => a.ts - b.ts)
-
-    // Resolve each point to a best-effort rank snapshot for display.
-    // Data from both recent events and full history is effectively post-match state,
-    // so we should not shift to the next game's rank (that can create +100 LP spikes
-    // around promotion boundaries in show-all mode).
-    const prevKnown: Array<{ tier: string | null; rank: string | null } | null> = []
-    let lastKnown: { tier: string | null; rank: string | null } | null = null
-    for (let i = 0; i < parsed.length; i += 1) {
-      const cur = parsed[i]
-      if (cur.tier) lastKnown = { tier: cur.tier, rank: cur.rank ?? null }
-      prevKnown[i] = lastKnown
-    }
-
-    const nextKnown: Array<{ tier: string | null; rank: string | null } | null> = new Array(parsed.length).fill(null)
-    let upcomingKnown: { tier: string | null; rank: string | null } | null = null
-    for (let i = parsed.length - 1; i >= 0; i -= 1) {
-      const cur = parsed[i]
-      if (cur.tier) upcomingKnown = { tier: cur.tier, rank: cur.rank ?? null }
-      nextKnown[i] = upcomingKnown
-    }
-
-    return parsed.map((p, idx) => {
-      const prev = prevKnown[idx]
-      const next = nextKnown[idx]
-      const inferredTier = p.tier ?? prev?.tier ?? next?.tier ?? selectedPlayerRankFallback.tier
-      const inferredRank = p.rank ?? prev?.rank ?? next?.rank ?? (p.tier ? p.rank : selectedPlayerRankFallback.rank)
-      const resolved = resolvePostMatchRank(inferredTier, inferredRank, p.lp_note)
-
-      return {
-        ...p,
-        tier: resolved.tier,
-        rank: resolved.rank,
-        lpValue: Math.max(0, p.lp ?? 0),
-        lpDelta: typeof p.lp_delta === "number" && Number.isFinite(p.lp_delta) ? p.lp_delta : null,
-        totalGames: (p.wins ?? 0) + (p.losses ?? 0),
-        ladderValue: ladderLpWithCutoffs({ tier: resolved.tier, rank: resolved.rank, lp: p.lp }),
-      }
-    })
+    return normalizeHistoryPoints(sourcePoints, selectedPlayerRankFallback)
   }, [fullPoints, recentPoints, selectedPlayerRankFallback.rank, selectedPlayerRankFallback.tier, showAll])
 
   const rawFiltered = useMemo(() => {
-    const sorted = [...normalizedPoints].sort((a, b) => a.ts - b.ts)
-    const processed: NormalizedPoint[] = []
-    let lastPoint: NormalizedPoint | null = null
-
-    for (const pt of sorted) {
-      if (!lastPoint) {
-        processed.push(pt)
-        lastPoint = pt
-        continue
-      }
-
-      const gamesChanged = pt.totalGames > lastPoint.totalGames
-      const ladderChanged = pt.ladderValue !== lastPoint.ladderValue
-      const lpChanged = pt.lp !== lastPoint.lp
-
-      if (gamesChanged || ladderChanged || lpChanged) {
-        processed.push(pt)
-        lastPoint = pt
-      }
-    }
-
-    return processed
+    return compressChangedPoints(normalizedPoints)
   }, [normalizedPoints])
 
   const filteredWithLp = useMemo(() => rawFiltered.filter((p) => p.lp !== null && p.lp !== undefined), [rawFiltered])
   const filteredPoints = useMemo(() => {
-    if (showAll) return filteredWithLp
+    if (showAll && !overlayMode) return filteredWithLp
+    return takeRecentPoints(filteredWithLp)
+  }, [filteredWithLp, overlayMode, showAll])
 
-    // Use the same normalized dataset as show-all, then trim to the latest 30 game numbers.
-    const selected: NormalizedPoint[] = []
-    const seenGames = new Set<number>()
-    for (let i = filteredWithLp.length - 1; i >= 0; i -= 1) {
-      const p = filteredWithLp[i]
-      if (seenGames.has(p.totalGames)) continue
-      seenGames.add(p.totalGames)
-      selected.push(p)
-      if (seenGames.size >= RECENT_HISTORY_LIMIT) break
-    }
-    return selected.reverse()
-  }, [filteredWithLp, showAll])
+  const overlaySeries = useMemo(() => {
+    if (!overlayMode) return [] as Array<{ puuid: string; points: NormalizedPoint[]; color: string }>
+    return overlaySelectedPuuids
+      .map((puuid, idx) => {
+        const player = playersByPuuid.get(puuid)
+        const source = overlayRecentByPuuid[puuid] ?? []
+        const normalized = normalizeHistoryPoints(source, {
+          tier: player?.rankTier ?? null,
+          rank: player?.rankDivision ?? null,
+        })
+        const points = takeRecentPoints(compressChangedPoints(normalized))
+        return {
+          puuid,
+          points,
+          color: OVERLAY_COLORS[idx % OVERLAY_COLORS.length],
+        }
+      })
+      .filter((s) => s.points.length > 0)
+  }, [overlayMode, overlayRecentByPuuid, overlaySelectedPuuids, playersByPuuid])
 
   const chart = useMemo(() => {
-    if (filteredPoints.length === 0) return null
-    const ladderValues = filteredPoints.map((p) => p.ladderValue)
+    const ladderValues = overlayMode
+      ? overlaySeries.flatMap((s) => s.points.map((p) => p.ladderValue))
+      : filteredPoints.map((p) => p.ladderValue)
+    if (ladderValues.length === 0) return null
     const rawMin = Math.min(...ladderValues)
     const rawMax = Math.max(...ladderValues)
     const min = rawMin - 50
     const max = rawMax + 50
     return { min, max, range: Math.max(max - min, 1) }
-  }, [filteredPoints])
+  }, [filteredPoints, overlayMode, overlaySeries])
 
   const firstMatch = filteredPoints.length > 0 ? filteredPoints[0].totalGames : 1
   const lastMatch = filteredPoints.length > 0 ? filteredPoints[filteredPoints.length - 1].totalGames : 1
@@ -733,7 +824,21 @@ export default function LeaderboardGraphClient({
     })
   }, [chart, filteredPoints, firstMatch, matchRange, showAll])
 
-  const useDenseMode = plotPoints.length > DENSE_MODE_THRESHOLD
+  const overlayPlotSeries = useMemo(() => {
+    if (!overlayMode || !chart) return [] as Array<{ puuid: string; color: string; points: Array<{ x: number; y: number; point: NormalizedPoint; idx: number }> }>
+    return overlaySeries.map((series) => {
+      const maxIndex = Math.max(series.points.length - 1, 1)
+      const points = series.points.map((point, idx) => {
+        const normalizedX = idx / maxIndex
+        const x = PADDING.left + normalizedX * INNER_WIDTH
+        const y = PADDING.top + INNER_HEIGHT - ((point.ladderValue - chart.min) / chart.range) * INNER_HEIGHT
+        return { x, y, point, idx }
+      })
+      return { puuid: series.puuid, color: series.color, points }
+    })
+  }, [chart, overlayMode, overlaySeries])
+
+  const useDenseMode = !overlayMode && plotPoints.length > DENSE_MODE_THRESHOLD
 
   const activePoint = hoveredIdx !== null ? plotPoints.find((p) => p.idx === hoveredIdx) ?? null : null
 
@@ -938,6 +1043,7 @@ export default function LeaderboardGraphClient({
   }, [chart, colorForLinePoint, plotPoints, useDenseMode])
 
   const handleChartHover = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (overlayMode) return
     if (plotPoints.length === 0) return
     const wrap = wrapRef.current
     if (!wrap) return
@@ -1096,9 +1202,22 @@ export default function LeaderboardGraphClient({
             <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-400 dark:text-slate-500">Leaderboard</h2>
             <div className="mt-2 h-px w-full bg-slate-200 dark:bg-slate-800" />
           </div>
-          <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70">
+              <div className="leaderboard-scroll max-h-[80vh] divide-y divide-slate-200/70 overflow-y-auto pr-1 [direction:rtl] dark:divide-slate-800/70">
+                <button
+                  type="button"
+                  onClick={handleToggleOverlayMode}
+                  className="w-full px-1.5 py-2 text-left transition hover:bg-slate-100/80 dark:hover:bg-slate-800/60 [direction:ltr]"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-6" />
+                    <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-slate-100">
+                      {overlayMode ? "Exit compare mode" : "Compare players"}
+                    </div>
+                  </div>
+                </button>
             {players.map((player, idx) => {
               const isActive = player.puuid === effectiveSelectedPuuid
+              const isChecked = overlaySelectedPuuids.includes(player.puuid)
               const lpLabel = player.lp ?? 0
               const tier = (player.rankTier ?? "").toUpperCase()
               const div = (player.rankDivision ?? "").toUpperCase()
@@ -1119,7 +1238,7 @@ export default function LeaderboardGraphClient({
                 <button
                   key={player.puuid}
                   type="button"
-                  onClick={() => handleSelectPlayer(player.puuid)}
+                  onClick={() => (overlayMode ? handleToggleOverlayPlayer(player.puuid) : handleSelectPlayer(player.puuid))}
                   onMouseEnter={() => prefetchPlayerHistory(player.puuid)}
                   onFocus={() => prefetchPlayerHistory(player.puuid)}
                   className={`w-full px-1.5 py-2 text-left transition ${
@@ -1129,11 +1248,22 @@ export default function LeaderboardGraphClient({
                   } [direction:ltr]`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`w-6 text-right text-[11px] font-semibold ${
-                      isActive ? "text-blue-600 dark:text-blue-400" : "text-slate-500"
-                    }`}>
-                      {player.order ?? idx + 1}
-                    </div>
+                    {overlayMode ? (
+                      <div className="w-6 flex justify-end">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          readOnly
+                          className="h-3.5 w-3.5 rounded border-slate-400 text-blue-600 focus:ring-0"
+                        />
+                      </div>
+                    ) : (
+                      <div className={`w-6 text-right text-[11px] font-semibold ${
+                        isActive ? "text-blue-600 dark:text-blue-400" : "text-slate-500"
+                      }`}>
+                        {player.order ?? idx + 1}
+                      </div>
+                    )}
                     <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-slate-900 dark:text-slate-100">
                       {player.name}
                     </div>
@@ -1232,7 +1362,7 @@ export default function LeaderboardGraphClient({
                 </linearGradient>
               </defs>
               <g clipPath={`url(#plot-clip-${clipId})`}>
-                {areaPath ? (
+                {!overlayMode && areaPath ? (
                   <g clipPath={`url(#area-clip-${clipId})`}>
                     {tierBands.map((band, idx) => (
                       <rect
@@ -1319,14 +1449,26 @@ export default function LeaderboardGraphClient({
                   })()
                 ) : null}
 
-                {!useDenseMode && areaPath ? <path d={areaPath} fill={`url(#plot-fill-${clipId})`} opacity={0.9} /> : null}
-                {!useDenseMode && lineSegments.length > 0
+                {overlayMode
+                  ? overlayPlotSeries.map((series) => {
+                      const d =
+                        series.points.length === 1
+                          ? `M ${series.points[0].x - 8} ${series.points[0].y} L ${series.points[0].x + 8} ${series.points[0].y}`
+                          : buildSharpPath(series.points)
+                      return d ? (
+                        <path key={`overlay-line-${series.puuid}`} d={d} fill="none" stroke={series.color} strokeWidth={2.5} />
+                      ) : null
+                    })
+                  : null}
+
+                {!overlayMode && !useDenseMode && areaPath ? <path d={areaPath} fill={`url(#plot-fill-${clipId})`} opacity={0.9} /> : null}
+                {!overlayMode && !useDenseMode && lineSegments.length > 0
                   ? lineSegments.map((seg, idx) => (
                       <path key={`line-seg-${idx}`} d={seg.d} fill="none" stroke={seg.color || lineColor} strokeWidth={2.5} />
                     ))
                   : null}
 
-                {peakPoint ? (
+                {!overlayMode && peakPoint ? (
                   <g>
                     <line
                       x1={PADDING.left}
@@ -1349,7 +1491,7 @@ export default function LeaderboardGraphClient({
                 ) : null}
 
                 {/* Tier-colored points (all tiers, including iron) */}
-                {!useDenseMode && plotPoints.map((plot, idx) => {
+                {!overlayMode && !useDenseMode && plotPoints.map((plot, idx) => {
                   const x0 = idx === 0 ? PADDING.left : (plotPoints[idx - 1].x + plot.x) / 2
                   const x1 = idx === plotPoints.length - 1 ? PADDING.left + INNER_WIDTH : (plot.x + plotPoints[idx + 1].x) / 2
                   return (
@@ -1364,7 +1506,7 @@ export default function LeaderboardGraphClient({
                   )
                 })}
 
-                {activePoint && activeSlice ? (
+                {!overlayMode && activePoint && activeSlice ? (
                   <g>
                     <rect
                       x={activeSlice.left}
@@ -1401,7 +1543,7 @@ export default function LeaderboardGraphClient({
                 ) : null}
               </g>
             </svg>
-            {useDenseMode ? (
+            {!overlayMode && useDenseMode ? (
               <canvas
                 ref={canvasRef}
                 className="pointer-events-none absolute left-0 right-0 z-0 w-full"
@@ -1410,14 +1552,14 @@ export default function LeaderboardGraphClient({
               />
             ) : null}
 
-                  <button
+                  {!overlayMode ? <button
                     type="button"
                     onClick={showAll ? handleReset : handleShowAll}
                     className="pointer-events-auto absolute bottom-3 right-3 z-20 whitespace-nowrap rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 shadow-sm transition hover:border-slate-300 hover:bg-white hover:text-slate-900 dark:border-slate-800/70 dark:bg-slate-950/70 dark:text-slate-300 dark:hover:border-slate-700 dark:hover:bg-slate-900 dark:hover:text-slate-100"
                     style={plotButtonStyle ?? undefined}
                   >
                     {showAll ? (isLoadingFullHistory ? "Loading all..." : "Reset") : "Show all"}
-                  </button>
+                  </button> : null}
                 </>
           ) : isLoadingHistory ? (
             <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-6 py-16 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
@@ -1435,7 +1577,9 @@ export default function LeaderboardGraphClient({
                 style={plotLabelStyle ?? undefined}
               >
                 <span>
-                  {showAll
+                  {overlayMode
+                    ? `Comparing last ${RECENT_HISTORY_LIMIT} games`
+                    : showAll
                     ? `Showing ${latestGameNumber} games`
                     : filteredWithLp.length <= RECENT_HISTORY_LIMIT
                       ? `Showing ${filteredWithLp.length} games`
