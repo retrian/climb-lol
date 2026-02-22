@@ -14,6 +14,7 @@ export const revalidate = 600
 const DEFAULT_GRANDMASTER_CUTOFF = 200
 const DEFAULT_CHALLENGER_CUTOFF = 500
 const DEFAULT_DDRAGON_VERSION = '15.24.1'
+const SOLO_QUEUE = 'RANKED_SOLO_5x5'
 
 
 // --- Types ---
@@ -228,6 +229,7 @@ export default async function LeaderboardGraphPage({
     dataClient
       .from('rank_cutoffs')
       .select('queue_type, tier, cutoff_lp')
+      .eq('queue_type', SOLO_QUEUE)
       .in('tier', ['GRANDMASTER', 'CHALLENGER']),
     [] as Array<{ queue_type: string; tier: string; cutoff_lp: number }>,
     'rank_cutoffs'
@@ -236,11 +238,11 @@ export default async function LeaderboardGraphPage({
 
 
 
-  const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [row.tier, row.cutoff_lp]))
+  const cutoffsByTier = new Map((cutoffsRaw ?? []).map((row) => [`${row.queue_type}::${row.tier}`, row.cutoff_lp]))
  
   const cutoffsDisplay = [
-    { key: 'CHALLENGER', label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
-    { key: 'GRANDMASTER', label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
+    { key: `${SOLO_QUEUE}::CHALLENGER`, label: 'Challenger', icon: '/images/CHALLENGER_SMALL.jpg' },
+    { key: `${SOLO_QUEUE}::GRANDMASTER`, label: 'Grandmaster', icon: '/images/GRANDMASTER_SMALL.jpg' },
   ]
     .map((item) => ({
       label: item.label,
@@ -333,8 +335,8 @@ export default async function LeaderboardGraphPage({
 
 
   const cutoffs = {
-    grandmaster: cutoffsByTier.get('GRANDMASTER') ?? DEFAULT_GRANDMASTER_CUTOFF,
-    challenger: cutoffsByTier.get('CHALLENGER') ?? DEFAULT_CHALLENGER_CUTOFF,
+    grandmaster: cutoffsByTier.get(`${SOLO_QUEUE}::GRANDMASTER`) ?? DEFAULT_GRANDMASTER_CUTOFF,
+    challenger: cutoffsByTier.get(`${SOLO_QUEUE}::CHALLENGER`) ?? DEFAULT_CHALLENGER_CUTOFF,
   }
 
 
