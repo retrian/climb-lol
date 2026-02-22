@@ -19,6 +19,7 @@ export default async function LatestActivityServer({
       <LatestGamesFeedClient
         lbId={lbId}
         ddVersion={ddVersion}
+        initialNow={Date.now()}
         initialGames={data.latestGames}
         playersByPuuid={data.playersByPuuidRecord}
         champMap={data.champMap}

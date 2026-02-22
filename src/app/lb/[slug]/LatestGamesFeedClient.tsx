@@ -40,8 +40,8 @@ function subscribeLiveTime(listener: (now: number) => void) {
   }
 }
 
-function useLiveTime() {
-  const [now, setNow] = useState<number>(() => Date.now())
+function useLiveTime(initialNow: number) {
+  const [now, setNow] = useState<number>(initialNow)
 
   useEffect(() => {
     return subscribeLiveTime(setNow)
@@ -165,6 +165,7 @@ const GameItem = memo(({
   champSrc, 
   rankData, 
   profileIconSrc,
+  initialNow,
   hasMatchDetails,
   onSelect,
   onHover
@@ -174,11 +175,12 @@ const GameItem = memo(({
   champSrc: string | null
   rankData: RankData | null
   profileIconSrc: string | null
+  initialNow: number
   hasMatchDetails: boolean
   onSelect: (game: Game) => void
   onHover: (matchId: string) => void
 }) => {
-  const now = useLiveTime()
+  const now = useLiveTime(initialNow)
 
   const handleClick = useCallback(() => onSelect(game), [onSelect, game])
   const handleHover = useCallback(() => onHover(game.matchId), [onHover, game.matchId])
@@ -407,6 +409,7 @@ GameItem.displayName = 'GameItem'
 export default function LatestGamesFeedClient({
   lbId,
   ddVersion,
+  initialNow,
   initialGames,
   playersByPuuid,
   champMap,
@@ -417,6 +420,7 @@ export default function LatestGamesFeedClient({
 }: {
   lbId: string
   ddVersion: string
+  initialNow: number
   initialGames: Game[]
   playersByPuuid: Record<string, Player>
   champMap: Record<number, Champion>
@@ -610,6 +614,7 @@ export default function LatestGamesFeedClient({
             champSrc={item.champSrc}
             rankData={item.rankData}
             profileIconSrc={item.profileIconSrc}
+            initialNow={initialNow}
             hasMatchDetails={item.hasMatchDetails}
             onSelect={handleSelectGame}
             onHover={handleGameHover}
