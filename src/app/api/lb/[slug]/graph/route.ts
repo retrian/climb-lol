@@ -246,6 +246,25 @@ async function fetchLpHistoryForPlayer(
   return rows
 }
 
+function mergeHistoryWithRecentEvents(historyRows: LpHistoryRow[], eventRows: LpHistoryRow[]) {
+  if (historyRows.length === 0) return eventRows
+  if (eventRows.length === 0) return historyRows
+
+  const out = [...historyRows]
+  const seen = new Set(
+    historyRows.map((row) => `${row.fetched_at}|${row.lp ?? ''}|${row.wins ?? ''}|${row.losses ?? ''}`)
+  )
+
+  for (const row of eventRows) {
+    const key = `${row.fetched_at}|${row.lp ?? ''}|${row.wins ?? ''}|${row.losses ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(row)
+  }
+
+  return out.sort((a, b) => new Date(a.fetched_at).getTime() - new Date(b.fetched_at).getTime())
+}
+
 export async function GET(req: Request, { params }: { params: Promise<{ slug: string }> }) {
   try {
     const { slug } = await params
@@ -310,11 +329,17 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     } else {
       const seasonRows = await fetchLpHistoryForPlayer(dataClient, puuid, seasonStartIso)
       const fullRows = seasonRows.length > 0 ? seasonRows : await fetchLpHistoryForPlayer(dataClient, puuid)
-      const eventFallbackRows = fullRows.length > 0
-        ? fullRows
+      const recentEventsSeason = await fetchRecentLpEventsForPlayer(dataClient, puuid, 200, seasonStartIso)
+      const recentEvents = recentEventsSeason.length > 0
+        ? recentEventsSeason
+        : await fetchRecentLpEventsForPlayer(dataClient, puuid, 200)
+
+      const mergedRows = mergeHistoryWithRecentEvents(fullRows, recentEvents)
+      const fallbackRows = mergedRows.length > 0
+        ? mergedRows
         : await fetchRecentLpEventsForPlayer(dataClient, puuid, 1000, seasonStartIso)
-      const baseRows = eventFallbackRows.length > 0
-        ? eventFallbackRows
+      const baseRows = fallbackRows.length > 0
+        ? fallbackRows
         : await fetchRecentLpEventsForPlayer(dataClient, puuid, 1000)
 
       points = includeFullHistory ? baseRows : sampleLpRows(baseRows, GRAPH_SAMPLE_TARGET_POINTS)
@@ -324,6 +349,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     // Recent-mode payloads are user-interactive and should never serve stale edge-cache
     // after server-side logic changes.
     if (limit !== null) {
+      res.headers.set('Cache-Control', 'no-store')
+    } else if (includeFullHistory) {
+      // Graph page polls this endpoint for near-realtime updates.
+      // Keep full-history responses uncached so newly ingested games show immediately.
       res.headers.set('Cache-Control', 'no-store')
     } else if (!isPrivate) {
       res.headers.set(

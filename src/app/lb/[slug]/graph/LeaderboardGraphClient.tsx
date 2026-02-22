@@ -59,6 +59,7 @@ const INNER_HEIGHT = HEIGHT - PADDING.top - PADDING.bottom
 const RECENT_HISTORY_LIMIT = 30
 const DENSE_MODE_THRESHOLD = 50
 const RECENT_QUERY_VERSION = "recent_v2"
+const REALTIME_REFRESH_MS = 5000
 
 const TIER_ORDER = [
   "IRON",
@@ -434,13 +435,18 @@ export default function LeaderboardGraphClient({
   const effectiveSelectedPuuid = selectedPuuid || players[0]?.puuid || ""
 
   const fetchPlayerHistory = useCallback(
-    async (puuid: string, mode: "recent" | "full"): Promise<LpPoint[]> => {
+    async (puuid: string, mode: "recent" | "full", options?: { force?: boolean }): Promise<LpPoint[]> => {
+      const force = options?.force === true
       const key = mode === "recent" ? `${puuid}:${mode}:${RECENT_QUERY_VERSION}` : `${puuid}:${mode}`
-      const cached = prefetchCacheRef.current.get(key)
-      if (cached) return cached
+      if (!force) {
+        const cached = prefetchCacheRef.current.get(key)
+        if (cached) return cached
+      }
 
       const inflight = inflightRef.current.get(key)
       if (inflight) return inflight
+
+      if (force) prefetchCacheRef.current.delete(key)
 
       const query =
         mode === "recent"
@@ -520,6 +526,41 @@ export default function LeaderboardGraphClient({
 
     return () => {
       cancelled = true
+    }
+  }, [effectiveSelectedPuuid, fetchPlayerHistory])
+
+  useEffect(() => {
+    if (!effectiveSelectedPuuid) return
+
+    let cancelled = false
+    const refreshNow = () => {
+      void fetchPlayerHistory(effectiveSelectedPuuid, "full", { force: true })
+        .then((points) => {
+          if (cancelled) return
+          setFullPoints(points)
+          setRecentPoints(points)
+        })
+        .catch(() => {
+          // Keep last successful render on transient polling failures.
+        })
+    }
+
+    // Refresh immediately, then continue polling.
+    refreshNow()
+    const interval = window.setInterval(refreshNow, REALTIME_REFRESH_MS)
+
+    const onFocus = () => refreshNow()
+    const onVisibility = () => {
+      if (!document.hidden) refreshNow()
+    }
+    window.addEventListener("focus", onFocus)
+    document.addEventListener("visibilitychange", onVisibility)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      window.removeEventListener("focus", onFocus)
+      document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [effectiveSelectedPuuid, fetchPlayerHistory])
 
