@@ -215,7 +215,7 @@ async function fetchMoversData(lbId: string): Promise<MoversData> {
   const weeklyTopLoss = weeklyLpEntries.length
     ? weeklyLpEntries.reduce((best: [string, number], curr: [string, number]) => (curr[1] < best[1] ? curr : best))
     : null
-  const resolvedWeeklyTopLoss = weeklyTopLoss && weeklyTopLoss[1] < 0 ? weeklyTopLoss : null
+  const resolvedWeeklyTopLoss = weeklyTopLoss
 
   return {
     playersByPuuidRecord: Object.fromEntries(players.map((player) => [player.puuid, player])) as Record<string, PlayerLite>,
