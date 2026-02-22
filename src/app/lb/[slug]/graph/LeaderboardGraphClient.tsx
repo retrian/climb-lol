@@ -49,6 +49,14 @@ type TooltipState = {
   preferBelow: boolean
 }
 
+type OverlayTooltipState = {
+  puuid: string
+  x: number
+  y: number
+  wrapWidth: number
+  preferBelow: boolean
+}
+
 
 // --- Constants ---
 const WIDTH = 960
@@ -513,6 +521,7 @@ export default function LeaderboardGraphClient({
   const [overlayRecentByPuuid, setOverlayRecentByPuuid] = useState<Record<string, LpPoint[]>>({})
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null)
   const [tooltip, setTooltip] = useState<TooltipState | null>(null)
+  const [overlayTooltip, setOverlayTooltip] = useState<OverlayTooltipState | null>(null)
   const [plotButtonStyle, setPlotButtonStyle] = useState<React.CSSProperties | null>(null)
   const [plotLabelStyle, setPlotLabelStyle] = useState<React.CSSProperties | null>(null)
   const clipId = useId().replace(/:/g, "")
@@ -838,6 +847,12 @@ export default function LeaderboardGraphClient({
     })
   }, [chart, overlayMode, overlaySeries])
 
+  const overlayColorByPuuid = useMemo(() => {
+    const map = new Map<string, string>()
+    overlaySeries.forEach((s) => map.set(s.puuid, s.color))
+    return map
+  }, [overlaySeries])
+
   const useDenseMode = !overlayMode && plotPoints.length > DENSE_MODE_THRESHOLD
 
   const activePoint = hoveredIdx !== null ? plotPoints.find((p) => p.idx === hoveredIdx) ?? null : null
@@ -1071,6 +1086,7 @@ export default function LeaderboardGraphClient({
   const handleChartLeave = () => {
     setHoveredIdx(null)
     setTooltip(null)
+    setOverlayTooltip(null)
   }
 
   const activePlayer = playersByPuuid.get(effectiveSelectedPuuid)
@@ -1098,6 +1114,43 @@ export default function LeaderboardGraphClient({
   const pointRadius = plotPoints.length > 150 ? 4.5 : 6
 
   const tooltipRender = (() => {
+    if (overlayMode && overlayTooltip) {
+      const player = playersByPuuid.get(overlayTooltip.puuid)
+      if (!player) return null
+
+      const x = clamp(overlayTooltip.x, 12, Math.max(12, overlayTooltip.wrapWidth - 12))
+      const y = overlayTooltip.y
+      const preferRight = x < 230
+
+      const style: React.CSSProperties = overlayTooltip.preferBelow
+        ? preferRight
+          ? { left: x + 14, top: y + 14, transform: "translateX(0)" }
+          : { left: x - 14, top: y + 14, transform: "translateX(-100%)" }
+        : preferRight
+          ? { left: x + 14, top: y - 12, transform: "translate(0, -100%)" }
+          : { left: x - 14, top: y - 12, transform: "translate(-100%, -100%)" }
+
+      return (
+        <div
+          className="pointer-events-none absolute z-10 rounded-2xl border border-slate-800/70 bg-slate-950/85 px-3 py-2 text-xs text-slate-200 shadow-lg backdrop-blur"
+          style={{ ...style, width: "max-content", maxWidth: "none" }}
+        >
+          <div className="flex items-center gap-2">
+            {player.profileIconUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={player.profileIconUrl} alt="" className="h-5 w-5 rounded-full border border-slate-700" />
+            ) : (
+              <div className="h-5 w-5 rounded-full bg-slate-700" />
+            )}
+            <div className="font-semibold text-slate-100">
+              {player.name}
+              {player.tagLine ? <span className="text-slate-400 font-medium"> #{player.tagLine}</span> : null}
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     if (!tooltip) return null
     const x = clamp(tooltip.x, 12, Math.max(12, tooltip.wrapWidth - 12))
     const y = tooltip.y
@@ -1284,7 +1337,31 @@ export default function LeaderboardGraphClient({
               ref={wrapRef}
               className="relative overflow-hidden bg-transparent pt-16"
             >
-              {activePlayer ? (
+              {overlayMode ? (
+                <div className="absolute left-6 top-4 flex items-center gap-2">
+                  {overlaySelectedPuuids.map((puuid) => {
+                    const player = playersByPuuid.get(puuid)
+                    if (!player) return null
+                    const lineColor = overlayColorByPuuid.get(puuid) ?? "#a78bfa"
+                    return player.profileIconUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={puuid}
+                        src={player.profileIconUrl}
+                        alt=""
+                        className="h-8 w-8 rounded-full border-2 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.8)]"
+                        style={{ borderColor: lineColor }}
+                      />
+                    ) : (
+                      <div
+                        key={puuid}
+                        className="h-8 w-8 rounded-full border-2 bg-slate-700"
+                        style={{ borderColor: lineColor }}
+                      />
+                    )
+                  })}
+                </div>
+              ) : activePlayer ? (
                 <div className="absolute left-6 top-4 flex items-center gap-4">
                   {activePlayer.profileIconUrl ? (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -1455,8 +1532,31 @@ export default function LeaderboardGraphClient({
                         series.points.length === 1
                           ? `M ${series.points[0].x - 8} ${series.points[0].y} L ${series.points[0].x + 8} ${series.points[0].y}`
                           : buildSharpPath(series.points)
+                      const handleOverlayHover = (evt: React.MouseEvent<SVGPathElement>) => {
+                        const wrap = wrapRef.current
+                        if (!wrap) return
+                        const wrapRect = wrap.getBoundingClientRect()
+                        const tooltipX = evt.clientX - wrapRect.left
+                        const yy = evt.clientY - wrapRect.top
+                        setOverlayTooltip({
+                          puuid: series.puuid,
+                          x: tooltipX,
+                          y: yy,
+                          wrapWidth: wrapRect.width,
+                          preferBelow: yy < 120,
+                        })
+                      }
                       return d ? (
-                        <path key={`overlay-line-${series.puuid}`} d={d} fill="none" stroke={series.color} strokeWidth={2.5} />
+                        <g key={`overlay-line-${series.puuid}`}>
+                          <path d={d} fill="none" stroke={series.color} strokeWidth={2.5} pointerEvents="none" />
+                          <path
+                            d={d}
+                            fill="none"
+                            stroke="transparent"
+                            strokeWidth={14}
+                            onMouseMove={handleOverlayHover}
+                          />
+                        </g>
                       ) : null
                     })
                   : null}
